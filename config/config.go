@@ -194,6 +194,7 @@ const (
 type DisplayConfig struct {
 	Mode                 *string `toml:"mode"`                   // "full" (default), "compact", or "quiet"
 	CardMode             *string `toml:"card_mode"`              // "legacy" (default) or "rich" (Card 2.0 Feishu)
+	ToolStyle            *string `toml:"tool_style"`             // "full" (default) or "compact" (one-line tool calls)
 	ThinkingMessages     *bool   `toml:"thinking_messages"`      // whether thinking messages are shown; default true
 	ThinkingMaxLen       *int    `toml:"thinking_max_len"`       // max chars for thinking messages; 0 = no truncation; default 300
 	ToolMaxLen           *int    `toml:"tool_max_len"`           // max chars for tool use messages; 0 = no truncation; default 500
@@ -990,6 +991,27 @@ func EffectiveCardMode(cfg *Config, proj *ProjectConfig) string {
 		}
 	}
 	return "legacy"
+}
+
+// EffectiveToolStyle returns how tool calls are rendered: "compact" (a single
+// line with the tool name and a short input preview) or "full" (default: the
+// tool name plus the input in a fenced block). Per-project overrides global.
+func EffectiveToolStyle(cfg *Config, proj *ProjectConfig) string {
+	var projDisp *DisplayConfig
+	if proj != nil {
+		projDisp = proj.Display
+	}
+	if projDisp != nil && projDisp.ToolStyle != nil {
+		if m := strings.ToLower(strings.TrimSpace(*projDisp.ToolStyle)); m == "compact" || m == "full" {
+			return m
+		}
+	}
+	if cfg.Display.ToolStyle != nil {
+		if m := strings.ToLower(strings.TrimSpace(*cfg.Display.ToolStyle)); m == "compact" || m == "full" {
+			return m
+		}
+	}
+	return "full"
 }
 
 // validatePermissive is like validate but skips the "at least one platform"

@@ -62,3 +62,35 @@ func TestFormatToolInput_TruncatedFenceStaysBalanced(t *testing.T) {
 		t.Errorf("unbalanced code fence: %q", out)
 	}
 }
+
+func TestFormatToolInputCompact_CollapsesToOneLine(t *testing.T) {
+	out := formatToolInputCompact("git status\ngit diff\n\ngit log", 0)
+	if strings.Contains(out, "\n") {
+		t.Fatalf("compact style must stay on one line, got %q", out)
+	}
+	if out != "`git status git diff git log`" {
+		t.Errorf("unexpected collapse result: %q", out)
+	}
+}
+
+func TestFormatToolInputCompact_Truncates(t *testing.T) {
+	out := formatToolInputCompact(strings.Repeat("a", 500), 40)
+	if len([]rune(out)) > 50 {
+		t.Errorf("expected truncation to ~40 runes, got %d: %q", len([]rune(out)), out)
+	}
+}
+
+// A backtick in the input would otherwise close the inline code span early and
+// leak the rest of the tool input as raw markdown.
+func TestFormatToolInputCompact_NeutralizesBackticks(t *testing.T) {
+	out := formatToolInputCompact("echo `whoami`", 0)
+	if strings.Count(out, "`") != 2 {
+		t.Errorf("inline code span must contain exactly 2 backticks, got %q", out)
+	}
+}
+
+func TestFormatToolInputCompact_Empty(t *testing.T) {
+	if out := formatToolInputCompact("   \n  ", 80); out != "" {
+		t.Errorf("whitespace-only input should render empty, got %q", out)
+	}
+}

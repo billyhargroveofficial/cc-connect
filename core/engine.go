@@ -323,6 +323,7 @@ var RestartCh = make(chan RestartRequest, 1)
 type DisplayCfg struct {
 	Mode             string // "full" (default), "compact", or "quiet" — thinking/tool visibility
 	CardMode         string // "legacy" (default) or "rich" (Card 2.0 Feishu)
+	ToolStyle        string // "full" (default) or "compact" (one-line tool calls)
 	ThinkingMessages bool
 	ThinkingMaxLen   int // max runes for thinking preview; 0 = no truncation
 	ToolMaxLen       int // max runes for tool use preview; 0 = no truncation
@@ -739,7 +740,7 @@ func NewEngine(name string, ag Agent, platforms []Platform, sessionStorePath str
 		cancel:                cancel,
 		i18n:                  NewI18n(lang),
 		attachmentSendEnabled: true,
-		display:               DisplayCfg{Mode: "full", ThinkingMessages: true, ThinkingMaxLen: defaultThinkingMaxLen, ToolMaxLen: defaultToolMaxLen, ToolMessages: true, CardMode: "legacy"},
+		display:               DisplayCfg{Mode: "full", ThinkingMessages: true, ThinkingMaxLen: defaultThinkingMaxLen, ToolMaxLen: defaultToolMaxLen, ToolMessages: true, CardMode: "legacy", ToolStyle: "full"},
 		commands:              NewCommandRegistry(),
 		skills:                NewSkillRegistry(),
 		aliases:               make(map[string]string),
@@ -5147,7 +5148,7 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 			if e.display.ToolMessages {
 				// --- StreamingCard path ---
 				if streamCard != nil && !streamCard.Failed() {
-					formattedInput := formatToolInput(event.ToolName, event.ToolInput, e.display.ToolMaxLen)
+					formattedInput, _ := e.formatToolCall(event.ToolName, event.ToolInput)
 					cardToolCalls = append(cardToolCalls, cardToolEntry{
 						Index: toolCount,
 						Name:  event.ToolName,
@@ -5175,8 +5176,8 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 				if previewActive {
 					sp.detachPreview() // keep frozen preview visible as permanent message
 				}
-				formattedInput := formatToolInput(event.ToolName, event.ToolInput, e.display.ToolMaxLen)
-				toolMsg := fmt.Sprintf(e.i18n.T(MsgTool), toolCount, event.ToolName, formattedInput)
+				formattedInput, toolMsgKey := e.formatToolCall(event.ToolName, event.ToolInput)
+				toolMsg := fmt.Sprintf(e.i18n.T(toolMsgKey), toolCount, event.ToolName, formattedInput)
 				// tool_max_len is applied by formatToolInput above and again here
 				// for the structured card payload. event.ToolInput stays intact.
 				cardToolInput := truncateIf(event.ToolInput, e.display.ToolMaxLen)
@@ -15544,6 +15545,28 @@ func (e *Engine) formatToolResultEventFallback(toolName, result, status string, 
 // platforms that use the compact or legacy progress styles (e.g. Telegram,
 // which normalizes "card" to "compact") and full tool internals were dumped
 // into the chat.
+// formatToolInputCompact renders a one-line input preview. Whitespace runs
+// (including newlines) collapse to single spaces so a multi-line tool input
+// still occupies exactly one chat line. Backticks in the input are replaced so
+// they cannot terminate the inline code span early.
+func formatToolInputCompact(input string, maxLen int) string {
+	input = strings.Join(strings.Fields(input), " ")
+	input = truncateIf(input, maxLen)
+	if input == "" {
+		return ""
+	}
+	return "`" + strings.ReplaceAll(input, "`", "'") + "`"
+}
+
+// formatToolCall renders a tool's input and reports which message template to
+// use, according to the configured tool_style.
+func (e *Engine) formatToolCall(toolName, input string) (string, MsgKey) {
+	if e.display.ToolStyle == "compact" {
+		return formatToolInputCompact(input, e.display.ToolMaxLen), MsgToolCompact
+	}
+	return formatToolInput(toolName, input, e.display.ToolMaxLen), MsgTool
+}
+
 func formatToolInput(toolName, input string, maxLen int) string {
 	input = truncateIf(input, maxLen)
 	switch {

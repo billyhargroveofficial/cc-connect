@@ -5219,6 +5219,12 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 						break
 					}
 					resultMsg := e.formatToolResultEventFallback(event.ToolName, result, event.ToolStatus, event.ToolExitCode, event.ToolSuccess)
+					if e.display.ToolStyle == "compact" {
+						resultMsg = e.formatToolResultCompact(event.ToolName, result, event.ToolStatus, event.ToolExitCode, event.ToolSuccess)
+					}
+					if resultMsg == "" {
+						break // compact style: a successful result stays silent
+					}
 					entry := ProgressCardEntry{
 						Kind:     ProgressEntryToolResult,
 						Tool:     event.ToolName,
@@ -15496,6 +15502,37 @@ func toolCodeLang(toolName, input string) string {
 	return ""
 }
 
+// formatToolResultCompact renders a tool result as a single line, or returns
+// "" when the result carries nothing worth a chat message.
+//
+// The default rendering spends four lines per result (tool name, status, exit
+// code, and an output block), which on a phone buries the actual answer under
+// bookkeeping. In compact style a successful result is therefore silent: the
+// next tool call, or the answer itself, is the progress signal. Failures are
+// still surfaced, so an error cannot pass unnoticed.
+func (e *Engine) formatToolResultCompact(toolName, result, status string, exitCode *int, success *bool) string {
+	failed := (success != nil && !*success) || (exitCode != nil && *exitCode != 0)
+	if !failed {
+		return ""
+	}
+	parts := []string{"\U0001F534"}
+	if n := strings.TrimSpace(toolName); n != "" {
+		parts = append(parts, "**"+n+"**")
+	}
+	switch {
+	case exitCode != nil:
+		parts = append(parts, fmt.Sprintf("%s %d", e.i18n.T(MsgToolResultFmtExit), *exitCode))
+	case strings.TrimSpace(status) != "":
+		parts = append(parts, strings.TrimSpace(status))
+	default:
+		parts = append(parts, e.i18n.T(MsgToolResultFmtFailed))
+	}
+	if preview := compactInlinePreview(result, e.display.ToolMaxLen); preview != "" {
+		parts = append(parts, preview)
+	}
+	return strings.Join(parts, " ")
+}
+
 func (e *Engine) formatToolResultEventFallback(toolName, result, status string, exitCode *int, success *bool) string {
 	statusLabel := e.i18n.T(MsgToolResultFmtStatus)
 	exitLabel := e.i18n.T(MsgToolResultFmtExit)
@@ -15536,7 +15573,6 @@ func (e *Engine) formatToolResultEventFallback(toolName, result, status string, 
 	return strings.Join(lines, "\n")
 }
 
-// truncateIf truncates s to maxLen runes. 0 means no truncation.
 // formatToolInput renders a tool's input for display in a chat message.
 //
 // The input is truncated *before* formatting, so tool_max_len applies to every
@@ -15545,11 +15581,11 @@ func (e *Engine) formatToolResultEventFallback(toolName, result, status string, 
 // platforms that use the compact or legacy progress styles (e.g. Telegram,
 // which normalizes "card" to "compact") and full tool internals were dumped
 // into the chat.
-// formatToolInputCompact renders a one-line input preview. Whitespace runs
+// compactInlinePreview renders a one-line preview of arbitrary tool text. Whitespace runs
 // (including newlines) collapse to single spaces so a multi-line tool input
 // still occupies exactly one chat line. Backticks in the input are replaced so
 // they cannot terminate the inline code span early.
-func formatToolInputCompact(input string, maxLen int) string {
+func compactInlinePreview(input string, maxLen int) string {
 	input = strings.Join(strings.Fields(input), " ")
 	input = truncateIf(input, maxLen)
 	if input == "" {
@@ -15562,7 +15598,7 @@ func formatToolInputCompact(input string, maxLen int) string {
 // use, according to the configured tool_style.
 func (e *Engine) formatToolCall(toolName, input string) (string, MsgKey) {
 	if e.display.ToolStyle == "compact" {
-		return formatToolInputCompact(input, e.display.ToolMaxLen), MsgToolCompact
+		return compactInlinePreview(input, e.display.ToolMaxLen), MsgToolCompact
 	}
 	return formatToolInput(toolName, input, e.display.ToolMaxLen), MsgTool
 }
@@ -15585,6 +15621,7 @@ func formatToolInput(toolName, input string, maxLen int) string {
 	}
 }
 
+// truncateIf truncates s to maxLen runes. 0 means no truncation.
 func truncateIf(s string, maxLen int) string {
 	if maxLen <= 0 {
 		return s

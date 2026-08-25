@@ -63,8 +63,8 @@ func TestFormatToolInput_TruncatedFenceStaysBalanced(t *testing.T) {
 	}
 }
 
-func TestFormatToolInputCompact_CollapsesToOneLine(t *testing.T) {
-	out := formatToolInputCompact("git status\ngit diff\n\ngit log", 0)
+func TestCompactInlinePreview_CollapsesToOneLine(t *testing.T) {
+	out := compactInlinePreview("git status\ngit diff\n\ngit log", 0)
 	if strings.Contains(out, "\n") {
 		t.Fatalf("compact style must stay on one line, got %q", out)
 	}
@@ -73,8 +73,8 @@ func TestFormatToolInputCompact_CollapsesToOneLine(t *testing.T) {
 	}
 }
 
-func TestFormatToolInputCompact_Truncates(t *testing.T) {
-	out := formatToolInputCompact(strings.Repeat("a", 500), 40)
+func TestCompactInlinePreview_Truncates(t *testing.T) {
+	out := compactInlinePreview(strings.Repeat("a", 500), 40)
 	if len([]rune(out)) > 50 {
 		t.Errorf("expected truncation to ~40 runes, got %d: %q", len([]rune(out)), out)
 	}
@@ -82,15 +82,83 @@ func TestFormatToolInputCompact_Truncates(t *testing.T) {
 
 // A backtick in the input would otherwise close the inline code span early and
 // leak the rest of the tool input as raw markdown.
-func TestFormatToolInputCompact_NeutralizesBackticks(t *testing.T) {
-	out := formatToolInputCompact("echo `whoami`", 0)
+func TestCompactInlinePreview_NeutralizesBackticks(t *testing.T) {
+	out := compactInlinePreview("echo `whoami`", 0)
 	if strings.Count(out, "`") != 2 {
 		t.Errorf("inline code span must contain exactly 2 backticks, got %q", out)
 	}
 }
 
-func TestFormatToolInputCompact_Empty(t *testing.T) {
-	if out := formatToolInputCompact("   \n  ", 80); out != "" {
+func TestCompactInlinePreview_Empty(t *testing.T) {
+	if out := compactInlinePreview("   \n  ", 80); out != "" {
 		t.Errorf("whitespace-only input should render empty, got %q", out)
+	}
+}
+
+func compactResultEngine(t *testing.T) *Engine {
+	t.Helper()
+	e := NewEngine("test", &stubAgent{}, []Platform{&stubPlatformEngine{n: "test"}}, "", LangEnglish)
+	e.display.ToolStyle = "compact"
+	e.display.ToolMaxLen = 80
+	return e
+}
+
+func TestFormatToolResultCompact_SuccessIsSilent(t *testing.T) {
+	e := compactResultEngine(t)
+	ok := true
+	zero := 0
+	if out := e.formatToolResultCompact("Bash", "some output", "ok", &zero, &ok); out != "" {
+		t.Errorf("successful result must render nothing, got %q", out)
+	}
+}
+
+func TestFormatToolResultCompact_UnknownOutcomeIsSilent(t *testing.T) {
+	e := compactResultEngine(t)
+	if out := e.formatToolResultCompact("Read", "contents", "", nil, nil); out != "" {
+		t.Errorf("result without a failure signal must stay silent, got %q", out)
+	}
+}
+
+func TestFormatToolResultCompact_FailureIsReported(t *testing.T) {
+	e := compactResultEngine(t)
+	no := false
+	out := e.formatToolResultCompact("Bash", "command not found", "failed", nil, &no)
+	if out == "" {
+		t.Fatal("a failed result must not be silent")
+	}
+	if !strings.HasPrefix(out, "\U0001F534") {
+		t.Errorf("expected a red marker, got %q", out)
+	}
+	if !strings.Contains(out, "Bash") {
+		t.Errorf("expected the tool name, got %q", out)
+	}
+}
+
+func TestFormatToolResultCompact_NonZeroExitIsFailure(t *testing.T) {
+	e := compactResultEngine(t)
+	code := 127
+	out := e.formatToolResultCompact("Bash", "", "", &code, nil)
+	if !strings.Contains(out, "127") {
+		t.Errorf("expected the exit code, got %q", out)
+	}
+}
+
+func TestFormatToolResultCompact_FailureStaysOneLine(t *testing.T) {
+	e := compactResultEngine(t)
+	no := false
+	out := e.formatToolResultCompact("Bash", "line one\nline two\nline three", "", nil, &no)
+	if strings.Contains(out, "\n") {
+		t.Errorf("compact failure must stay on one line, got %q", out)
+	}
+}
+
+// The default style keeps its multi-line bookkeeping rendering.
+func TestFormatToolResultEventFallback_StillMultiLine(t *testing.T) {
+	e := compactResultEngine(t)
+	ok := true
+	zero := 0
+	out := e.formatToolResultEventFallback("Bash", "some output", "ok", &zero, &ok)
+	if !strings.Contains(out, "\n") {
+		t.Errorf("full style should stay multi-line, got %q", out)
 	}
 }

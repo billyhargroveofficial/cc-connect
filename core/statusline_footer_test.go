@@ -80,3 +80,22 @@ func TestStatusLineFooterPayload_PassesRawWorkDir(t *testing.T) {
 		t.Errorf("current_dir = %v, want the raw path", ws["current_dir"])
 	}
 }
+
+// resets_at must be a Unix timestamp: that is the form Claude Code emits, and a
+// renderer expecting a number rejects the ISO-8601 string outright.
+func TestStatusLineWindowEntry(t *testing.T) {
+	if statusLineWindowEntry(nil) != nil {
+		t.Error("nil window should produce no entry")
+	}
+	entry := statusLineWindowEntry(&UsageWindow{UsedPercent: 39, ResetAtUnix: 1787670000})
+	if entry["used_percentage"] != 39 {
+		t.Errorf("used_percentage = %v, want 39", entry["used_percentage"])
+	}
+	if entry["resets_at"] != int64(1787670000) {
+		t.Errorf("resets_at = %v (%T), want int64", entry["resets_at"], entry["resets_at"])
+	}
+	// A window with no known reset omits the key rather than sending zero.
+	if _, ok := statusLineWindowEntry(&UsageWindow{UsedPercent: 5})["resets_at"]; ok {
+		t.Error("resets_at should be omitted when unknown")
+	}
+}

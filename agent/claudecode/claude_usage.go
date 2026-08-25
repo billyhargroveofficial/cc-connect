@@ -47,6 +47,15 @@ type claudeUsageProbeState struct {
 }
 
 func (a *Agent) GetUsage(ctx context.Context) (*core.UsageReport, error) {
+	// Prefer the OAuth usage endpoint: it is fast enough for a per-message
+	// caller and does not depend on the TUI's current layout. The screen-scrape
+	// below stays as a fallback for accounts where the endpoint is unavailable.
+	if report, err := fetchOAuthUsage(ctx); err == nil {
+		return report, nil
+	} else {
+		slog.Debug("claudecode: OAuth usage unavailable, falling back to TUI probe", "error", err)
+	}
+
 	if _, err := exec.LookPath("claude"); err != nil {
 		return nil, fmt.Errorf("claudecode: 'claude' CLI not found in PATH")
 	}

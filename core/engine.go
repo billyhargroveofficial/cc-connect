@@ -469,6 +469,7 @@ type Engine struct {
 	stopping            bool
 	replyFooterMu       sync.Mutex
 	replyFooterUsage    replyFooterUsageCache
+	statusLineUsage     statusLineUsageCache
 
 	// pendingRestartNotify is queued at startup if a /restart was consumed
 	// from the run/restart_notify file. It is dispatched on the first
@@ -7669,6 +7670,88 @@ func statusLineFooterPayload(agent Agent, session AgentSession, workspaceDir str
 	return payload
 }
 
+// statusLineUsageCacheTTL bounds how often the quota windows are refreshed for
+// the footer. The windows move slowly, and the fetch is network-bound, so a
+// per-message refresh would be pure overhead.
+const statusLineUsageCacheTTL = 60 * time.Second
+
+type statusLineUsageCache struct {
+	limits    map[string]any
+	fetchedAt time.Time
+}
+
+// statusLineRateLimits renders the agent's quota windows in the shape Claude
+// Code puts under "rate_limits" for its statusline command.
+//
+// Claude Code supplies these only from the interactive TUI, so a headless
+// session has to source them itself; an agent that cannot report usage simply
+// yields no entry and any segment showing them renders empty.
+func (e *Engine) statusLineRateLimits(agent Agent, session AgentSession) map[string]any {
+	e.replyFooterMu.Lock()
+	cached := e.statusLineUsage
+	e.replyFooterMu.Unlock()
+	if !cached.fetchedAt.IsZero() && time.Since(cached.fetchedAt) < statusLineUsageCacheTTL {
+		return cached.limits
+	}
+
+	var reporter UsageReporter
+	if session != nil {
+		if r, ok := session.(UsageReporter); ok {
+			reporter = r
+		}
+	}
+	if reporter == nil {
+		if r, ok := agent.(UsageReporter); ok {
+			reporter = r
+		}
+	}
+	if reporter == nil {
+		return nil
+	}
+
+	ctx, cancel := context.WithTimeout(e.ctx, statusLineFooterTimeout)
+	defer cancel()
+
+	limits := map[string]any{}
+	report, err := reporter.GetUsage(ctx)
+	if err != nil {
+		slog.Debug("status footer: quota windows unavailable", "error", err)
+		// Cache the miss as well, so a persistent failure is not retried on
+		// every message.
+		limits = nil
+	} else if report != nil {
+		primary, secondary := selectUsageWindows(report)
+		if entry := statusLineWindowEntry(primary); entry != nil {
+			limits["five_hour"] = entry
+		}
+		if entry := statusLineWindowEntry(secondary); entry != nil {
+			limits["seven_day"] = entry
+		}
+		if len(limits) == 0 {
+			limits = nil
+		}
+	}
+
+	e.replyFooterMu.Lock()
+	e.statusLineUsage = statusLineUsageCache{limits: limits, fetchedAt: time.Now()}
+	e.replyFooterMu.Unlock()
+	return limits
+}
+
+// statusLineWindowEntry renders one quota window. resets_at is emitted as a
+// Unix timestamp: that is the form Claude Code uses, and a renderer expecting a
+// number rejects the ISO-8601 string outright.
+func statusLineWindowEntry(window *UsageWindow) map[string]any {
+	if window == nil {
+		return nil
+	}
+	entry := map[string]any{"used_percentage": window.UsedPercent}
+	if window.ResetAtUnix > 0 {
+		entry["resets_at"] = window.ResetAtUnix
+	}
+	return entry
+}
+
 // buildStatusLineCommandFooter renders the reply footer with an external
 // command, by piping it the same JSON shape Claude Code feeds a "statusLine"
 // program. This reuses whatever statusline the user already runs in their
@@ -7683,6 +7766,9 @@ func (e *Engine) buildStatusLineCommandFooter(agent Agent, session AgentSession,
 		return ""
 	}
 	payload := statusLineFooterPayload(agent, session, workspaceDir)
+	if limits := e.statusLineRateLimits(agent, session); len(limits) > 0 {
+		payload["rate_limits"] = limits
+	}
 	if len(payload) == 0 {
 		return ""
 	}

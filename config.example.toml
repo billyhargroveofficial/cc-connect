@@ -121,6 +121,11 @@ level = "info" # debug, info, warn, error
 # tool_max_len = 500        # Max chars for tool use messages (default: 500) / 工具调用消息最大字符数（默认 500）
 # history_max_len = 1000    # Max chars per /history entry (default: 1000; 0 = no truncation) / 每条历史记录最大字符数（默认 1000；0 表示不截断）
 # tool_messages = true      # Show/hide tool progress messages (default: true) / 是否显示工具进度消息（默认 true）
+# tool_style = "full"       # How tool calls are rendered / 工具调用的渲染方式
+#                           # full: tool name + input in a fenced block (default)
+#                           #       工具名 + 代码块中的输入（默认）
+#                           # compact: one line, tool name + short inline input preview
+#                           #          单行，工具名 + 简短的行内输入预览
 # show_context_indicator = true  # Show "[ctx: ~N%]" suffix on assistant replies (default: true)
 #                                # 在助手回复末尾显示「[ctx: ~N%]」上下文占用提示（默认 true 显示）
 # reply_footer = true            # Show Codex-like footer on assistant replies (default: true)

@@ -324,6 +324,8 @@ type DisplayCfg struct {
 	Mode             string // "full" (default), "compact", or "quiet" — thinking/tool visibility
 	CardMode         string // "legacy" (default) or "rich" (Card 2.0 Feishu)
 	ToolStyle        string // "full" (default) or "compact" (one-line tool calls)
+	FooterStyle      string // "verbose" (default) or "statusline" (render via FooterCommand)
+	FooterCommand    string // external statusline renderer fed Claude Code statusline JSON
 	ThinkingMessages bool
 	ThinkingMaxLen   int // max runes for thinking preview; 0 = no truncation
 	ToolMaxLen       int // max runes for tool use preview; 0 = no truncation
@@ -740,7 +742,7 @@ func NewEngine(name string, ag Agent, platforms []Platform, sessionStorePath str
 		cancel:                cancel,
 		i18n:                  NewI18n(lang),
 		attachmentSendEnabled: true,
-		display:               DisplayCfg{Mode: "full", ThinkingMessages: true, ThinkingMaxLen: defaultThinkingMaxLen, ToolMaxLen: defaultToolMaxLen, ToolMessages: true, CardMode: "legacy", ToolStyle: "full"},
+		display:               DisplayCfg{Mode: "full", ThinkingMessages: true, ThinkingMaxLen: defaultThinkingMaxLen, ToolMaxLen: defaultToolMaxLen, ToolMessages: true, CardMode: "legacy", ToolStyle: "full", FooterStyle: "verbose"},
 		commands:              NewCommandRegistry(),
 		skills:                NewSkillRegistry(),
 		aliases:               make(map[string]string),
@@ -7546,9 +7548,181 @@ func replyFooterHomeRelativePath(path, home string) (string, bool) {
 // Returns "" if reply_footer is disabled, or if the active session does not
 // expose per-turn cache-token data (i.e. this is not claudecode or no result
 // event has arrived yet) so callers fall back to the default footer.
+// statusLineFooterTimeout bounds the external footer renderer. cship's own
+// OAuth fetch times out after 2s, so allow a little more than that before
+// giving up and falling back to the built-in footer.
+const statusLineFooterTimeout = 4 * time.Second
+
+// ansiEscapeRe matches the SGR colour codes a terminal statusline emits. Chat
+// platforms render them as literal garbage, so they are stripped.
+var ansiEscapeRe = regexp.MustCompile("\\x1b\\[[0-9;]*[a-zA-Z]")
+
+// trailingSeparatorRe matches separator debris left when a statusline module
+// renders empty — e.g. cship emits a dangling " \u25cf " when rate limits are
+// unavailable, because the separator is a literal in the format string.
+var trailingSeparatorRe = regexp.MustCompile("[\\s\u00b7\u25cf|/-]+$")
+
+// prettyClaudeModelName turns a raw model id into the short display name a
+// statusline expects: "claude-opus-5" -> "Opus 5", "claude-haiku-4-5" ->
+// "Haiku 4.5". A trailing context marker is preserved as a suffix, so
+// "claude-opus-4-7[1m]" becomes "Opus 4.7 1M". Anything that does not match
+// the pattern is returned unchanged rather than mangled.
+func prettyClaudeModelName(id string) string {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return ""
+	}
+	suffix := ""
+	if i := strings.Index(id, "["); i >= 0 && strings.HasSuffix(id, "]") {
+		suffix = strings.ToUpper(id[i+1 : len(id)-1])
+		id = id[:i]
+	}
+	parts := strings.Split(strings.TrimPrefix(id, "claude-"), "-")
+	if len(parts) == 0 || parts[0] == "" {
+		return id
+	}
+	family := parts[0]
+	var digits []string
+	for _, part := range parts[1:] {
+		if part == "" {
+			continue
+		}
+		if _, err := strconv.Atoi(part); err != nil {
+			// Not a version tuple (e.g. a dated id) — leave the id alone.
+			return id
+		}
+		digits = append(digits, part)
+	}
+	name := strings.ToUpper(family[:1]) + family[1:]
+	if len(digits) > 0 {
+		name += " " + strings.Join(digits, ".")
+	}
+	if suffix != "" {
+		name += " " + suffix
+	}
+	return name
+}
+
+// statusLineFooterWorkDir resolves the raw working directory. It deliberately
+// skips compactReplyFooterPath: the external renderer does its own shortening
+// (cship-wrap takes a basename), and handing it an already-compacted path would
+// shorten it twice.
+func statusLineFooterWorkDir(session AgentSession, agent Agent, workspaceDir string) string {
+	if dir := strings.TrimSpace(workspaceDir); dir != "" {
+		return dir
+	}
+	if session != nil {
+		if wd, ok := session.(interface{ GetWorkDir() string }); ok {
+			if dir := strings.TrimSpace(wd.GetWorkDir()); dir != "" {
+				return dir
+			}
+		}
+	}
+	if switcher, ok := agent.(WorkDirSwitcher); ok {
+		if dir := strings.TrimSpace(switcher.GetWorkDir()); dir != "" {
+			return dir
+		}
+	}
+	if wd, ok := agent.(interface{ GetWorkDir() string }); ok {
+		return strings.TrimSpace(wd.GetWorkDir())
+	}
+	return ""
+}
+
+// statusLineFooterPayload builds the subset of Claude Code's statusline JSON
+// that the engine can actually populate.
+//
+// Rate limits are absent: Claude Code supplies rate_limits.five_hour and
+// .seven_day to its statusline command from the interactive TUI, and the
+// headless session this engine drives never receives them. A renderer that
+// shows those segments will leave them empty.
+func statusLineFooterPayload(agent Agent, session AgentSession, workspaceDir string) map[string]any {
+	payload := map[string]any{}
+	if dir := statusLineFooterWorkDir(session, agent, workspaceDir); dir != "" {
+		payload["workspace"] = map[string]any{"current_dir": dir}
+	}
+	if model := strings.TrimSpace(replyFooterModel(session, agent)); model != "" {
+		payload["model"] = map[string]any{
+			"id":           model,
+			"display_name": prettyClaudeModelName(model),
+		}
+	}
+	if effort := strings.TrimSpace(replyFooterReasoningEffort(session, agent)); effort != "" {
+		payload["effort"] = map[string]any{"level": effort}
+	}
+	if usage := replyFooterSessionContextUsage(session); usage != nil {
+		window := map[string]any{}
+		used := usage.UsedTokens
+		if used <= 0 {
+			used = usage.InputTokens + usage.CachedInputTokens + usage.CacheCreationInputTokens
+		}
+		if used > 0 {
+			window["total_input_tokens"] = used
+		}
+		if usage.ContextWindow > 0 {
+			window["context_window_size"] = usage.ContextWindow
+		}
+		if len(window) > 0 {
+			payload["context_window"] = window
+		}
+	}
+	return payload
+}
+
+// buildStatusLineCommandFooter renders the reply footer with an external
+// command, by piping it the same JSON shape Claude Code feeds a "statusLine"
+// program. This reuses whatever statusline the user already runs in their
+// terminal, so the chat footer and the terminal agree by construction and stay
+// in step when that tool is reconfigured.
+//
+// Returns "" on any failure, which makes the caller fall back to the built-in
+// footer rather than dropping the footer entirely.
+func (e *Engine) buildStatusLineCommandFooter(agent Agent, session AgentSession, workspaceDir string) string {
+	command := strings.TrimSpace(e.display.FooterCommand)
+	if command == "" {
+		return ""
+	}
+	payload := statusLineFooterPayload(agent, session, workspaceDir)
+	if len(payload) == 0 {
+		return ""
+	}
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		slog.Warn("status footer: encoding payload failed", "error", err)
+		return ""
+	}
+
+	ctx, cancel := context.WithTimeout(e.ctx, statusLineFooterTimeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "/bin/sh", "-c", command)
+	cmd.Stdin = bytes.NewReader(encoded)
+	out, err := cmd.Output()
+	if err != nil {
+		slog.Warn("status footer: renderer failed, falling back to built-in footer",
+			"command", command, "error", err)
+		return ""
+	}
+
+	line := ansiEscapeRe.ReplaceAllString(string(out), "")
+	line = strings.TrimSpace(line)
+	if i := strings.IndexByte(line, '\n'); i >= 0 {
+		line = line[:i]
+	}
+	line = trailingSeparatorRe.ReplaceAllString(line, "")
+	return strings.TrimSpace(line)
+}
+
 func (e *Engine) buildClaudeStatusLineFooter(agent Agent, session AgentSession, workspaceDir string) string {
 	if !e.replyFooterEnabled {
 		return ""
+	}
+	// The external renderer runs before the checks below: it needs neither a
+	// context window nor cache-token signals, so it must not be gated on them.
+	if e.display.FooterStyle == "statusline" {
+		if line := e.buildStatusLineCommandFooter(agent, session, workspaceDir); line != "" {
+			return line
+		}
 	}
 	usage := replyFooterSessionContextUsage(session)
 	if usage == nil || usage.ContextWindow <= 0 {

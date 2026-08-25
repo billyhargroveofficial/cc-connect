@@ -195,6 +195,8 @@ type DisplayConfig struct {
 	Mode                 *string `toml:"mode"`                   // "full" (default), "compact", or "quiet"
 	CardMode             *string `toml:"card_mode"`              // "legacy" (default) or "rich" (Card 2.0 Feishu)
 	ToolStyle            *string `toml:"tool_style"`             // "full" (default) or "compact" (one-line tool calls)
+	FooterStyle          *string `toml:"footer_style"`           // "verbose" (default) or "statusline"
+	FooterCommand        *string `toml:"footer_command"`         // external statusline renderer for footer_style="statusline"
 	ThinkingMessages     *bool   `toml:"thinking_messages"`      // whether thinking messages are shown; default true
 	ThinkingMaxLen       *int    `toml:"thinking_max_len"`       // max chars for thinking messages; 0 = no truncation; default 300
 	ToolMaxLen           *int    `toml:"tool_max_len"`           // max chars for tool use messages; 0 = no truncation; default 500
@@ -991,6 +993,40 @@ func EffectiveCardMode(cfg *Config, proj *ProjectConfig) string {
 		}
 	}
 	return "legacy"
+}
+
+// EffectiveFooterStyle returns how the reply footer is rendered: "statusline"
+// (piped through FooterCommand) or "verbose" (default, built in).
+func EffectiveFooterStyle(cfg *Config, proj *ProjectConfig) string {
+	var projDisp *DisplayConfig
+	if proj != nil {
+		projDisp = proj.Display
+	}
+	if projDisp != nil && projDisp.FooterStyle != nil {
+		if m := strings.ToLower(strings.TrimSpace(*projDisp.FooterStyle)); m == "statusline" || m == "verbose" {
+			return m
+		}
+	}
+	if cfg.Display.FooterStyle != nil {
+		if m := strings.ToLower(strings.TrimSpace(*cfg.Display.FooterStyle)); m == "statusline" || m == "verbose" {
+			return m
+		}
+	}
+	return "verbose"
+}
+
+// EffectiveFooterCommand returns the external renderer used when
+// EffectiveFooterStyle is "statusline".
+func EffectiveFooterCommand(cfg *Config, proj *ProjectConfig) string {
+	if proj != nil && proj.Display != nil && proj.Display.FooterCommand != nil {
+		if v := strings.TrimSpace(*proj.Display.FooterCommand); v != "" {
+			return v
+		}
+	}
+	if cfg.Display.FooterCommand != nil {
+		return strings.TrimSpace(*cfg.Display.FooterCommand)
+	}
+	return ""
 }
 
 // EffectiveToolStyle returns how tool calls are rendered: "compact" (a single

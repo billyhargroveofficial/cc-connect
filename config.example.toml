@@ -122,6 +122,14 @@ level = "info" # debug, info, warn, error
 # history_max_len = 1000    # Max chars per /history entry (default: 1000; 0 = no truncation) / 每条历史记录最大字符数（默认 1000；0 表示不截断）
 # tool_messages = true      # Show/hide tool progress messages (default: true) / 是否显示工具进度消息（默认 true）
 # tool_style = "full"       # How tool calls are rendered / 工具调用的渲染方式
+# footer_style = "verbose"  # How the reply footer is rendered / 回复页脚的渲染方式
+#                           # verbose: built-in footer (default) / 内置页脚（默认）
+#                           # statusline: pipe Claude Code statusline JSON to footer_command
+#                           #             将 Claude Code statusline JSON 传给 footer_command
+# footer_command = ""       # External renderer for footer_style="statusline", e.g. your
+#                           # existing "statusLine" program. Receives the JSON on stdin and
+#                           # prints one line. Rate limits are absent from that JSON in
+#                           # headless mode, so segments showing them render empty.
 #                           # full: tool name + input in a fenced block (default)
 #                           #       工具名 + 代码块中的输入（默认）
 #                           # compact: one line, tool name + short inline input preview

@@ -5147,23 +5147,7 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 			if e.display.ToolMessages {
 				// --- StreamingCard path ---
 				if streamCard != nil && !streamCard.Failed() {
-					toolInput := event.ToolInput
-					var formattedInput string
-					if toolInput == "" {
-						formattedInput = ""
-					} else if strings.Contains(toolInput, "```") {
-						formattedInput = toolInput
-					} else if strings.Contains(toolInput, "\n") || utf8.RuneCountInString(toolInput) > 200 {
-						lang := toolCodeLang(event.ToolName, toolInput)
-						formattedInput = fmt.Sprintf("```%s\n%s\n```", lang, toolInput)
-					} else {
-						switch event.ToolName {
-						case "shell", "run_shell_command", "Bash":
-							formattedInput = fmt.Sprintf("```bash\n%s\n```", toolInput)
-						default:
-							formattedInput = fmt.Sprintf("`%s`", toolInput)
-						}
-					}
+					formattedInput := formatToolInput(event.ToolName, event.ToolInput, e.display.ToolMaxLen)
 					cardToolCalls = append(cardToolCalls, cardToolEntry{
 						Index: toolCount,
 						Name:  event.ToolName,
@@ -5191,28 +5175,11 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 				if previewActive {
 					sp.detachPreview() // keep frozen preview visible as permanent message
 				}
-				toolInput := event.ToolInput
-				var formattedInput string
-				if toolInput == "" {
-					formattedInput = ""
-				} else if strings.Contains(toolInput, "```") {
-					formattedInput = toolInput
-				} else if strings.Contains(toolInput, "\n") || utf8.RuneCountInString(toolInput) > 200 {
-					lang := toolCodeLang(event.ToolName, toolInput)
-					formattedInput = fmt.Sprintf("```%s\n%s\n```", lang, toolInput)
-				} else {
-					switch event.ToolName {
-					case "shell", "run_shell_command", "Bash":
-						formattedInput = fmt.Sprintf("```bash\n%s\n```", toolInput)
-					default:
-						formattedInput = fmt.Sprintf("`%s`", toolInput)
-					}
-				}
+				formattedInput := formatToolInput(event.ToolName, event.ToolInput, e.display.ToolMaxLen)
 				toolMsg := fmt.Sprintf(e.i18n.T(MsgTool), toolCount, event.ToolName, formattedInput)
-				// Truncate the tool input that goes into the progress card payload so
-				// tool_max_len applies uniformly to progress_style=card, matching
-				// the rich-card path. event.ToolInput itself is left untouched.
-				cardToolInput := truncateIf(toolInput, e.display.ToolMaxLen)
+				// tool_max_len is applied by formatToolInput above and again here
+				// for the structured card payload. event.ToolInput stays intact.
+				cardToolInput := truncateIf(event.ToolInput, e.display.ToolMaxLen)
 				if !cp.AppendEvent(ProgressEntryToolUse, cardToolInput, event.ToolName, toolMsg) {
 					for _, chunk := range SplitMessageCodeFenceAware(toolMsg, maxPlatformMessageLen) {
 						sendWorkspace(p, replyCtx, chunk)
@@ -15569,6 +15536,32 @@ func (e *Engine) formatToolResultEventFallback(toolName, result, status string, 
 }
 
 // truncateIf truncates s to maxLen runes. 0 means no truncation.
+// formatToolInput renders a tool's input for display in a chat message.
+//
+// The input is truncated *before* formatting, so tool_max_len applies to every
+// rendering path. Previously truncation was applied only to the structured
+// progress-card payload, which meant tool_max_len silently did nothing on
+// platforms that use the compact or legacy progress styles (e.g. Telegram,
+// which normalizes "card" to "compact") and full tool internals were dumped
+// into the chat.
+func formatToolInput(toolName, input string, maxLen int) string {
+	input = truncateIf(input, maxLen)
+	switch {
+	case input == "":
+		return ""
+	case strings.Contains(input, "```"):
+		return input
+	case strings.Contains(input, "\n") || utf8.RuneCountInString(input) > 200:
+		return fmt.Sprintf("```%s\n%s\n```", toolCodeLang(toolName, input), input)
+	}
+	switch toolName {
+	case "shell", "run_shell_command", "Bash":
+		return fmt.Sprintf("```bash\n%s\n```", input)
+	default:
+		return fmt.Sprintf("`%s`", input)
+	}
+}
+
 func truncateIf(s string, maxLen int) string {
 	if maxLen <= 0 {
 		return s

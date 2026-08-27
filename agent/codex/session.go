@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -393,6 +394,9 @@ func (cs *codexSession) handleEvent(raw map[string]any) {
 	case "item.started":
 		cs.handleItemStarted(raw)
 
+	case "item.updated":
+		cs.handleItemUpdated(raw)
+
 	case "item.completed":
 		cs.handleItemCompleted(raw)
 
@@ -525,6 +529,22 @@ func (cs *codexSession) handleItemStarted(raw map[string]any) {
 		case <-cs.ctx.Done():
 			return
 		}
+	case "file_change":
+		// apply_patch: changes are present at item.started, so the edit is
+		// visible before it lands.
+		evt := core.Event{Type: core.EventToolUse, ToolName: "ApplyPatch", ToolInput: codexFileChangeSummary(item)}
+		select {
+		case cs.events <- evt:
+		case <-cs.ctx.Done():
+			return
+		}
+	case "todo_list":
+		evt := core.Event{Type: core.EventToolUse, ToolName: "UpdatePlan", ToolInput: codexTodoListSummary(item)}
+		select {
+		case cs.events <- evt:
+		case <-cs.ctx.Done():
+			return
+		}
 	}
 	// Other tool types (web_search etc.) have empty fields at start;
 	// their EventToolUse is emitted from handleItemCompleted instead.
@@ -625,6 +645,27 @@ func (cs *codexSession) handleItemCompleted(raw map[string]any) {
 			return
 		}
 
+	case "file_change":
+		status, _ := item["status"].(string)
+		success := codexToolSuccess(status, nil)
+		evt := core.Event{
+			Type:        core.EventToolResult,
+			ToolName:    "ApplyPatch",
+			ToolResult:  truncate(codexFileChangeSummary(item), 500),
+			ToolStatus:  strings.TrimSpace(status),
+			ToolSuccess: &success,
+		}
+		select {
+		case cs.events <- evt:
+		case <-cs.ctx.Done():
+			return
+		}
+
+	case "todo_list":
+		// The final state mirrors the last item.updated; re-rendering it at
+		// turn end would only duplicate the checklist.
+		slog.Debug("codexSession: todo_list completed")
+
 	case "function_call_output":
 		slog.Debug("codexSession: function_call_output")
 
@@ -651,6 +692,81 @@ func (cs *codexSession) handleItemCompleted(raw map[string]any) {
 
 // codexExtractToolInput extracts a human-readable input from a Codex tool item.
 // For web_search, it reads action.queries[] or falls back to the top-level query.
+// handleItemUpdated renders mid-turn item updates. Only todo_list is
+// interesting here: plan progress arrives as item.updated, and every other
+// type already renders from item.started/item.completed.
+func (cs *codexSession) handleItemUpdated(raw map[string]any) {
+	item, ok := raw["item"].(map[string]any)
+	if !ok {
+		return
+	}
+	itemType, _ := item["type"].(string)
+	if itemType != "todo_list" {
+		slog.Debug("codexSession: item.updated ignored", "item_type", itemType)
+		return
+	}
+	evt := core.Event{Type: core.EventToolUse, ToolName: "UpdatePlan", ToolInput: codexTodoListSummary(item)}
+	select {
+	case cs.events <- evt:
+	case <-cs.ctx.Done():
+		return
+	}
+}
+
+// codexFileChangeSummary compacts a file_change item ("changes" maps path to
+// {type, unified_diff, move_path}) into "update /a/b.go, add /c.txt" with the
+// paths sorted for a stable order.
+func codexFileChangeSummary(item map[string]any) string {
+	changes, ok := item["changes"].(map[string]any)
+	if !ok || len(changes) == 0 {
+		return ""
+	}
+	paths := make([]string, 0, len(changes))
+	for path := range changes {
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+	parts := make([]string, 0, len(paths))
+	for _, path := range paths {
+		kind := ""
+		if change, ok := changes[path].(map[string]any); ok {
+			kind, _ = change["type"].(string)
+		}
+		if kind != "" {
+			parts = append(parts, kind+" "+path)
+		} else {
+			parts = append(parts, path)
+		}
+	}
+	return strings.Join(parts, ", ")
+}
+
+// codexTodoListSummary renders a todo_list item ("items" is a list of
+// {text, completed}) as a one-line checklist: "✔ done step | ◻ next step".
+func codexTodoListSummary(item map[string]any) string {
+	items, ok := item["items"].([]any)
+	if !ok || len(items) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(items))
+	for _, entry := range items {
+		m, ok := entry.(map[string]any)
+		if !ok {
+			continue
+		}
+		text, _ := m["text"].(string)
+		if text == "" {
+			continue
+		}
+		marker := "◻"
+		if completed, _ := m["completed"].(bool); completed {
+			marker = "✔"
+		}
+		parts = append(parts, marker+" "+text)
+	}
+	return strings.Join(parts, " | ")
+}
+
 // codexMcpToolName renders an MCP item as "MCP <server>.<tool>" so the chat
 // tool line names the actual call (e.g. "MCP telegram.read_chat_slice"), not a
 // bare "MCP".

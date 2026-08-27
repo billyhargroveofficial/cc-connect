@@ -96,3 +96,91 @@ func TestHandleItemCompleted_McpToolCallErrorMarksFailure(t *testing.T) {
 		t.Fatal("no event emitted for failed mcp_tool_call")
 	}
 }
+
+func TestHandleItemStarted_FileChangeEmitsToolUse(t *testing.T) {
+	cs := newMcpTestSession(t)
+
+	cs.handleItemStarted(map[string]any{"item": map[string]any{
+		"type":   "file_change",
+		"status": "in_progress",
+		"changes": map[string]any{
+			"/home/billy/b.txt": map[string]any{"type": "add"},
+			"/home/billy/a.go":  map[string]any{"type": "update", "unified_diff": "@@ -1 +1 @@"},
+		},
+	}})
+
+	select {
+	case evt := <-cs.events:
+		if evt.Type != core.EventToolUse || evt.ToolName != "ApplyPatch" {
+			t.Fatalf("got %v/%q, want EventToolUse/ApplyPatch", evt.Type, evt.ToolName)
+		}
+		if evt.ToolInput != "update /home/billy/a.go, add /home/billy/b.txt" {
+			t.Fatalf("ToolInput = %q", evt.ToolInput)
+		}
+	default:
+		t.Fatal("no event emitted for file_change item.started")
+	}
+}
+
+func TestHandleItemCompleted_FileChangeEmitsToolResult(t *testing.T) {
+	cs := newMcpTestSession(t)
+
+	cs.handleItemCompleted(map[string]any{"item": map[string]any{
+		"type":   "file_change",
+		"status": "completed",
+		"changes": map[string]any{
+			"/home/billy/a.go": map[string]any{"type": "update"},
+		},
+	}})
+
+	select {
+	case evt := <-cs.events:
+		if evt.Type != core.EventToolResult || evt.ToolName != "ApplyPatch" {
+			t.Fatalf("got %v/%q, want EventToolResult/ApplyPatch", evt.Type, evt.ToolName)
+		}
+		if evt.ToolSuccess == nil || !*evt.ToolSuccess {
+			t.Fatal("ToolSuccess = false, want true")
+		}
+	default:
+		t.Fatal("no event emitted for file_change item.completed")
+	}
+}
+
+func TestHandleItemUpdated_TodoListEmitsChecklist(t *testing.T) {
+	cs := newMcpTestSession(t)
+
+	cs.handleItemUpdated(map[string]any{"item": map[string]any{
+		"type": "todo_list",
+		"items": []any{
+			map[string]any{"text": "посчитать строки", "completed": true},
+			map[string]any{"text": "отчитаться", "completed": false},
+		},
+	}})
+
+	select {
+	case evt := <-cs.events:
+		if evt.Type != core.EventToolUse || evt.ToolName != "UpdatePlan" {
+			t.Fatalf("got %v/%q, want EventToolUse/UpdatePlan", evt.Type, evt.ToolName)
+		}
+		if evt.ToolInput != "✔ посчитать строки | ◻ отчитаться" {
+			t.Fatalf("ToolInput = %q", evt.ToolInput)
+		}
+	default:
+		t.Fatal("no event emitted for todo_list item.updated")
+	}
+}
+
+func TestHandleItemCompleted_TodoListStaysSilent(t *testing.T) {
+	cs := newMcpTestSession(t)
+
+	cs.handleItemCompleted(map[string]any{"item": map[string]any{
+		"type":  "todo_list",
+		"items": []any{map[string]any{"text": "x", "completed": true}},
+	}})
+
+	select {
+	case evt := <-cs.events:
+		t.Fatalf("unexpected event for todo_list item.completed: %+v", evt)
+	default:
+	}
+}

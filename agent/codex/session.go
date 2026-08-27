@@ -515,6 +515,16 @@ func (cs *codexSession) handleItemStarted(raw map[string]any) {
 		case <-cs.ctx.Done():
 			return
 		}
+	case "mcp_tool_call":
+		// The exec --json stream names MCP items "mcp_tool_call" (snake case of
+		// the app-server protocol's McpToolCall); arguments are already present
+		// at item.started, so the tool line renders before the call runs.
+		evt := core.Event{Type: core.EventToolUse, ToolName: codexMcpToolName(item), ToolInput: codexMcpToolInput(item)}
+		select {
+		case cs.events <- evt:
+		case <-cs.ctx.Done():
+			return
+		}
 	}
 	// Other tool types (web_search etc.) have empty fields at start;
 	// their EventToolUse is emitted from handleItemCompleted instead.
@@ -596,6 +606,25 @@ func (cs *codexSession) handleItemCompleted(raw map[string]any) {
 			return
 		}
 
+	case "mcp_tool_call":
+		status, _ := item["status"].(string)
+		success := codexToolSuccess(status, nil)
+		if _, hasErr := item["error"].(map[string]any); hasErr {
+			success = false
+		}
+		evt := core.Event{
+			Type:        core.EventToolResult,
+			ToolName:    codexMcpToolName(item),
+			ToolResult:  truncate(strings.TrimSpace(codexMcpResultText(item)), 500),
+			ToolStatus:  strings.TrimSpace(status),
+			ToolSuccess: &success,
+		}
+		select {
+		case cs.events <- evt:
+		case <-cs.ctx.Done():
+			return
+		}
+
 	case "function_call_output":
 		slog.Debug("codexSession: function_call_output")
 
@@ -622,6 +651,72 @@ func (cs *codexSession) handleItemCompleted(raw map[string]any) {
 
 // codexExtractToolInput extracts a human-readable input from a Codex tool item.
 // For web_search, it reads action.queries[] or falls back to the top-level query.
+// codexMcpToolName renders an MCP item as "MCP <server>.<tool>" so the chat
+// tool line names the actual call (e.g. "MCP telegram.read_chat_slice"), not a
+// bare "MCP".
+func codexMcpToolName(item map[string]any) string {
+	server, _ := item["server"].(string)
+	tool, _ := item["tool"].(string)
+	switch {
+	case server != "" && tool != "":
+		return "MCP " + server + "." + tool
+	case tool != "":
+		return "MCP " + tool
+	case server != "":
+		return "MCP " + server
+	default:
+		return "MCP"
+	}
+}
+
+// codexMcpToolInput compacts the MCP call arguments (an arbitrary JSON value)
+// into one line for the tool-use message.
+func codexMcpToolInput(item map[string]any) string {
+	args, ok := item["arguments"]
+	if !ok || args == nil {
+		return ""
+	}
+	if s, ok := args.(string); ok {
+		return s
+	}
+	encoded, err := json.Marshal(args)
+	if err != nil {
+		return ""
+	}
+	return string(encoded)
+}
+
+// codexMcpResultText extracts a readable outcome from an MCP item: the error
+// message when the call failed, otherwise the text blocks of the MCP result.
+func codexMcpResultText(item map[string]any) string {
+	switch errVal := item["error"].(type) {
+	case string:
+		if errVal != "" {
+			return errVal
+		}
+	case map[string]any:
+		if msg, _ := errVal["message"].(string); msg != "" {
+			return msg
+		}
+	}
+	result, ok := item["result"].(map[string]any)
+	if !ok {
+		return ""
+	}
+	content, _ := result["content"].([]any)
+	var parts []string
+	for _, block := range content {
+		m, ok := block.(map[string]any)
+		if !ok {
+			continue
+		}
+		if text, _ := m["text"].(string); text != "" {
+			parts = append(parts, text)
+		}
+	}
+	return strings.Join(parts, "\n")
+}
+
 func codexExtractToolInput(item map[string]any) string {
 	if action, ok := item["action"].(map[string]any); ok {
 		if queries, ok := action["queries"].([]any); ok && len(queries) > 0 {

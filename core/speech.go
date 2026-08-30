@@ -11,6 +11,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/url"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
@@ -339,6 +340,55 @@ func ConvertAudioToMP3(ctx context.Context, audio []byte, srcFormat string) ([]b
 	return stdout.Bytes(), nil
 }
 
+// ConvertAudioToWAV uses ffmpeg to convert audio to 16 kHz mono PCM WAV for
+// speech-to-text. Unlike the lossy MP3 hop this keeps the decoded waveform
+// intact, which measurably improves Whisper recognition of low-bitrate voice
+// notes. ffmpeg cannot backpatch the RIFF size header on a pipe, so the
+// output goes through a temp file.
+func ConvertAudioToWAV(ctx context.Context, audio []byte, srcFormat string) ([]byte, error) {
+	ffmpegPath, err := exec.LookPath("ffmpeg")
+	if err != nil {
+		return nil, fmt.Errorf("ffmpeg not found in PATH: install ffmpeg to enable voice message support")
+	}
+
+	tmp, err := os.CreateTemp("", "cc-stt-*.wav")
+	if err != nil {
+		return nil, fmt.Errorf("create temp wav: %w", err)
+	}
+	tmpPath := tmp.Name()
+	tmp.Close()
+	defer os.Remove(tmpPath)
+
+	var args []string
+	if srcFormat == "amr" || srcFormat == "silk" {
+		args = append(args, "-f", srcFormat)
+	}
+	args = append(args,
+		"-i", "pipe:0",
+		"-f", "wav",
+		"-acodec", "pcm_s16le",
+		"-ac", "1",
+		"-ar", "16000",
+		"-y",
+		tmpPath,
+	)
+
+	cmd := exec.CommandContext(ctx, ffmpegPath, args...)
+	cmd.Stdin = bytes.NewReader(audio)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+
+	if err := cmd.Run(); err != nil {
+		return nil, fmt.Errorf("ffmpeg conversion failed: %w (stderr: %s)", err, stderr.String())
+	}
+
+	out, err := os.ReadFile(tmpPath)
+	if err != nil {
+		return nil, fmt.Errorf("read converted wav: %w", err)
+	}
+	return out, nil
+}
+
 // ConvertAudioToOpus uses ffmpeg to convert audio to opus format (ogg container).
 // Returns the opus bytes. If ffmpeg is not installed, returns an error.
 func ConvertAudioToOpus(ctx context.Context, audio []byte, srcFormat string) ([]byte, error) {
@@ -519,13 +569,13 @@ func TranscribeAudio(ctx context.Context, stt SpeechToText, audio *AudioAttachme
 	format := strings.ToLower(audio.Format)
 
 	if NeedsConversion(format) {
-		slog.Debug("speech: converting audio", "from", format, "to", "mp3")
-		converted, err := ConvertAudioToMP3(ctx, data, format)
+		slog.Debug("speech: converting audio", "from", format, "to", "wav")
+		converted, err := ConvertAudioToWAV(ctx, data, format)
 		if err != nil {
 			return "", err
 		}
 		data = converted
-		format = "mp3"
+		format = "wav"
 	}
 
 	slog.Debug("speech: transcribing", "format", format, "size", len(data))

@@ -491,25 +491,26 @@ func (a *Agent) ValidateSessionID(_ context.Context, sessionID string) bool {
 	a.mu.RLock()
 	workDir := a.workDir
 	a.mu.RUnlock()
-	return validateSessionIDInProject(homeDir, workDir, sessionID)
+	return validateSessionIDInProject(a.claudeConfigBase(homeDir), workDir, sessionID)
 }
 
 // validateSessionIDInProject checks whether sessionID has a .jsonl file
 // under the per-project directory that Claude Code derives from workDir.
-// Split out from (*Agent).ValidateSessionID so the logic can be unit
-// tested without touching the real $HOME.
-func validateSessionIDInProject(homeDir, workDir, sessionID string) bool {
+// configBase is the resolved Claude config directory (e.g. ~/.claude or a
+// CLAUDE_CONFIG_DIR override). Split out from (*Agent).ValidateSessionID so
+// the logic can be unit tested without touching the real $HOME.
+func validateSessionIDInProject(configBase, workDir, sessionID string) bool {
 	if sessionID == "" {
 		return false
 	}
-	if homeDir == "" || workDir == "" {
+	if configBase == "" || workDir == "" {
 		return false
 	}
 	absWorkDir, err := filepath.Abs(workDir)
 	if err != nil {
 		return false
 	}
-	projectDir := findProjectDir(homeDir, absWorkDir)
+	projectDir := findProjectDir(configBase, absWorkDir)
 	if projectDir == "" {
 		return false
 	}
@@ -577,7 +578,7 @@ func (a *Agent) ListSessions(ctx context.Context) ([]core.AgentSessionInfo, erro
 		return nil, fmt.Errorf("claudecode: resolve work_dir: %w", err)
 	}
 
-	projectDir := findProjectDir(homeDir, absWorkDir)
+	projectDir := findProjectDir(a.claudeConfigBase(homeDir), absWorkDir)
 	if projectDir == "" {
 		return nil, nil
 	}
@@ -632,7 +633,7 @@ func (a *Agent) DeleteSession(_ context.Context, sessionID string) error {
 	if err != nil {
 		return fmt.Errorf("claudecode: resolve work_dir: %w", err)
 	}
-	projectDir := findProjectDir(homeDir, absWorkDir)
+	projectDir := findProjectDir(a.claudeConfigBase(homeDir), absWorkDir)
 	if projectDir == "" {
 		return fmt.Errorf("session not found")
 	}
@@ -733,7 +734,7 @@ func (a *Agent) GetSessionHistory(_ context.Context, sessionID string, limit int
 	workDir := a.workDir
 	a.mu.RUnlock()
 	absWorkDir, _ := filepath.Abs(workDir)
-	projectDir := findProjectDir(homeDir, absWorkDir)
+	projectDir := findProjectDir(a.claudeConfigBase(homeDir), absWorkDir)
 	if projectDir == "" {
 		return nil, fmt.Errorf("claudecode: project dir not found")
 	}
@@ -1549,8 +1550,28 @@ func encodeClaudeProjectKey(absPath string) string {
 // is derived from the absolute path. On Windows, the key format may vary (colon
 // handling, slash direction), so we try multiple key candidates and fall back to
 // scanning the projects directory.
-func findProjectDir(homeDir, absWorkDir string) string {
-	projectsBase := filepath.Join(homeDir, ".claude", "projects")
+// claudeConfigBase resolves the Claude Code config directory the sessions of
+// this agent actually live in. A CLAUDE_CONFIG_DIR override from the project's
+// [projects.agent.options.env] (or, failing that, the process environment)
+// relocates the whole config tree — session transcripts included — so path
+// probing must honor it or per-project isolated agents list zero sessions.
+func (a *Agent) claudeConfigBase(homeDir string) string {
+	a.mu.RLock()
+	configEnv := a.configEnv
+	a.mu.RUnlock()
+	for _, kv := range configEnv {
+		if v, ok := strings.CutPrefix(kv, "CLAUDE_CONFIG_DIR="); ok && strings.TrimSpace(v) != "" {
+			return strings.TrimSpace(v)
+		}
+	}
+	if v := strings.TrimSpace(os.Getenv("CLAUDE_CONFIG_DIR")); v != "" {
+		return v
+	}
+	return filepath.Join(homeDir, ".claude")
+}
+
+func findProjectDir(configBase, absWorkDir string) string {
+	projectsBase := filepath.Join(configBase, "projects")
 
 	// Build candidate keys: different ways Claude Code might encode the path.
 	// Primary encoding: Claude Code's actual algorithm (non-ASCII → "-")

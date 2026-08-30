@@ -77,12 +77,44 @@ func NewRich(opts map[string]any) (core.Platform, error) {
 // different account.
 func (r *richPlatform) Name() string { return "telegram" }
 
+// markdownHardBreaks makes single newlines survive Telegram's server-side
+// markdown parsing. CommonMark treats a lone "\n" as a soft break and renders
+// it as a space, so bridge-generated line lists (/sessions, /status, tool
+// progress) and the agent's own chat-style line breaks collapse into one run.
+// The HTML fallback path preserves every "\n" literally; appending a two-space
+// hard break restores parity for the rich path. Fenced code blocks are left
+// untouched, blank lines already separate paragraphs, and lines that end in a
+// hard break (or backslash) are skipped, so the transform is idempotent.
+func markdownHardBreaks(md string) string {
+	lines := strings.Split(md, "\n")
+	inFence := false
+	for i := 0; i < len(lines)-1; i++ {
+		trimmed := strings.TrimSpace(lines[i])
+		if strings.HasPrefix(trimmed, "```") || strings.HasPrefix(trimmed, "~~~") {
+			inFence = !inFence
+			continue
+		}
+		if inFence || trimmed == "" {
+			continue
+		}
+		if strings.TrimSpace(lines[i+1]) == "" {
+			continue
+		}
+		if strings.HasSuffix(lines[i], "  ") || strings.HasSuffix(lines[i], "\\") {
+			continue
+		}
+		lines[i] += "  "
+	}
+	return strings.Join(lines, "\n")
+}
+
 // sendRich delivers content as a rich message. A nil return means the caller
 // should fall back to the inherited HTML path.
 func (r *richPlatform) sendRich(ctx context.Context, rc replyContext, content string, replyToMessageID int) *models.Message {
 	if strings.TrimSpace(content) == "" {
 		return nil
 	}
+	content = markdownHardBreaks(content)
 	bot, err := r.connectedBot("rich send")
 	if err != nil {
 		slog.Warn("telegram-rich: no connected bot, falling back to HTML", "error", err)
@@ -172,7 +204,7 @@ func (r *richPlatform) UpdateMessage(ctx context.Context, previewHandle any, con
 	_, err = bot.EditMessageText(ctx, &tgbot.EditMessageTextParams{
 		ChatID:      h.chatID,
 		MessageID:   h.messageID,
-		RichMessage: &models.InputRichMessage{Markdown: content},
+		RichMessage: &models.InputRichMessage{Markdown: markdownHardBreaks(content)},
 	})
 	if err == nil {
 		return nil

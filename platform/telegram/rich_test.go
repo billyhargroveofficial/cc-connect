@@ -142,3 +142,18 @@ func TestRichPlatform_StartRebindsHandlerToWrapper(t *testing.T) {
 		t.Fatalf("handler received %T, want *richPlatform; replies would bypass rich rendering", got)
 	}
 }
+
+func TestMarkdownHardBreaks(t *testing.T) {
+	in := "line one\nline two\n\npara two\n```go\ncode a\ncode b\n```\ntail one\ntail two"
+	// "para two" gains a trailing break because the next line opens a fence;
+	// harmless in CommonMark — the paragraph ends at the fence either way.
+	want := "line one  \nline two\n\npara two  \n```go\ncode a\ncode b\n```\ntail one  \ntail two"
+	if got := markdownHardBreaks(in); got != want {
+		t.Errorf("markdownHardBreaks:\n got %q\nwant %q", got, want)
+	}
+	// Idempotent: a second pass must not stack more spaces.
+	once := markdownHardBreaks(in)
+	if twice := markdownHardBreaks(once); twice != once {
+		t.Errorf("markdownHardBreaks not idempotent:\n once %q\ntwice %q", once, twice)
+	}
+}

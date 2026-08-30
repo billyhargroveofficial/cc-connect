@@ -5512,6 +5512,20 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 					"output_tokens", event.OutputTokens,
 					"metadata", event.Metadata,
 				)
+				// Mid-turn compaction is worth surfacing: show it in the
+				// progress card like a tool step so the user sees why the
+				// turn paused. Real context size comes from the session's
+				// usage snapshot captured just before the compaction.
+				if isCompaction, _ := event.Metadata["compaction"].(bool); isCompaction && e.display.ToolMessages && e.display.ToolStyle == "compact" {
+					args := ""
+					if usage := replyFooterSessionContextUsage(state.agentSession); usage != nil && usage.UsedTokens > 0 {
+						args = fmt.Sprintf("ctx ~%dk", usage.UsedTokens/1000)
+					}
+					compactMsg := compactToolLine("compact", args)
+					if !cp.AppendEvent(ProgressEntryInfo, compactMsg, "", compactMsg) {
+						sendWorkspace(p, replyCtx, compactMsg)
+					}
+				}
 				continue
 			}
 			cp.Finalize(ProgressCardStateCompleted)
@@ -5572,10 +5586,17 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 
 			contextEstimate := estimateTokensWithPendingAssistant(session.GetHistory(0), baseResponse)
 
-			// Evaluate auto-compress trigger (token estimate on user+assistant text,
-			// including this turn's assistant reply before it is appended to history).
+			// Evaluate auto-compress trigger. Prefer the agent-reported real
+			// context usage (prompt size of the final inference call): the
+			// chars/4 estimate over bridge-side history text misses tool
+			// results and system context entirely, so on agentic sessions it
+			// undercounts by an order of magnitude and a threshold set
+			// against the real context window would never fire.
 			if e.autoCompressEnabled && e.autoCompressMaxTokens > 0 {
 				estimate := contextEstimate
+				if usage := replyFooterSessionContextUsage(state.agentSession); usage != nil && usage.UsedTokens > 0 {
+					estimate = usage.UsedTokens
+				}
 				now := time.Now()
 				state.mu.Lock()
 				last := state.lastAutoCompressAt
@@ -15930,7 +15951,7 @@ var compactToolEmojis = map[string]string{
 	"toolsearch": "🧰",
 	"subagent": "🤖",
 	"skill": "🎯", "todowrite": "✅", "askuserquestion": "❓",
-	"thinking": "💭",
+	"thinking": "💭", "compact": "🗜",
 }
 
 // compactToolLine renders one progress entry: "<emoji> **name** *args*".

@@ -903,6 +903,9 @@ func (cs *claudeSession) handleResult(raw map[string]any) {
 		CacheCreationInputTokens: cacheCreationTokens,
 		CacheReadInputTokens:     cacheReadTokens,
 	}
+	if isCompaction {
+		evt.Metadata = map[string]any{"compaction": true}
+	}
 	select {
 	case cs.events <- evt:
 	case <-cs.ctx.Done():

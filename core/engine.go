@@ -330,6 +330,7 @@ type DisplayCfg struct {
 	ThinkingMaxLen   int // max runes for thinking preview; 0 = no truncation
 	ToolMaxLen       int // max runes for tool use preview; 0 = no truncation
 	ToolMessages     bool
+	ProgressCleanup  bool // delete the compact progress message before the final answer
 	HistoryMaxLen    *int // max runes for /history entries; nil = default, 0 = no truncation
 	HideAgentFooter  bool // strip model/token footer lines emitted as agent text
 }
@@ -5491,6 +5492,12 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 				continue
 			}
 			cp.Finalize(ProgressCardStateCompleted)
+			// Erase the compact progress message before the final answer goes
+			// out so the chat keeps only the result (OpenClaw-style). Failed
+			// turns skip this path and keep the progress trail for debugging.
+			if e.display.ProgressCleanup {
+				cp.Cleanup()
+			}
 			// Use state.agentSession.CurrentSessionID() instead of event.SessionID.
 			// event.SessionID may be empty in some cases, causing the agent_session_id
 			// to not be persisted to disk, breaking session resume on next startup.

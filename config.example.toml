@@ -122,6 +122,9 @@ level = "info" # debug, info, warn, error
 # history_max_len = 1000    # Max chars per /history entry (default: 1000; 0 = no truncation) / 每条历史记录最大字符数（默认 1000；0 表示不截断）
 # tool_messages = true      # Show/hide tool progress messages (default: true) / 是否显示工具进度消息（默认 true）
 # tool_style = "full"       # How tool calls are rendered / 工具调用的渲染方式
+# progress_cleanup = false  # With progress_style = "compact": delete the coalesced progress
+#                           # message before the final answer so only the result stays in chat
+#                           # 配合 progress_style = "compact"：最终回复前删除进度消息，聊天中只保留结果
 # footer_style = "verbose"  # How the reply footer is rendered / 回复页脚的渲染方式
 #                           # verbose: built-in footer (default) / 内置页脚（默认）
 #                           # statusline: pipe Claude Code statusline JSON to footer_command

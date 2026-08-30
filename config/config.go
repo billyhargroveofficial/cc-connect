@@ -201,6 +201,7 @@ type DisplayConfig struct {
 	ThinkingMaxLen       *int    `toml:"thinking_max_len"`       // max chars for thinking messages; 0 = no truncation; default 300
 	ToolMaxLen           *int    `toml:"tool_max_len"`           // max chars for tool use messages; 0 = no truncation; default 500
 	ToolMessages         *bool   `toml:"tool_messages"`          // whether tool progress messages are shown; default true
+	ProgressCleanup      *bool   `toml:"progress_cleanup"`       // delete the compact progress message before the final answer; default false
 	HistoryMaxLen        *int    `toml:"history_max_len"`        // max chars per /history entry; 0 = no truncation; default 1000
 	ShowContextIndicator *bool   `toml:"show_context_indicator"` // whether [ctx: ~N%] suffix is shown; default true
 	ReplyFooter          *bool   `toml:"reply_footer"`           // whether Codex-like footer is shown; default true
@@ -1048,6 +1049,23 @@ func EffectiveToolStyle(cfg *Config, proj *ProjectConfig) string {
 		}
 	}
 	return "full"
+}
+
+// EffectiveProgressCleanup reports whether the compact progress message is
+// deleted before the final answer is delivered. Per-project overrides global;
+// default false to preserve upstream behavior.
+func EffectiveProgressCleanup(cfg *Config, proj *ProjectConfig) bool {
+	var projDisp *DisplayConfig
+	if proj != nil {
+		projDisp = proj.Display
+	}
+	if projDisp != nil && projDisp.ProgressCleanup != nil {
+		return *projDisp.ProgressCleanup
+	}
+	if cfg.Display.ProgressCleanup != nil {
+		return *cfg.Display.ProgressCleanup
+	}
+	return false
 }
 
 // validatePermissive is like validate but skips the "at least one platform"

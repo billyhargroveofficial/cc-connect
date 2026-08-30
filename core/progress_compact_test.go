@@ -311,3 +311,64 @@ func TestCompactProgressWriter_DoesNotTransformToolResults(t *testing.T) {
 		t.Fatalf("tool result text = %q, want raw %q", got, raw)
 	}
 }
+
+// cleanupCapturePlatform is a compact-progress platform that records preview
+// deletions (PreviewCleaner).
+type cleanupCapturePlatform struct {
+	stubCompactProgressPlatform
+	deleted []any
+}
+
+func (p *cleanupCapturePlatform) DeletePreviewMessage(_ context.Context, handle any) error {
+	p.previewMu.Lock()
+	p.deleted = append(p.deleted, handle)
+	p.previewMu.Unlock()
+	return nil
+}
+
+func TestCompactProgressWriter_CleanupDeletesProgressMessage(t *testing.T) {
+	p := &cleanupCapturePlatform{
+		stubCompactProgressPlatform: stubCompactProgressPlatform{
+			stubPlatformEngine: stubPlatformEngine{n: "telegram"},
+			style:              "compact",
+		},
+	}
+	w := newCompactProgressWriter(context.Background(), p, "ctx", "claudecode", LangEnglish, nil)
+	if ok := w.AppendEvent(ProgressEntryToolUse, "ls /tmp", "Bash", "🔧 #1 Bash ls /tmp"); !ok {
+		t.Fatal("AppendEvent() = false, want true")
+	}
+
+	w.Cleanup()
+
+	if len(p.deleted) != 1 {
+		t.Fatalf("deleted handles = %d, want 1", len(p.deleted))
+	}
+	if p.deleted[0] != "preview-handle" {
+		t.Fatalf("deleted handle = %v, want preview-handle", p.deleted[0])
+	}
+	// Idempotent: a second cleanup must not delete again.
+	w.Cleanup()
+	if len(p.deleted) != 1 {
+		t.Fatalf("deleted handles after second cleanup = %d, want 1", len(p.deleted))
+	}
+}
+
+func TestCompactProgressWriter_CleanupSkipsCardStyle(t *testing.T) {
+	p := &cleanupCapturePlatform{
+		stubCompactProgressPlatform: stubCompactProgressPlatform{
+			stubPlatformEngine: stubPlatformEngine{n: "feishu"},
+			style:              "card",
+			supportPayload:     true,
+		},
+	}
+	w := newCompactProgressWriter(context.Background(), p, "ctx", "claudecode", LangEnglish, nil)
+	if ok := w.AppendEvent(ProgressEntryToolUse, "ls /tmp", "Bash", "🔧 #1 Bash ls /tmp"); !ok {
+		t.Fatal("AppendEvent() = false, want true")
+	}
+
+	w.Cleanup()
+
+	if len(p.deleted) != 0 {
+		t.Fatalf("deleted handles = %d, want 0 (card style keeps its card)", len(p.deleted))
+	}
+}

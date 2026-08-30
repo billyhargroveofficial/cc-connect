@@ -212,6 +212,10 @@ type compactProgressWriter struct {
 	starter PreviewStarter
 	updater MessageUpdater
 	handle  any
+	// deletable is set only when handle came from SendPreviewStart and thus
+	// identifies a concrete platform message; the p.Send fallback stores the
+	// reply context as handle, which cannot be deleted.
+	deletable bool
 
 	enabled    bool
 	failed     bool
@@ -459,6 +463,7 @@ func (w *compactProgressWriter) AppendStructured(item ProgressCardEntry, fallbac
 				return false
 			}
 			w.handle = handle
+			w.deletable = true
 			w.lastSent = w.content
 			w.lastUpdateAt = time.Now()
 			return true
@@ -521,6 +526,33 @@ func (w *compactProgressWriter) Finalize(state ProgressCardState) bool {
 	}
 	w.lastSent = w.content
 	return true
+}
+
+// Cleanup deletes the in-place progress message so the chat keeps only the
+// final answer, mirroring how OpenClaw's tool progress disappears once the
+// turn resolves. Compact style only: a card-style progress card is a styled
+// artifact the platform finalizes in place, and deleting it would leave a
+// "message was deleted" gray bar on platforms like Lark. Callers gate this on
+// the progress_cleanup display option and invoke it before delivering the
+// final answer.
+func (w *compactProgressWriter) Cleanup() {
+	if !w.enabled || w.style != progressStyleCompact || w.handle == nil || !w.deletable {
+		return
+	}
+	cleaner, ok := w.platform.(PreviewCleaner)
+	if !ok {
+		return
+	}
+	callCtx, cancel := w.withAPITimeout()
+	err := cleaner.DeletePreviewMessage(callCtx, w.handle)
+	cancel()
+	if err != nil {
+		slog.Debug("progress writer: cleanup delete failed", "platform", w.platform.Name(), "error", err)
+	}
+	w.handle = nil
+	w.deletable = false
+	w.lastSent = ""
+	w.content = ""
 }
 
 func (w *compactProgressWriter) withAPITimeout() (context.Context, context.CancelFunc) {

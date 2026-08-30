@@ -38,6 +38,7 @@ type claudeSession struct {
 	acceptEditsOnly atomic.Bool
 	dontAsk         atomic.Bool
 	workDir         string
+	effort          string // reasoning effort the session was spawned with
 	ctx             context.Context
 	cancel          context.CancelFunc
 	done            chan struct{}
@@ -451,6 +452,7 @@ func newClaudeSession(ctx context.Context, workDir, cliBin string, cliExtraArgs 
 		stdin:               stdin,
 		events:              make(chan core.Event, 64),
 		workDir:             workDir,
+		effort:              effort,
 		ctx:                 sessionCtx,
 		cancel:              cancel,
 		done:                make(chan struct{}),
@@ -698,6 +700,11 @@ func (cs *claudeSession) handleAssistant(raw map[string]any) {
 	if !ok {
 		return
 	}
+	// Stream-json envelopes carry parent_tool_use_id when the message was
+	// produced inside a subagent (Task); surface that so display layers can
+	// mark nested activity.
+	parentToolID, _ := raw["parent_tool_use_id"].(string)
+	fromSubagent := strings.TrimSpace(parentToolID) != ""
 	for _, contentItem := range contentArr {
 		item, ok := contentItem.(map[string]any)
 		if !ok {
@@ -711,7 +718,10 @@ func (cs *claudeSession) handleAssistant(raw map[string]any) {
 				continue
 			}
 			inputSummary := summarizeInput(toolName, item["input"])
-			evt := core.Event{Type: core.EventToolUse, ToolName: toolName, ToolInput: inputSummary}
+			if toolName == "Task" || toolName == "Agent" {
+				inputSummary = cs.summarizeSubagentTask(item["input"], inputSummary)
+			}
+			evt := core.Event{Type: core.EventToolUse, ToolName: toolName, ToolInput: inputSummary, FromSubagent: fromSubagent}
 			select {
 			case cs.events <- evt:
 			case <-cs.ctx.Done():
@@ -719,7 +729,7 @@ func (cs *claudeSession) handleAssistant(raw map[string]any) {
 			}
 		case "thinking":
 			if thinking, ok := item["thinking"].(string); ok && thinking != "" {
-				evt := core.Event{Type: core.EventThinking, Content: thinking}
+				evt := core.Event{Type: core.EventThinking, Content: thinking, FromSubagent: fromSubagent}
 				select {
 				case cs.events <- evt:
 				case <-cs.ctx.Done():
@@ -728,6 +738,11 @@ func (cs *claudeSession) handleAssistant(raw map[string]any) {
 			}
 		case "text":
 			if text, ok := item["text"].(string); ok && text != "" {
+				// Subagent narration must not leak into the parent turn's
+				// answer text — its outcome arrives via the Task tool result.
+				if fromSubagent {
+					continue
+				}
 				evt := core.Event{Type: core.EventText, Content: text}
 				select {
 				case cs.events <- evt:
@@ -737,6 +752,44 @@ func (cs *claudeSession) handleAssistant(raw map[string]any) {
 			}
 		}
 	}
+}
+
+// summarizeSubagentTask prefixes a Task/Agent preview with the subagent's
+// model and effort so the progress line reads "subagent opus-5 xhigh <task>".
+// The model comes from the tool input's own override when present, else the
+// session's active model; the effort is inherited from the parent session —
+// Claude Code applies --effort process-wide and Task carries no effort field.
+func (cs *claudeSession) summarizeSubagentTask(input any, description string) string {
+	model := ""
+	if m, ok := input.(map[string]any); ok {
+		if v, ok := m["model"].(string); ok {
+			model = strings.TrimSpace(v)
+		}
+	}
+	if model == "" {
+		model = shortClaudeModelLabel(cs.GetModel())
+	}
+	parts := make([]string, 0, 3)
+	if model != "" {
+		parts = append(parts, model)
+	}
+	if cs.effort != "" {
+		parts = append(parts, cs.effort)
+	}
+	if description != "" {
+		parts = append(parts, description)
+	}
+	return strings.Join(parts, " ")
+}
+
+// shortClaudeModelLabel shrinks a full model id to its family label:
+// "claude-opus-5[1m]" -> "opus-5".
+func shortClaudeModelLabel(model string) string {
+	model = strings.TrimSpace(model)
+	if i := strings.Index(model, "["); i >= 0 {
+		model = model[:i]
+	}
+	return strings.TrimPrefix(model, "claude-")
 }
 
 func (cs *claudeSession) handleUser(raw map[string]any) {

@@ -443,7 +443,12 @@ func (w *compactProgressWriter) AppendStructured(item ProgressCardEntry, fallbac
 		if w.content == "" {
 			w.content = fallback
 		} else {
-			w.content += "\n\n" + fallback
+			// Markdown hard break (two trailing spaces): platforms that parse
+			// the content as markdown (Telegram rich messages) would collapse
+			// a bare "\n" soft break into a space and merge every tool line
+			// into one run; the line-based HTML fallback splits on "\n" and
+			// ignores the trailing spaces. Keeps the card one line per event.
+			w.content += "  \n" + fallback
 		}
 		w.content = trimCompactProgressText(w.content, compactProgressMaxChars)
 	}

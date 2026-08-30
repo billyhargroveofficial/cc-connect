@@ -153,3 +153,6 @@ credentials/
 
 .codex
 cc-connect-new
+
+# Stray workspace-state files some core tests leave behind
+core/test_ws_*.json

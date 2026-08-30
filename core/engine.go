@@ -5090,6 +5090,14 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 				}
 				preview := truncateIf(event.Content, e.display.ThinkingMaxLen)
 				thinkingMsg := fmt.Sprintf(e.i18n.T(MsgThinking), preview)
+				if e.display.ToolStyle == "compact" {
+					// Same shape as tool lines so the card reads uniformly:
+					// 💭 **thinking** *one-line preview*
+					thinkingMsg = compactToolLine("thinking", compactInlinePreview(event.Content, e.display.ThinkingMaxLen))
+					if event.FromSubagent {
+						thinkingMsg = "↳ " + thinkingMsg
+					}
+				}
 				if !cp.AppendEvent(ProgressEntryThinking, preview, "", thinkingMsg) {
 					sendWorkspace(p, replyCtx, thinkingMsg)
 				}
@@ -5181,7 +5189,22 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 					sp.detachPreview() // keep frozen preview visible as permanent message
 				}
 				formattedInput, toolMsgKey := e.formatToolCall(event.ToolName, event.ToolInput)
-				toolMsg := fmt.Sprintf(e.i18n.T(toolMsgKey), toolCount, event.ToolName, formattedInput)
+				var toolMsg string
+				if toolMsgKey == MsgToolCompact {
+					// Laconic OpenClaw-style line: per-tool emoji, bold
+					// lowercase tool name, italic one-line argument preview.
+					// Workdir-absolute paths shrink to relative so the line
+					// spends its budget on the part that varies.
+					if wd := e.compactToolWorkDir(replyAgent, workspaceDir); wd != "" {
+						formattedInput = strings.ReplaceAll(formattedInput, wd+"/", "")
+					}
+					toolMsg = compactToolLine(event.ToolName, formattedInput)
+					if event.FromSubagent {
+						toolMsg = "↳ " + toolMsg
+					}
+				} else {
+					toolMsg = fmt.Sprintf(e.i18n.T(toolMsgKey), toolCount, event.ToolName, formattedInput)
+				}
 				// tool_max_len is applied by formatToolInput above and again here
 				// for the structured card payload. event.ToolInput stays intact.
 				cardToolInput := truncateIf(event.ToolInput, e.display.ToolMaxLen)
@@ -6270,6 +6293,7 @@ var builtinCommands = []struct {
 	{[]string{"name", "rename"}, "name"},
 	{[]string{"current"}, "current"},
 	{[]string{"status"}, "status"},
+	{[]string{"statusline", "sl"}, "statusline"},
 	{[]string{"usage", "quota"}, "usage"},
 	{[]string{"history"}, "history"},
 	{[]string{"allow"}, "allow"},
@@ -6475,6 +6499,8 @@ func (e *Engine) handleCommand(p Platform, msg *Message, raw string) bool {
 		e.cmdCurrent(p, msg)
 	case "status":
 		e.cmdStatus(p, msg)
+	case "statusline":
+		e.cmdStatusLine(p, msg)
 	case "usage":
 		e.cmdUsage(p, msg)
 	case "history":
@@ -7114,7 +7140,17 @@ func (e *Engine) commandWorkDir(agent Agent, msg *Message) string {
 }
 
 func (e *Engine) buildReplyFooter(agent Agent, session AgentSession, workspaceDir string, contextLeft string) string {
-	if !e.replyFooterEnabled || agent == nil {
+	if !e.replyFooterEnabled {
+		return ""
+	}
+	return e.buildReplyFooterUngated(agent, session, workspaceDir, contextLeft)
+}
+
+// buildReplyFooterUngated is buildReplyFooter without the reply_footer master
+// toggle, so /statusline can render the footer on demand while per-reply
+// footers stay off.
+func (e *Engine) buildReplyFooterUngated(agent Agent, session AgentSession, workspaceDir string, contextLeft string) string {
+	if agent == nil {
 		return ""
 	}
 
@@ -8837,6 +8873,41 @@ func (e *Engine) cmdStatus(p Platform, msg *Message) {
 	}
 
 	e.replyWithCard(p, msg.ReplyCtx, e.renderStatusCard(msg.SessionKey, msg.UserID))
+}
+
+// cmdStatusLine renders the status line (the same content footer_style =
+// "statusline" appends to replies) on demand. It intentionally bypasses the
+// reply_footer master toggle so the line stays reachable when per-reply
+// footers are turned off.
+func (e *Engine) cmdStatusLine(p Platform, msg *Message) {
+	agent, _, _, workspaceDir, err := e.commandContextWithWorkspace(p, msg)
+	if err != nil {
+		e.reply(p, msg.ReplyCtx, e.i18n.Tf(MsgWsResolutionError, err))
+		return
+	}
+
+	// Use the live agent session when one exists so model/effort/context
+	// reflect the current conversation rather than agent defaults.
+	var session AgentSession
+	e.interactiveMu.Lock()
+	if state := e.interactiveStates[msg.SessionKey]; state != nil {
+		session = state.agentSession
+	}
+	e.interactiveMu.Unlock()
+
+	line := ""
+	if e.display.FooterStyle == "statusline" {
+		line = e.buildStatusLineCommandFooter(agent, session, workspaceDir)
+	}
+	if line == "" {
+		footerContext := replyFooterContextText(replyFooterSessionContextUsage(session), e.i18n)
+		line = e.buildReplyFooterUngated(agent, session, workspaceDir, footerContext)
+	}
+	if strings.TrimSpace(line) == "" {
+		e.reply(p, msg.ReplyCtx, e.i18n.T(MsgStatusLineUnavailable))
+		return
+	}
+	e.reply(p, msg.ReplyCtx, line)
 }
 
 func (e *Engine) cmdUsage(p Platform, msg *Message) {
@@ -15848,17 +15919,70 @@ func (e *Engine) formatToolResultEventFallback(toolName, result, status string, 
 // platforms that use the compact or legacy progress styles (e.g. Telegram,
 // which normalizes "card" to "compact") and full tool internals were dumped
 // into the chat.
+// compactToolEmojis maps lowercase tool names to their progress-line emoji.
+// Unknown tools fall back to 🔧; MCP tools get 🔌 in compactToolLine.
+var compactToolEmojis = map[string]string{
+	"bash": "💻", "shell": "💻", "run_shell_command": "💻",
+	"read": "📖", "notebookedit": "📓",
+	"write": "📝", "edit": "✏️", "multiedit": "✏️", "apply_patch": "✏️",
+	"grep": "🔍", "glob": "🔍", "search_files": "🔍",
+	"websearch": "🌐", "webfetch": "🌐", "web_search": "🌐", "web_extract": "🌐",
+	"toolsearch": "🧰",
+	"subagent": "🤖",
+	"skill": "🎯", "todowrite": "✅", "askuserquestion": "❓",
+	"thinking": "💭",
+}
+
+// compactToolLine renders one progress entry: "<emoji> **name** *args*".
+// MCP tool ids (mcp__server__tool) shorten to "server:tool" under 🔌.
+// Asterisks inside args are swapped for a lookalike so they cannot close the
+// italic span early.
+func compactToolLine(toolName, args string) string {
+	name := strings.ToLower(strings.TrimSpace(toolName))
+	// Subagent launches read as "subagent", not the CLI's internal tool name.
+	if name == "task" || name == "agent" || name == "delegate_task" {
+		name = "subagent"
+	}
+	emoji := "🔧"
+	if strings.HasPrefix(name, "mcp__") {
+		emoji = "🔌"
+		parts := strings.SplitN(strings.TrimPrefix(name, "mcp__"), "__", 2)
+		if len(parts) == 2 && parts[1] != "" {
+			name = parts[0] + ":" + parts[1]
+		} else {
+			name = parts[0]
+		}
+	} else if e, ok := compactToolEmojis[name]; ok {
+		emoji = e
+	}
+	if strings.TrimSpace(args) == "" {
+		return emoji + " **" + name + "**"
+	}
+	args = strings.ReplaceAll(args, "*", "∗")
+	return emoji + " **" + name + "** *" + args + "*"
+}
+
+// compactToolWorkDir resolves the directory prefix stripped from tool-argument
+// previews in compact style: the agent's working dir, else the bound workspace.
+func (e *Engine) compactToolWorkDir(agent Agent, workspaceDir string) string {
+	if switcher, ok := agent.(WorkDirSwitcher); ok {
+		if wd := strings.TrimSpace(switcher.GetWorkDir()); wd != "" {
+			return strings.TrimRight(wd, "/")
+		}
+	}
+	return strings.TrimRight(strings.TrimSpace(workspaceDir), "/")
+}
+
 // compactInlinePreview renders a one-line preview of arbitrary tool text. Whitespace runs
 // (including newlines) collapse to single spaces so a multi-line tool input
-// still occupies exactly one chat line. Backticks in the input are replaced so
-// they cannot terminate the inline code span early.
+// still occupies exactly one chat line. The text stays plain — no code span —
+// and overflow is marked with a single ellipsis character.
 func compactInlinePreview(input string, maxLen int) string {
 	input = strings.Join(strings.Fields(input), " ")
-	input = truncateIf(input, maxLen)
-	if input == "" {
-		return ""
+	if maxLen > 0 && utf8.RuneCountInString(input) > maxLen {
+		input = strings.TrimRight(string([]rune(input)[:maxLen]), " ") + "…"
 	}
-	return "`" + strings.ReplaceAll(input, "`", "'") + "`"
+	return input
 }
 
 // formatToolCall renders a tool's input and reports which message template to

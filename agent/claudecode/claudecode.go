@@ -1423,6 +1423,43 @@ func summarizeInput(tool string, input any) string {
 		if p, ok := m["glob_pattern"].(string); ok {
 			return p
 		}
+	case "WebSearch", "ToolSearch":
+		if q, ok := m["query"].(string); ok {
+			return q
+		}
+	case "WebFetch":
+		if u, ok := m["url"].(string); ok {
+			return u
+		}
+	case "Task", "Agent":
+		if d, ok := m["description"].(string); ok {
+			return d
+		}
+	case "Skill":
+		if s, ok := m["skill"].(string); ok {
+			if a, ok := m["args"].(string); ok && a != "" {
+				return s + " " + a
+			}
+			return s
+		}
+	}
+
+	// Unknown tools (MCP servers included): surface the most likely primary
+	// argument instead of dumping raw JSON into the progress line.
+	for _, key := range []string{
+		"command", "query", "url", "file_path", "path", "pattern",
+		"prompt", "description", "message", "text", "content", "name", "id",
+	} {
+		if v, ok := m[key].(string); ok && strings.TrimSpace(v) != "" {
+			return v
+		}
+	}
+	if len(m) == 1 {
+		for _, v := range m {
+			if s, ok := v.(string); ok && strings.TrimSpace(s) != "" {
+				return s
+			}
+		}
 	}
 
 	b, err := json.Marshal(m)

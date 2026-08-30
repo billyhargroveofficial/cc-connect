@@ -609,6 +609,7 @@ const (
 	MsgBuiltinCmdUpgrade   MsgKey = "upgrade"
 	MsgBuiltinCmdRestart   MsgKey = "restart"
 	MsgBuiltinCmdStatus    MsgKey = "status"
+	MsgBuiltinCmdStatusLn  MsgKey = "statusline"
 	MsgBuiltinCmdUsage     MsgKey = "usage"
 	MsgBuiltinCmdVersion   MsgKey = "version"
 	MsgBuiltinCmdHelp      MsgKey = "help"
@@ -617,6 +618,8 @@ const (
 	MsgBuiltinCmdDir       MsgKey = "dir"
 	MsgBuiltinCmdDiff      MsgKey = "diff"
 	MsgBuiltinCmdPs        MsgKey = "ps"
+
+	MsgStatusLineUnavailable MsgKey = "statusline_unavailable"
 
 	MsgDiffEmpty       MsgKey = "diff_empty"
 	MsgDiffNoDiff2HTML MsgKey = "diff_no_diff2html"
@@ -3779,6 +3782,20 @@ var messages = map[MsgKey]map[Language]string{
 		LangTraditionalChinese: "查看系統狀態",
 		LangJapanese:           "システム状態を表示",
 		LangSpanish:            "Mostrar estado del sistema",
+	},
+	MsgBuiltinCmdStatusLn: {
+		LangEnglish:            "Show the status line",
+		LangChinese:            "显示状态栏",
+		LangTraditionalChinese: "顯示狀態欄",
+		LangJapanese:           "ステータスラインを表示",
+		LangSpanish:            "Mostrar la línea de estado",
+	},
+	MsgStatusLineUnavailable: {
+		LangEnglish:            "Status line is not available (no data yet).",
+		LangChinese:            "状态栏暂不可用（还没有数据）。",
+		LangTraditionalChinese: "狀態欄暫不可用（還沒有數據）。",
+		LangJapanese:           "ステータスラインは利用できません（まだデータがありません）。",
+		LangSpanish:            "La línea de estado no está disponible (aún no hay datos).",
 	},
 	MsgBuiltinCmdUsage: {
 		LangEnglish:            "Show account/model quota usage",

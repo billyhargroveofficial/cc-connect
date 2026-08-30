@@ -494,6 +494,7 @@ type Event struct {
 	CacheReadInputTokens     int            // cache-read tokens (prior context retrieved from cache)
 	Metadata                 map[string]any // optional metadata from agent (e.g. compaction_continue)
 	Synthetic                bool           // true if this is a synthetic/generated message (not from real user)
+	FromSubagent             bool           // true when the event came from a subagent's stream (e.g. inside a Task)
 }
 
 // HistoryEntry is one turn in a conversation.

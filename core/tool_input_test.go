@@ -68,7 +68,7 @@ func TestCompactInlinePreview_CollapsesToOneLine(t *testing.T) {
 	if strings.Contains(out, "\n") {
 		t.Fatalf("compact style must stay on one line, got %q", out)
 	}
-	if out != "`git status git diff git log`" {
+	if out != "git status git diff git log" {
 		t.Errorf("unexpected collapse result: %q", out)
 	}
 }
@@ -80,12 +80,12 @@ func TestCompactInlinePreview_Truncates(t *testing.T) {
 	}
 }
 
-// A backtick in the input would otherwise close the inline code span early and
-// leak the rest of the tool input as raw markdown.
-func TestCompactInlinePreview_NeutralizesBackticks(t *testing.T) {
+// The preview is plain text (no wrapping code span), so input backticks pass
+// through untouched instead of being neutralized.
+func TestCompactInlinePreview_KeepsInputVerbatim(t *testing.T) {
 	out := compactInlinePreview("echo `whoami`", 0)
-	if strings.Count(out, "`") != 2 {
-		t.Errorf("inline code span must contain exactly 2 backticks, got %q", out)
+	if out != "echo `whoami`" {
+		t.Errorf("plain preview must keep input verbatim, got %q", out)
 	}
 }
 

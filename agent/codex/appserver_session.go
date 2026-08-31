@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -1186,8 +1187,8 @@ func (s *appServerSession) handleItemStarted(item map[string]any) {
 		s.emit(core.Event{Type: core.EventToolUse, ToolName: "MCP", ToolInput: name + "\n" + appServerJSON(item["arguments"])})
 
 	case "webSearch":
-		query, _ := item["query"].(string)
-		s.emit(core.Event{Type: core.EventToolUse, ToolName: "WebSearch", ToolInput: query})
+		toolName, input := appServerWebToolDisplay(item)
+		s.emit(core.Event{Type: core.EventToolUse, ToolName: toolName, ToolInput: input})
 
 	case "dynamicToolCall":
 		tool, _ := item["tool"].(string)
@@ -1256,11 +1257,11 @@ func (s *appServerSession) handleItemCompleted(item map[string]any) {
 		})
 
 	case "webSearch":
-		query, _ := item["query"].(string)
+		toolName, result := appServerWebToolDisplay(item)
 		s.emit(core.Event{
 			Type:       core.EventToolResult,
-			ToolName:   "WebSearch",
-			ToolResult: truncate(strings.TrimSpace(query), 500),
+			ToolName:   toolName,
+			ToolResult: truncate(strings.TrimSpace(result), 500),
 		})
 
 	case "dynamicToolCall":
@@ -1276,6 +1277,99 @@ func (s *appServerSession) handleItemCompleted(item map[string]any) {
 			ToolSuccess: &success,
 		})
 	}
+}
+
+func appServerWebToolDisplay(item map[string]any) (string, string) {
+	action, _ := item["action"].(map[string]any)
+	// Codex app-server uses the webSearch item type for both searches and
+	// follow-up page actions. Rendering every item as WebSearch produces a
+	// misleading blank "websearch" row for openPage/findInPage/other actions.
+	actionType, _ := action["type"].(string)
+	switch strings.ToLower(strings.TrimSpace(actionType)) {
+	case "openpage", "findinpage", "other":
+		return "WebFetch", appServerWebFetchSummary(item, action)
+	case "search":
+		if query := appServerWebSearchQuery(item, action); query != "" {
+			return "WebSearch", query
+		}
+		return "WebSearch", "search"
+	}
+
+	if query := appServerWebSearchQuery(item, action); query != "" {
+		return "WebSearch", query
+	}
+	return "WebFetch", appServerWebFetchSummary(item, action)
+}
+
+func appServerWebSearchQuery(item, action map[string]any) string {
+	for _, source := range []map[string]any{item, action} {
+		if query, _ := source["query"].(string); strings.TrimSpace(query) != "" {
+			return strings.TrimSpace(query)
+		}
+	}
+
+	if rawQueries, ok := action["queries"].([]any); ok {
+		queries := make([]string, 0, len(rawQueries))
+		for _, raw := range rawQueries {
+			if query, ok := raw.(string); ok && strings.TrimSpace(query) != "" {
+				queries = append(queries, strings.TrimSpace(query))
+			}
+		}
+		return strings.Join(queries, " | ")
+	}
+
+	return ""
+}
+
+func appServerWebFetchSummary(item, action map[string]any) string {
+	pattern, _ := action["pattern"].(string)
+	pattern = strings.TrimSpace(pattern)
+	pageURL, _ := action["url"].(string)
+	pageURL = appServerWebDisplayURL(pageURL)
+	if pattern != "" && pageURL != "" {
+		return pattern + " · " + pageURL
+	}
+	if pattern != "" {
+		return pattern
+	}
+	if pageURL != "" {
+		return pageURL
+	}
+
+	for _, source := range []map[string]any{item, action} {
+		for _, key := range []string{"title", "refId", "ref_id"} {
+			if value, _ := source[key].(string); strings.TrimSpace(value) != "" {
+				return strings.TrimSpace(value)
+			}
+		}
+	}
+
+	if results, ok := item["results"].([]any); ok {
+		for _, raw := range results {
+			result, ok := raw.(map[string]any)
+			if !ok {
+				continue
+			}
+			for _, key := range []string{"title", "refId", "ref_id"} {
+				if value, _ := result[key].(string); strings.TrimSpace(value) != "" {
+					return strings.TrimSpace(value)
+				}
+			}
+		}
+	}
+
+	return "open page"
+}
+
+func appServerWebDisplayURL(raw string) string {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return ""
+	}
+	parsed.User = nil
+	parsed.RawQuery = ""
+	parsed.Fragment = ""
+	return parsed.String()
 }
 
 func appServerReasoningText(item map[string]any) string {

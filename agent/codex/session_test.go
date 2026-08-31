@@ -23,10 +23,18 @@ func TestNormalizeReasoningEffort_RejectsMinimal(t *testing.T) {
 	}
 }
 
+func TestNormalizeReasoningEffort_AcceptsMax(t *testing.T) {
+	for _, input := range []string{"max", "maximum"} {
+		if got := normalizeReasoningEffort(input); got != "max" {
+			t.Fatalf("normalizeReasoningEffort(%q) = %q, want max", input, got)
+		}
+	}
+}
+
 func TestAvailableReasoningEfforts_ExcludesMinimal(t *testing.T) {
 	agent := &Agent{}
 	got := agent.AvailableReasoningEfforts()
-	want := []string{"low", "medium", "high", "xhigh"}
+	want := []string{"low", "medium", "high", "xhigh", "max"}
 	if len(got) != len(want) {
 		t.Fatalf("AvailableReasoningEfforts len = %d, want %d, got=%v", len(got), len(want), got)
 	}
@@ -34,6 +42,18 @@ func TestAvailableReasoningEfforts_ExcludesMinimal(t *testing.T) {
 		if got[i] != want[i] {
 			t.Fatalf("AvailableReasoningEfforts[%d] = %q, want %q, got=%v", i, got[i], want[i], got)
 		}
+	}
+}
+
+func TestBuildExecArgs_IncludesMaxReasoningEffort(t *testing.T) {
+	cs, err := newCodexSession(context.Background(), "codex", nil, "/tmp/project", "gpt-5.6-sol", "max", "full-auto", "", "", nil, "", "", "")
+	if err != nil {
+		t.Fatalf("newCodexSession: %v", err)
+	}
+
+	args := cs.buildExecArgs("hello", nil)
+	if !containsSequence(args, []string{"-c", `model_reasoning_effort="max"`}) {
+		t.Fatalf("args missing max reasoning effort: %v", args)
 	}
 }
 

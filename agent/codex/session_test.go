@@ -24,7 +24,7 @@ func TestNormalizeReasoningEffort_RejectsMinimal(t *testing.T) {
 }
 
 func TestNormalizeReasoningEffort_AcceptsMax(t *testing.T) {
-	for _, input := range []string{"max", "maximum"} {
+	for _, input := range []string{"max", "maximum", " MAX "} {
 		if got := normalizeReasoningEffort(input); got != "max" {
 			t.Fatalf("normalizeReasoningEffort(%q) = %q, want max", input, got)
 		}

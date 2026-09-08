@@ -114,7 +114,7 @@ func (r *richPlatform) sendRich(ctx context.Context, rc replyContext, content st
 	if strings.TrimSpace(content) == "" {
 		return nil
 	}
-	content = markdownHardBreaks(content)
+	content = prepareRichMarkdown(content)
 	bot, err := r.connectedBot("rich send")
 	if err != nil {
 		slog.Warn("telegram-rich: no connected bot, falling back to HTML", "error", err)
@@ -204,7 +204,7 @@ func (r *richPlatform) UpdateMessage(ctx context.Context, previewHandle any, con
 	_, err = bot.EditMessageText(ctx, &tgbot.EditMessageTextParams{
 		ChatID:      h.chatID,
 		MessageID:   h.messageID,
-		RichMessage: &models.InputRichMessage{Markdown: markdownHardBreaks(content)},
+		RichMessage: &models.InputRichMessage{Markdown: prepareRichMarkdown(content)},
 	})
 	if err == nil {
 		return nil

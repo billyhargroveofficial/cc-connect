@@ -84,6 +84,23 @@ reset_on_idle_mins = 60
 
 ### Codex 模式
 
+如果已安装 Codex Desktop 或托管 Codex 守护进程，推荐复用其 app-server。先运行
+`codex app-server daemon start`，再配置：
+
+```toml
+[projects.agent]
+type = "codex"
+
+[projects.agent.options]
+work_dir = "/path/to/project"
+backend = "app_server"
+app_server_url = "managed"
+mode = "suggest"
+```
+
+`managed` 是默认的 `app_server_url`，通过 `CODEX_HOME`（默认 `~/.codex`）下的本地 Unix 套接字连接，
+不会再启动一个 Codex 服务。没有托管守护进程时可使用 `backend = "exec"`。
+
 | 模式 | 配置值 | 行为 |
 |------|--------|------|
 | 建议 | `suggest` | 仅受信命令自动执行 |

@@ -236,6 +236,20 @@ func newAppServerSession(ctx context.Context, url, workDir, model, effort, mode,
 }
 
 func (s *appServerSession) connect() error {
+	if s.url == "managed://" {
+		reader, writer, err := connectManagedAppServer(s.ctx, s.codexHome)
+		if err != nil {
+			return fmt.Errorf("codex managed app-server: %w", err)
+		}
+		s.procMu.Lock()
+		s.stdin = writer
+		s.procMu.Unlock()
+		slog.Info("codex app-server session connected", "transport", "managed-unix", "work_dir", s.workDir)
+		s.wg.Add(1)
+		go s.readLoop(reader)
+		return nil
+	}
+
 	args := []string{"app-server"}
 	if strings.TrimSpace(s.url) != "" {
 		args = append(args, "--listen", strings.TrimSpace(s.url))
@@ -327,6 +341,7 @@ func (s *appServerSession) ensureThread(resumeID string) error {
 		params := s.threadRequestParams()
 		params["threadId"] = resumeID
 		params["persistExtendedHistory"] = true
+		params["excludeTurns"] = true
 
 		var resp threadResumeResponse
 		if err := s.request("thread/resume", params, &resp); err != nil {

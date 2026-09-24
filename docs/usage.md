@@ -86,6 +86,26 @@ All agents support permission modes switchable at runtime via `/mode`.
 
 ### Codex Modes
 
+For a local Codex Desktop or managed daemon, use its existing app-server. This
+keeps Telegram and Desktop on one thread, including when Desktop has the thread
+open. Start the daemon with `codex app-server daemon start`, then configure:
+
+```toml
+[projects.agent]
+type = "codex"
+
+[projects.agent.options]
+work_dir = "/path/to/project"
+backend = "app_server"
+app_server_url = "managed"
+mode = "suggest"
+```
+
+`managed` is the default `app_server_url` and connects through the local Unix socket under `CODEX_HOME` (or
+`~/.codex`). It does not start another Codex server. For installations without
+a managed daemon, use `backend = "exec"`; that launches `codex exec` for each
+turn and cannot resume a thread while Desktop holds its writer lock.
+
 | Mode | Config Value | Behavior |
 |------|-------------|----------|
 | Suggest | `suggest` | Only trusted commands run without approval |

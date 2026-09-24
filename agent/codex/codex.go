@@ -23,7 +23,7 @@ func init() {
 	core.RegisterAgent("codex", New)
 }
 
-// Agent drives OpenAI Codex CLI using `codex exec --json`.
+// Agent drives OpenAI Codex through its managed app-server or `codex exec --json`.
 //
 // `codex exec` has no approval IPC, so approvals are not interactive on the
 // exec backend. To get interactive approvals, switch to backend="app_server".
@@ -121,10 +121,13 @@ func normalizeBackend(raw string) string {
 func normalizeAppServerURL(raw string) string {
 	url := strings.TrimSpace(raw)
 	if url == "" {
-		return "ws://127.0.0.1:3845"
+		return "managed://"
 	}
 	if strings.EqualFold(url, "stdio") {
 		return "stdio://"
+	}
+	if strings.EqualFold(url, "managed") || strings.EqualFold(url, "managed://") {
+		return "managed://"
 	}
 	return url
 }

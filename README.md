@@ -306,6 +306,8 @@ npm install -g @iflow-ai/iflow-cli
 curl -fsSL https://qoder.com/install | bash
 ```
 
+For Codex Desktop or a managed Codex daemon, use the [shared app-server setup](docs/usage.md#codex-modes) so cc-connect can continue the same thread.
+
 For **Cursor Agent** and **OpenCode**, follow the official install pages:
 - Cursor Agent: <https://docs.cursor.com/agent>
 - OpenCode: <https://github.com/opencode-ai/opencode>

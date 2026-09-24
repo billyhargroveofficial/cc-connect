@@ -64,9 +64,17 @@ func TestNormalizeAppServerURL_StdIOIsExplicit(t *testing.T) {
 	}
 }
 
-func TestNormalizeAppServerURL_EmptyKeepsWebSocketDefault(t *testing.T) {
-	if got := normalizeAppServerURL(""); got != "ws://127.0.0.1:3845" {
-		t.Fatalf("normalizeAppServerURL(empty) = %q, want ws://127.0.0.1:3845", got)
+func TestNormalizeAppServerURL_EmptyUsesManagedDaemon(t *testing.T) {
+	if got := normalizeAppServerURL(""); got != "managed://" {
+		t.Fatalf("normalizeAppServerURL(empty) = %q, want managed://", got)
+	}
+}
+
+func TestNormalizeAppServerURL_ManagedUsesExistingDaemon(t *testing.T) {
+	for _, raw := range []string{"managed", " managed:// "} {
+		if got := normalizeAppServerURL(raw); got != "managed://" {
+			t.Fatalf("normalizeAppServerURL(%q) = %q, want managed://", raw, got)
+		}
 	}
 }
 

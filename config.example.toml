@@ -1627,8 +1627,10 @@ app_secret = "your-feishu-app-secret"
 # =============================================================================
 # Requires: npm install -g @openai/codex
 # 需要安装：npm install -g @openai/codex
-# Codex uses `codex exec --json` under the hood.
-# Codex 底层使用 `codex exec --json` 命令。
+# Recommended when Codex Desktop or the managed Codex daemon is installed:
+# reuse its app-server, so the Desktop and cc-connect can share one thread.
+# 已安装 Codex Desktop 或托管 Codex 守护进程时，推荐复用同一个 app-server。
+# Start it with `codex app-server daemon start` before starting cc-connect.
 
 # [[projects]]
 # name = "my-codex-project"
@@ -1638,7 +1640,10 @@ app_secret = "your-feishu-app-secret"
 #
 # [projects.agent.options]
 # work_dir = "/path/to/project"
+# backend = "app_server"
+# app_server_url = "managed"  # default for app_server; local $CODEX_HOME/app-server-control/app-server-control.sock
 # mode = "suggest"  # "suggest" | "auto-edit" | "full-auto" | "yolo"
+# Without a managed daemon, set backend = "exec" instead.
 #
 # Mode options / 模式说明:
 # - "suggest":   ask permission for every tool call (default, safest) / 每次调用都需确认（默认，最安全）

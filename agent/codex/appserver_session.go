@@ -576,6 +576,18 @@ func (s *appServerSession) handleServerRequest(probe map[string]json.RawMessage)
 		return
 	}
 	params := probe["params"]
+	// The managed app-server can serve multiple threads over one process.
+	// Only this session's thread may ask us to approve or answer a tool call.
+	switch method {
+	case "item/commandExecution/requestApproval", "item/fileChange/requestApproval",
+		"item/permissions/requestApproval", "item/tool/requestUserInput", "item/tool/call":
+		var scope struct {
+			ThreadID string `json:"threadId"`
+		}
+		if err := json.Unmarshal(params, &scope); err != nil || !s.isCurrentThread(scope.ThreadID) {
+			return
+		}
+	}
 
 	switch method {
 	case "item/commandExecution/requestApproval", "item/fileChange/requestApproval":
@@ -1119,8 +1131,12 @@ func (s *appServerSession) handleNotification(method string, paramsRaw json.RawM
 	switch method {
 	case "turn/started":
 		var notif turnNotification
-		if err := json.Unmarshal(paramsRaw, &notif); err == nil {
+		if err := json.Unmarshal(paramsRaw, &notif); err == nil && s.isCurrentThread(notif.ThreadID) {
 			s.stateMu.Lock()
+			if s.currentTurn != "" && s.currentTurn != notif.Turn.ID {
+				s.stateMu.Unlock()
+				return
+			}
 			s.currentTurn = notif.Turn.ID
 			s.pendingMsgs = s.pendingMsgs[:0]
 			s.stateMu.Unlock()
@@ -1129,19 +1145,19 @@ func (s *appServerSession) handleNotification(method string, paramsRaw json.RawM
 
 	case "item/started":
 		var notif itemNotification
-		if err := json.Unmarshal(paramsRaw, &notif); err == nil {
+		if err := json.Unmarshal(paramsRaw, &notif); err == nil && s.isCurrentThread(notif.ThreadID) && s.isCurrentTurn(notif.TurnID) {
 			s.handleItemStarted(notif.Item)
 		}
 
 	case "item/completed":
 		var notif itemNotification
-		if err := json.Unmarshal(paramsRaw, &notif); err == nil {
+		if err := json.Unmarshal(paramsRaw, &notif); err == nil && s.isCurrentThread(notif.ThreadID) && s.isCurrentTurn(notif.TurnID) {
 			s.handleItemCompleted(notif.Item)
 		}
 
 	case "turn/completed":
 		var notif turnNotification
-		if err := json.Unmarshal(paramsRaw, &notif); err == nil {
+		if err := json.Unmarshal(paramsRaw, &notif); err == nil && s.isCurrentThread(notif.ThreadID) && s.isCurrentTurn(notif.Turn.ID) {
 			if strings.EqualFold(strings.TrimSpace(notif.Turn.Status), "failed") || notif.Turn.Error != nil {
 				errMsg := ""
 				if notif.Turn.Error != nil {
@@ -1163,7 +1179,7 @@ func (s *appServerSession) handleNotification(method string, paramsRaw json.RawM
 				Type string `json:"type"`
 			} `json:"status"`
 		}
-		if err := json.Unmarshal(paramsRaw, &notif); err == nil && notif.Status.Type == "idle" {
+		if err := json.Unmarshal(paramsRaw, &notif); err == nil && s.isCurrentThread(notif.ThreadID) && notif.Status.Type == "idle" {
 			// In codex 0.125+, thread going idle signals turn completion.
 			s.completeTurn()
 		}
@@ -1176,7 +1192,7 @@ func (s *appServerSession) handleNotification(method string, paramsRaw json.RawM
 
 	case "thread/tokenUsage/updated":
 		var notif appServerThreadTokenUsageNotification
-		if err := json.Unmarshal(paramsRaw, &notif); err == nil {
+		if err := json.Unmarshal(paramsRaw, &notif); err == nil && s.isCurrentThread(notif.ThreadID) {
 			s.storeContextUsage(mapAppServerTokenUsage(notif))
 		}
 
@@ -1186,6 +1202,16 @@ func (s *appServerSession) handleNotification(method string, paramsRaw json.RawM
 			s.emitError(fmt.Errorf("%s", notif.Message))
 		}
 	}
+}
+
+func (s *appServerSession) isCurrentThread(threadID string) bool {
+	return threadID != "" && threadID == s.CurrentSessionID()
+}
+
+func (s *appServerSession) isCurrentTurn(turnID string) bool {
+	s.stateMu.Lock()
+	defer s.stateMu.Unlock()
+	return turnID != "" && turnID == s.currentTurn
 }
 
 func (s *appServerSession) handleItemStarted(item map[string]any) {

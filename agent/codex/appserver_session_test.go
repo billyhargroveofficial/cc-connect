@@ -76,6 +76,7 @@ func TestAppServerSession_HandleRateLimitsUpdatedCachesUsage(t *testing.T) {
 
 func TestAppServerSession_HandleThreadTokenUsageUpdatedCachesContextUsage(t *testing.T) {
 	s := &appServerSession{}
+	s.threadID.Store("thread-1")
 	raw, err := json.Marshal(appServerThreadTokenUsageNotification{
 		ThreadID: "thread-1",
 		TurnID:   "turn-1",
@@ -137,6 +138,7 @@ func TestAppServerSession_FailedTurnEmitsError(t *testing.T) {
 		currentTurn: "turn-1",
 		pendingMsgs: []string{"partial reasoning"},
 	}
+	s.threadID.Store("thread-1")
 
 	raw, err := json.Marshal(map[string]any{
 		"threadId": "thread-1",
@@ -179,6 +181,108 @@ func TestAppServerSession_FailedTurnEmitsError(t *testing.T) {
 	case duplicate := <-s.events:
 		t.Fatalf("idle notification emitted duplicate event %#v", duplicate)
 	default:
+	}
+}
+
+func TestAppServerSession_IgnoresOtherThreadNotifications(t *testing.T) {
+	s := &appServerSession{
+		events:      make(chan core.Event, 8),
+		currentTurn: "our-turn",
+		pendingMsgs: []string{"our answer"},
+	}
+	s.threadID.Store("our-thread")
+
+	notify := func(method string, params map[string]any) {
+		t.Helper()
+		raw, err := json.Marshal(params)
+		if err != nil {
+			t.Fatalf("marshal %s: %v", method, err)
+		}
+		s.handleNotification(method, raw)
+	}
+
+	notify("turn/started", map[string]any{
+		"threadId": "other-thread", "turn": map[string]any{"id": "other-turn"},
+	})
+	notify("item/completed", map[string]any{
+		"threadId": "other-thread", "turnId": "other-turn",
+		"item": map[string]any{"type": "agentMessage", "text": "other answer"},
+	})
+	notify("turn/completed", map[string]any{
+		"threadId": "other-thread", "turn": map[string]any{"id": "other-turn", "status": "completed"},
+	})
+	notify("thread/status/changed", map[string]any{
+		"threadId": "other-thread", "status": map[string]any{"type": "idle"},
+	})
+
+	if s.currentTurn != "our-turn" {
+		t.Fatalf("current turn = %q, want our-turn", s.currentTurn)
+	}
+	if len(s.pendingMsgs) != 1 || s.pendingMsgs[0] != "our answer" {
+		t.Fatalf("pending messages = %#v, want only our answer", s.pendingMsgs)
+	}
+	select {
+	case event := <-s.events:
+		t.Fatalf("other thread emitted event %#v", event)
+	default:
+	}
+
+	notify("turn/completed", map[string]any{
+		"threadId": "our-thread", "turn": map[string]any{"id": "our-turn", "status": "completed"},
+	})
+	if event := <-s.events; event.Type != core.EventText || event.Content != "our answer" {
+		t.Fatalf("first own event = %#v, want our answer", event)
+	}
+	if event := <-s.events; event.Type != core.EventResult || event.SessionID != "our-thread" {
+		t.Fatalf("second own event = %#v, want result for our thread", event)
+	}
+}
+
+func TestAppServerSession_IgnoresStaleTurnCompletion(t *testing.T) {
+	s := &appServerSession{
+		events:      make(chan core.Event, 2),
+		currentTurn: "current-turn",
+		pendingMsgs: []string{"current answer"},
+	}
+	s.threadID.Store("our-thread")
+	raw := json.RawMessage(`{"threadId":"our-thread","turn":{"id":"previous-turn","status":"completed"}}`)
+	s.handleNotification("turn/completed", raw)
+
+	if s.currentTurn != "current-turn" {
+		t.Fatalf("current turn = %q, want current-turn", s.currentTurn)
+	}
+	select {
+	case event := <-s.events:
+		t.Fatalf("stale turn emitted event %#v", event)
+	default:
+	}
+}
+
+func TestAppServerSession_IgnoresOtherThreadServerRequest(t *testing.T) {
+	s := &appServerSession{
+		events:           make(chan core.Event, 1),
+		pendingApprovals: make(map[string]chan core.PermissionResult),
+		stdin:            &lockedWriteCloser{},
+	}
+	s.threadID.Store("our-thread")
+	s.handleServerRequest(serverRequestProbe(t, `"foreign-question"`, "item/tool/requestUserInput", map[string]any{
+		"threadId": "other-thread",
+		"turnId":   "other-turn",
+		"questions": []any{map[string]any{
+			"id": "choice", "question": "Choose a source",
+		}},
+	}))
+
+	if len(s.pendingApprovals) != 0 {
+		t.Fatalf("pending approvals = %d, want none", len(s.pendingApprovals))
+	}
+	select {
+	case event := <-s.events:
+		t.Fatalf("other thread emitted event %#v", event)
+	default:
+	}
+	if got := s.stdin.(*lockedWriteCloser).String(); got != "" {
+		t.Fatalf("other thread produced response %q", got)
 	}
 }
 
@@ -275,6 +379,7 @@ func TestAppServerSession_HandleRequestUserInputEmitsAskQuestion(t *testing.T) {
 		pendingApprovals: make(map[string]chan core.PermissionResult),
 		stdin:            stdin,
 	}
+	s.threadID.Store("thread-1")
 
 	s.handleServerRequest(serverRequestProbe(t, `"rui-1"`, "item/tool/requestUserInput", map[string]any{
 		"threadId": "thread-1",
@@ -336,6 +441,7 @@ func TestAppServerSession_HandleRequestUserInputWritesCodexResponse(t *testing.T
 		pendingApprovals: make(map[string]chan core.PermissionResult),
 		stdin:            stdin,
 	}
+	s.threadID.Store("thread-1")
 
 	s.handleServerRequest(serverRequestProbe(t, `"rui-2"`, "item/tool/requestUserInput", map[string]any{
 		"threadId": "thread-1",

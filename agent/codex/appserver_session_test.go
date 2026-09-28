@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"strings"
 	"sync"
@@ -283,6 +284,74 @@ func TestAppServerSession_IgnoresOtherThreadServerRequest(t *testing.T) {
 	}
 	if got := s.stdin.(*lockedWriteCloser).String(); got != "" {
 		t.Fatalf("other thread produced response %q", got)
+	}
+}
+
+type failingAppServerReader struct{ err error }
+
+func (r failingAppServerReader) Read([]byte) (int, error) { return 0, r.err }
+
+func TestManagedAppServerIdleDisconnectDoesNotMessageUser(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	s := &appServerSession{
+		url:              "managed://",
+		ctx:              ctx,
+		cancel:           cancel,
+		events:           make(chan core.Event, 2),
+		pending:          make(map[int64]chan rpcResponseEnvelope),
+		pendingApprovals: make(map[string]chan core.PermissionResult),
+	}
+	s.alive.Store(true)
+	s.wg.Add(1)
+	go s.readLoop(failingAppServerReader{err: errors.New("websocket: unexpected EOF")})
+	s.wg.Wait()
+
+	if s.Alive() {
+		t.Fatal("disconnected managed session still reports alive")
+	}
+	select {
+	case event, ok := <-s.Events():
+		if ok {
+			t.Fatalf("idle disconnect emitted user-facing event %#v", event)
+		}
+	default:
+		t.Fatal("events channel remained open after idle disconnect")
+	}
+}
+
+func TestManagedAppServerActiveDisconnectReportsError(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	s := &appServerSession{
+		url:              "managed://",
+		ctx:              ctx,
+		cancel:           cancel,
+		events:           make(chan core.Event, 2),
+		pending:          make(map[int64]chan rpcResponseEnvelope),
+		pendingApprovals: make(map[string]chan core.PermissionResult),
+		currentTurn:      "active-turn",
+	}
+	s.alive.Store(true)
+	s.wg.Add(1)
+	go s.readLoop(failingAppServerReader{err: errors.New("websocket: unexpected EOF")})
+	s.wg.Wait()
+
+	select {
+	case event, ok := <-s.Events():
+		if !ok || event.Type != core.EventError || event.Error == nil || !strings.Contains(event.Error.Error(), "unexpected EOF") {
+			t.Fatalf("active disconnect event = %#v, open = %v", event, ok)
+		}
+	default:
+		t.Fatal("active disconnect did not emit an error")
+	}
+	select {
+	case _, ok := <-s.Events():
+		if ok {
+			t.Fatal("active disconnect emitted a second event")
+		}
+	default:
+		t.Fatal("events channel remained open after active disconnect")
 	}
 }
 

@@ -174,8 +174,9 @@ type appServerSession struct {
 	threadID atomic.Value
 	alive    atomic.Bool
 
-	closeOnce sync.Once
-	wg        sync.WaitGroup
+	eventsMu     sync.Mutex
+	eventsClosed bool
+	wg           sync.WaitGroup
 
 	stateMu      sync.Mutex
 	pendingMsgs  []string
@@ -990,9 +991,7 @@ func (s *appServerSession) Close() error {
 	case <-time.After(2 * time.Second):
 	}
 
-	s.closeOnce.Do(func() {
-		close(s.events)
-	})
+	s.closeEvents()
 	return nil
 }
 
@@ -1047,6 +1046,10 @@ func (s *appServerSession) readLoop(r io.Reader) {
 	}
 
 	err := scanner.Err()
+	if s.url == "managed://" {
+		s.managedTransportClosed(err)
+		return
+	}
 	if err != nil {
 		if s.ctx.Err() == nil && !errors.Is(err, io.EOF) {
 			slog.Warn("codex app-server read failed", "error", err)
@@ -1065,6 +1068,40 @@ func (s *appServerSession) readLoop(r io.Reader) {
 	s.alive.Store(false)
 	s.rejectPending(io.EOF)
 	s.rejectPendingApprovals(io.EOF)
+}
+
+// A managed daemon may restart while the chat is idle. End the local session
+// quietly so the engine resumes its saved thread on the next user message.
+func (s *appServerSession) managedTransportClosed(err error) {
+	if err == nil {
+		err = io.EOF
+	}
+	intentional := s.ctx.Err() != nil
+	s.stateMu.Lock()
+	turnActive := s.currentTurn != ""
+	s.currentTurn = ""
+	s.pendingMsgs = nil
+	s.stateMu.Unlock()
+
+	s.alive.Store(false)
+	if !intentional {
+		if turnActive {
+			slog.Warn("codex managed app-server disconnected during a turn", "error", err)
+			s.emitError(fmt.Errorf("codex app-server connection closed: %w", err))
+		} else {
+			slog.Info("codex managed app-server disconnected while idle; next message will resume the thread", "error", err)
+		}
+	}
+	s.rejectPending(err)
+	s.rejectPendingApprovals(err)
+	s.procMu.Lock()
+	if s.stdin != nil {
+		_ = s.stdin.Close()
+		s.stdin = nil
+	}
+	s.procMu.Unlock()
+	s.cancel()
+	s.closeEvents()
 }
 
 func (s *appServerSession) stderrLoop(r io.Reader) {
@@ -1705,10 +1742,24 @@ func (s *appServerSession) flushPendingAsText() {
 }
 
 func (s *appServerSession) emit(event core.Event) {
+	s.eventsMu.Lock()
+	defer s.eventsMu.Unlock()
+	if s.eventsClosed {
+		return
+	}
 	select {
 	case s.events <- event:
 	default:
 		slog.Warn("codex appserver: event channel full, dropping event", "type", event.Type)
+	}
+}
+
+func (s *appServerSession) closeEvents() {
+	s.eventsMu.Lock()
+	defer s.eventsMu.Unlock()
+	if !s.eventsClosed && s.events != nil {
+		close(s.events)
+		s.eventsClosed = true
 	}
 }
 

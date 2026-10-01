@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -28,19 +30,42 @@ func connectManagedAppServer(ctx context.Context, codexHome string) (io.Reader, 
 		codexHome = filepath.Join(home, ".codex")
 	}
 	socket := filepath.Join(codexHome, "app-server-control", "app-server-control.sock")
+	return connectExternalAppServer(ctx, "unix://"+socket)
+}
+
+// Explicit endpoints let native clients use their own app-server without
+// starting another process or resolving Codex Desktop's implicit socket.
+func connectExternalAppServer(ctx context.Context, endpoint string) (io.Reader, io.WriteCloser, error) {
 	dialer := websocket.Dialer{
 		HandshakeTimeout: 10 * time.Second,
-		NetDialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+	}
+	address := endpoint
+	if strings.HasPrefix(endpoint, "unix://") {
+		socket := strings.TrimPrefix(endpoint, "unix://")
+		if !filepath.IsAbs(socket) {
+			return nil, nil, fmt.Errorf("app-server Unix endpoint requires an explicit absolute socket path")
+		}
+		address = "ws://localhost/"
+		dialer.NetDialContext = func(ctx context.Context, _, _ string) (net.Conn, error) {
 			return (&net.Dialer{}).DialContext(ctx, "unix", socket)
-		},
+		}
+	} else {
+		parsed, err := url.Parse(endpoint)
+		if err != nil || (parsed.Scheme != "ws" && parsed.Scheme != "wss") || parsed.Hostname() == "" || parsed.User != nil {
+			return nil, nil, fmt.Errorf("invalid explicit app-server WebSocket endpoint")
+		}
 	}
 	connectCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	conn, _, err := dialer.DialContext(connectCtx, "ws://localhost/", nil)
+	conn, _, err := dialer.DialContext(connectCtx, address, nil)
 	if err != nil {
-		return nil, nil, fmt.Errorf("connect to %s: %w", socket, err)
+		return nil, nil, fmt.Errorf("connect to explicit app-server endpoint: %w", err)
 	}
 	return &managedMessageReader{conn: conn}, &managedMessageWriter{conn: conn}, nil
+}
+
+func isExternalAppServerURL(endpoint string) bool {
+	return strings.HasPrefix(endpoint, "unix://") || strings.HasPrefix(endpoint, "ws://") || strings.HasPrefix(endpoint, "wss://")
 }
 
 type managedMessageReader struct {

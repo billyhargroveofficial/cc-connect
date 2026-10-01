@@ -22,16 +22,20 @@ func init() {
 
 // Agent drives the pi coding agent CLI.
 type Agent struct {
-	cmd          string   // path to pi binary
-	cliExtraArgs []string // extra args from cmd after the binary name
-	configEnv    []string // env vars from [projects.agent.options.env]
-	workDir      string
-	model        string
-	mode         string // "default" | "yolo"
-	thinking     string // reasoning effort: off, minimal, low, medium, high, xhigh
-	rpc          bool   // true = --mode rpc (persistent, extension_ui); false = --mode json (one-shot, default)
-	sessionEnv   []string
-	mu           sync.Mutex
+	cmd           string   // path to pi binary
+	cliExtraArgs  []string // extra args from cmd after the binary name
+	cliArgs       []string // explicit argv entries; never shell-expanded
+	configEnv     []string // env vars from [projects.agent.options.env]
+	workDir       string
+	model         string
+	mode          string // "default" | "yolo"
+	thinking      string // reasoning effort: off, minimal, low, medium, high, xhigh
+	rpc           bool   // true = --mode rpc (persistent, extension_ui); false = --mode json (one-shot, default)
+	nativeEvents  bool   // opt-in lifecycle and usage semantics for rich clients
+	nativeHandler core.NativeEventHandler
+	sessionDir    string // optional product-owned session directory
+	sessionEnv    []string
+	mu            sync.Mutex
 }
 
 func New(opts map[string]any) (core.Agent, error) {
@@ -44,6 +48,23 @@ func New(opts map[string]any) (core.Agent, error) {
 	mode = normalizeMode(mode)
 	thinking, _ := opts["thinking"].(string)
 	rpc, _ := opts["rpc"].(bool)
+	nativeEvents, _ := opts["native_events"].(bool)
+	cliArgs, err := parseCLIArgs(opts["cli_args"])
+	if err != nil {
+		return nil, err
+	}
+	sessionDir, _ := opts["session_dir"].(string)
+	if sessionDir != "" {
+		cliArgs = append(cliArgs, "--session-dir", sessionDir)
+	} else {
+		sessionDir = sessionDirFromArgs(cliArgs)
+	}
+	if sessionDir != "" && !filepath.IsAbs(sessionDir) {
+		sessionDir, err = filepath.Abs(filepath.Join(workDir, sessionDir))
+		if err != nil {
+			return nil, fmt.Errorf("pi: resolve session directory: %w", err)
+		}
+	}
 
 	cmd, extraArgs := core.ParseCmdOpts(opts, "pi")
 
@@ -61,12 +82,15 @@ func New(opts map[string]any) (core.Agent, error) {
 	return &Agent{
 		cmd:          cmd,
 		cliExtraArgs: extraArgs,
+		cliArgs:      cliArgs,
 		configEnv:    core.ParseConfigEnv(opts),
 		workDir:      workDir,
 		model:        model,
 		mode:         mode,
 		thinking:     thinking,
 		rpc:          rpc,
+		nativeEvents: nativeEvents,
+		sessionDir:   sessionDir,
 	}, nil
 }
 
@@ -102,7 +126,19 @@ func (a *Agent) WorkspaceAgentOptions() map[string]any {
 	if a.thinking != "" {
 		opts["thinking"] = a.thinking
 	}
+	if len(a.cliArgs) > 0 {
+		opts["cli_args"] = append([]string(nil), a.cliArgs...)
+	}
+	if a.nativeEvents {
+		opts["native_events"] = true
+	}
 	return opts
+}
+
+func (a *Agent) SetNativeEventHandler(handler core.NativeEventHandler) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.nativeHandler = handler
 }
 
 func (a *Agent) SetModel(model string) {
@@ -146,6 +182,13 @@ func (a *Agent) StartSession(ctx context.Context, sessionID string) (core.AgentS
 	model := a.model
 	thinking := a.thinking
 	extraArgs := append([]string{}, a.cliExtraArgs...)
+	extraArgs = append(extraArgs, a.cliArgs...)
+	workDir := a.workDir
+	options := piSessionOptions{
+		nativeEvents:  a.nativeEvents,
+		nativeHandler: a.nativeHandler,
+		sessionDir:    a.sessionDir,
+	}
 	extraEnv := append([]string(nil), a.configEnv...)
 	extraEnv = append(extraEnv, a.sessionEnv...)
 	// 注入权限模式环境变量，供 permission-gate 扩展读取：yolo（全自动）时扩展
@@ -156,11 +199,11 @@ func (a *Agent) StartSession(ctx context.Context, sessionID string) (core.AgentS
 	extraEnv = append(extraEnv, core.InjectedAgentEnv(mode)...)
 	rpc := a.rpc
 	a.mu.Unlock()
-	return newPiSession(ctx, a.cmd, extraArgs, a.workDir, model, mode, thinking, rpc, sessionID, extraEnv)
+	return newPiSession(ctx, a.cmd, extraArgs, workDir, model, mode, thinking, rpc, sessionID, extraEnv, options)
 }
 
 func (a *Agent) ListSessions(_ context.Context) ([]core.AgentSessionInfo, error) {
-	sessDir := piSessionDir(a.workDir)
+	sessDir := a.sessionsDirectory()
 	if sessDir == "" {
 		return nil, nil
 	}
@@ -206,7 +249,7 @@ func (a *Agent) ListSessions(_ context.Context) ([]core.AgentSessionInfo, error)
 }
 
 func (a *Agent) DeleteSession(_ context.Context, sessionID string) error {
-	sessDir := piSessionDir(a.workDir)
+	sessDir := a.sessionsDirectory()
 	if sessDir == "" {
 		return fmt.Errorf("pi: cannot determine session directory")
 	}
@@ -281,6 +324,13 @@ func (a *Agent) GetReasoningEffort() string {
 }
 
 func (a *Agent) AvailableReasoningEfforts() []string {
+	a.mu.Lock()
+	native := a.nativeEvents
+	model := a.model
+	a.mu.Unlock()
+	if native && (strings.HasPrefix(model, "deepseek/") || strings.HasPrefix(model, "deepseek-")) {
+		return []string{"off", "low", "high", "max"}
+	}
 	return []string{"off", "minimal", "low", "medium", "high", "xhigh"}
 }
 
@@ -298,7 +348,7 @@ func (a *Agent) GetWorkDir() string { return a.workDir }
 // ── HistoryProvider ──────────────────────────────────────────
 
 func (a *Agent) GetSessionHistory(_ context.Context, sessionID string, limit int) ([]core.HistoryEntry, error) {
-	sessDir := piSessionDir(a.workDir)
+	sessDir := a.sessionsDirectory()
 	if sessDir == "" {
 		return nil, nil
 	}
@@ -417,9 +467,9 @@ func settingsPath() string {
 
 // piSettings represents the structure of pi's settings.json relevant fields.
 type piSettings struct {
-	EnabledModels  []string `json:"enabledModels"`
-	DefaultModel   string   `json:"defaultModel"`
-	DefaultProvider string  `json:"defaultProvider"`
+	EnabledModels   []string `json:"enabledModels"`
+	DefaultModel    string   `json:"defaultModel"`
+	DefaultProvider string   `json:"defaultProvider"`
 }
 
 // readSettings reads and parses pi's settings.json.

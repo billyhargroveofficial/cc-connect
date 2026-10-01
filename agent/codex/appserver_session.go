@@ -83,7 +83,9 @@ type itemNotification struct {
 }
 
 type errorNotification struct {
-	Message string `json:"message"`
+	Message  string `json:"message"`
+	ThreadID string `json:"threadId"`
+	TurnID   string `json:"turnId"`
 }
 
 type appServerRateLimitsResponse struct {
@@ -142,16 +144,17 @@ type appServerRequestUserInputAnswer struct {
 }
 
 type appServerSession struct {
-	url            string
-	workDir        string
-	model          string
-	effort         string
-	mode           string
-	baseURL        string
-	modelProvider  string
-	extraEnv       []string
-	codexHome      string
-	promptPreamble string
+	url               string
+	workDir           string
+	model             string
+	effort            string
+	mode              string
+	baseURL           string
+	modelProvider     string
+	extraEnv          []string
+	codexHome         string
+	promptPreamble    string
+	attachedTransport bool
 
 	events chan core.Event
 
@@ -181,11 +184,17 @@ type appServerSession struct {
 	stateMu      sync.Mutex
 	pendingMsgs  []string
 	currentTurn  string
+	turnRevision uint64
 	preambleSent bool
 
 	runtimeMu sync.RWMutex
 	usage     *core.UsageReport
 	context   *core.ContextUsage
+
+	native             appServerNativeOptions
+	nativeMu           sync.Mutex
+	nativeDescendants  map[string]struct{}
+	nativeThreadStarts map[string]json.RawMessage
 }
 
 const (
@@ -193,7 +202,11 @@ const (
 	appServerUsageRefreshTimeout = 1500 * time.Millisecond
 )
 
-func newAppServerSession(ctx context.Context, url, workDir, model, effort, mode, resumeID, baseURL, modelProvider string, extraEnv []string, codexHome string, systemPrompt string, appendPrompt string) (*appServerSession, error) {
+func newAppServerSession(ctx context.Context, url, workDir, model, effort, mode, resumeID, baseURL, modelProvider string, extraEnv []string, codexHome string, systemPrompt string, appendPrompt string, nativeOptions ...appServerNativeOptions) (*appServerSession, error) {
+	workDir, err := filepath.Abs(workDir)
+	if err != nil {
+		return nil, fmt.Errorf("codex app-server working directory: %w", err)
+	}
 	sessionCtx, cancel := context.WithCancel(ctx)
 	s := &appServerSession{
 		url:              url,
@@ -212,6 +225,9 @@ func newAppServerSession(ctx context.Context, url, workDir, model, effort, mode,
 		pending:          make(map[int64]chan rpcResponseEnvelope),
 		pendingApprovals: make(map[string]chan core.PermissionResult),
 		preambleSent:     resumeID != "" && resumeID != core.ContinueSession,
+	}
+	if len(nativeOptions) != 0 {
+		s.native = nativeOptions[0]
 	}
 	s.alive.Store(true)
 
@@ -237,15 +253,23 @@ func newAppServerSession(ctx context.Context, url, workDir, model, effort, mode,
 }
 
 func (s *appServerSession) connect() error {
-	if s.url == "managed://" {
-		reader, writer, err := connectManagedAppServer(s.ctx, s.codexHome)
-		if err != nil {
-			return fmt.Errorf("codex managed app-server: %w", err)
+	if s.url == "managed://" || s.native.enabled && isExternalAppServerURL(s.url) {
+		var reader io.Reader
+		var writer io.WriteCloser
+		var err error
+		if s.url == "managed://" {
+			reader, writer, err = connectManagedAppServer(s.ctx, s.codexHome)
+		} else {
+			reader, writer, err = connectExternalAppServer(s.ctx, s.url)
 		}
+		if err != nil {
+			return fmt.Errorf("codex attached app-server: %w", err)
+		}
+		s.attachedTransport = true
 		s.procMu.Lock()
 		s.stdin = writer
 		s.procMu.Unlock()
-		slog.Info("codex app-server session connected", "transport", "managed-unix", "work_dir", s.workDir)
+		slog.Info("codex app-server session connected", "transport", "attached", "work_dir", s.workDir)
 		s.wg.Add(1)
 		go s.readLoop(reader)
 		return nil
@@ -326,6 +350,11 @@ func (s *appServerSession) initialize() error {
 			},
 		},
 	}
+	if s.native.enabled {
+		// Rich clients consume typed item lifecycle events and deltas. The
+		// legacy messaging bridge retains its existing non-streaming defaults.
+		params["capabilities"] = map[string]any{"experimentalApi": true}
+	}
 
 	var resp initResponse
 	if err := s.request("initialize", params, &resp); err != nil {
@@ -353,12 +382,17 @@ func (s *appServerSession) ensureThread(resumeID string) error {
 		}
 		s.applyThreadRuntimeState(resp.Cwd, resp.Model, resp.ReasoningEffort)
 		s.threadID.Store(resp.Thread.ID)
+		s.flushNativeThreadStart(resp.Thread.ID)
 		slog.Info("codex app-server thread resumed", "thread_id", resp.Thread.ID)
 		return nil
 	}
 
 	var resp threadStartResponse
-	if err := s.request("thread/start", s.threadRequestParams(), &resp); err != nil {
+	params := s.threadRequestParams()
+	if len(s.native.tools) != 0 {
+		params["dynamicTools"] = cloneAppServerTools(s.native.tools)
+	}
+	if err := s.request("thread/start", params, &resp); err != nil {
 		return err
 	}
 	if resp.Thread.ID == "" {
@@ -366,6 +400,7 @@ func (s *appServerSession) ensureThread(resumeID string) error {
 	}
 	s.applyThreadRuntimeState(resp.Cwd, resp.Model, resp.ReasoningEffort)
 	s.threadID.Store(resp.Thread.ID)
+	s.flushNativeThreadStart(resp.Thread.ID)
 	slog.Info("codex app-server thread started", "thread_id", resp.Thread.ID)
 	return nil
 }
@@ -374,6 +409,23 @@ func (s *appServerSession) threadRequestParams() map[string]any {
 	params := map[string]any{
 		"experimentalRawEvents":  false,
 		"persistExtendedHistory": false,
+		"cwd":                    s.GetWorkDir(),
+	}
+	config := cloneAppServerMap(s.native.config)
+	if effort := s.GetReasoningEffort(); effort != "" {
+		if config == nil {
+			config = make(map[string]any)
+		}
+		config["model_reasoning_effort"] = effort
+	}
+	if len(config) != 0 {
+		params["config"] = config
+	}
+	if s.native.developerInstructions != "" {
+		params["developerInstructions"] = s.native.developerInstructions
+	}
+	if s.modelProvider != "" {
+		params["modelProvider"] = s.modelProvider
 	}
 	if model := s.GetModel(); model != "" {
 		params["model"] = model
@@ -464,7 +516,7 @@ func (s *appServerSession) Send(prompt string, messageID string, images []core.I
 	}
 
 	if len(files) > 0 {
-		filePaths := core.SaveFilesToDisk(s.workDir, messageID, files)
+		filePaths := core.SaveFilesToDisk(s.GetWorkDir(), messageID, files)
 		prompt = core.AppendFileRefs(prompt, filePaths)
 	}
 
@@ -501,6 +553,7 @@ func (s *appServerSession) Send(prompt string, messageID string, images []core.I
 	params := map[string]any{
 		"threadId": threadID,
 		"input":    input,
+		"cwd":      s.GetWorkDir(),
 	}
 	if model := s.GetModel(); model != "" {
 		params["model"] = model
@@ -513,6 +566,9 @@ func (s *appServerSession) Send(prompt string, messageID string, images []core.I
 	}
 
 	var resp turnStartResponse
+	s.stateMu.Lock()
+	turnRevision := s.turnRevision
+	s.stateMu.Unlock()
 	if err := s.request("turn/start", params, &resp); err != nil {
 		return fmt.Errorf("codex app-server turn/start: %w", err)
 	}
@@ -521,8 +577,12 @@ func (s *appServerSession) Send(prompt string, messageID string, images []core.I
 	}
 
 	s.stateMu.Lock()
-	s.currentTurn = resp.Turn.ID
-	s.pendingMsgs = s.pendingMsgs[:0]
+	if !s.native.enabled || s.turnRevision == turnRevision {
+		// The reader can finish this turn and start a goal continuation before
+		// this caller receives the response. Its lifecycle state is newer.
+		s.currentTurn = resp.Turn.ID
+		s.pendingMsgs = s.pendingMsgs[:0]
+	}
 	s.stateMu.Unlock()
 
 	return nil
@@ -533,7 +593,7 @@ func (s *appServerSession) stageImages(prompt string, images []core.ImageAttachm
 		return prompt, nil, nil
 	}
 
-	imgDir := filepath.Join(s.workDir, ".cc-connect", "images")
+	imgDir := filepath.Join(s.GetWorkDir(), ".cc-connect", "images")
 	if err := os.MkdirAll(imgDir, 0o755); err != nil {
 		return "", nil, fmt.Errorf("codex app-server: create image dir: %w", err)
 	}
@@ -559,6 +619,12 @@ func (s *appServerSession) stageImages(prompt string, images []core.ImageAttachm
 func (s *appServerSession) RespondPermission(requestID string, result core.PermissionResult) error {
 	s.approvalsMu.Lock()
 	ch := s.pendingApprovals[requestID]
+	if ch == nil {
+		// Native JSON clients receive a decoded string ID; legacy renderers
+		// retain the JSON-encoded ID (including its quotation marks).
+		encoded, _ := json.Marshal(requestID)
+		ch = s.pendingApprovals[string(encoded)]
+	}
 	s.approvalsMu.Unlock()
 	if ch == nil {
 		return fmt.Errorf("codex app-server: no pending approval for request %s", requestID)
@@ -577,6 +643,7 @@ func (s *appServerSession) handleServerRequest(probe map[string]json.RawMessage)
 		return
 	}
 	params := probe["params"]
+	s.observeNative(method, params, rawID)
 	// The managed app-server can serve multiple threads over one process.
 	// Only this session's thread may ask us to approve or answer a tool call.
 	switch method {
@@ -585,7 +652,7 @@ func (s *appServerSession) handleServerRequest(probe map[string]json.RawMessage)
 		var scope struct {
 			ThreadID string `json:"threadId"`
 		}
-		if err := json.Unmarshal(params, &scope); err != nil || !s.isCurrentThread(scope.ThreadID) {
+		if err := json.Unmarshal(params, &scope); err != nil || !s.acceptsNativeThread(scope.ThreadID) {
 			return
 		}
 	}
@@ -643,7 +710,7 @@ func (s *appServerSession) handleApprovalRequest(rawID json.RawMessage, method s
 		ToolName:     toolName,
 		ToolInput:    toolInput,
 		ToolInputRaw: params,
-	})
+	}, appServerParamsScope(params))
 
 	go func() {
 		timer := time.NewTimer(5 * time.Minute)
@@ -690,7 +757,7 @@ func (s *appServerSession) handlePermissionsApproval(rawID json.RawMessage, para
 		ToolName:     "Permissions",
 		ToolInput:    appServerJSON(params),
 		ToolInputRaw: params,
-	})
+	}, appServerParamsScope(params))
 
 	go func() {
 		timer := time.NewTimer(5 * time.Minute)
@@ -759,7 +826,7 @@ func (s *appServerSession) handleRequestUserInput(rawID json.RawMessage, paramsR
 		ToolInput:    appServerJSON(rawInput),
 		ToolInputRaw: rawInput,
 		Questions:    questions,
-	})
+	}, appServerEventScope{threadID: params.ThreadID, turnID: params.TurnID})
 
 	go func() {
 		timer := time.NewTimer(5 * time.Minute)
@@ -785,6 +852,10 @@ func (s *appServerSession) handleRequestUserInput(rawID json.RawMessage, paramsR
 }
 
 func (s *appServerSession) handleDynamicToolCall(rawID json.RawMessage, paramsRaw json.RawMessage) {
+	if s.native.toolHandler != nil {
+		s.runDynamicTool(rawID, paramsRaw)
+		return
+	}
 	_ = s.writeJSON(map[string]any{
 		"jsonrpc": "2.0", "id": rawID,
 		"result": map[string]any{
@@ -1046,7 +1117,7 @@ func (s *appServerSession) readLoop(r io.Reader) {
 	}
 
 	err := scanner.Err()
-	if s.url == "managed://" {
+	if s.url == "managed://" || s.attachedTransport {
 		s.managedTransportClosed(err)
 		return
 	}
@@ -1070,7 +1141,7 @@ func (s *appServerSession) readLoop(r io.Reader) {
 	s.rejectPendingApprovals(io.EOF)
 }
 
-// A managed daemon may restart while the chat is idle. End the local session
+// An attached app-server may restart while the chat is idle. End the local session
 // quietly so the engine resumes its saved thread on the next user message.
 func (s *appServerSession) managedTransportClosed(err error) {
 	if err == nil {
@@ -1079,17 +1150,19 @@ func (s *appServerSession) managedTransportClosed(err error) {
 	intentional := s.ctx.Err() != nil
 	s.stateMu.Lock()
 	turnActive := s.currentTurn != ""
+	scope := appServerEventScope{threadID: s.CurrentSessionID(), turnID: s.currentTurn}
 	s.currentTurn = ""
+	s.turnRevision++
 	s.pendingMsgs = nil
 	s.stateMu.Unlock()
 
 	s.alive.Store(false)
 	if !intentional {
 		if turnActive {
-			slog.Warn("codex managed app-server disconnected during a turn", "error", err)
-			s.emitError(fmt.Errorf("codex app-server connection closed: %w", err))
+			slog.Warn("codex attached app-server disconnected during a turn", "error", err)
+			s.emitError(fmt.Errorf("codex app-server connection closed: %w", err), scope)
 		} else {
-			slog.Info("codex managed app-server disconnected while idle; next message will resume the thread", "error", err)
+			slog.Info("codex attached app-server disconnected while idle; next message will resume the thread", "error", err)
 		}
 	}
 	s.rejectPending(err)
@@ -1165,7 +1238,20 @@ func (s *appServerSession) handleResponse(resp rpcResponseEnvelope) {
 }
 
 func (s *appServerSession) handleNotification(method string, paramsRaw json.RawMessage) {
+	s.observeNative(method, paramsRaw, nil)
 	switch method {
+	case "thread/settings/updated":
+		var notif struct {
+			ThreadID       string `json:"threadId"`
+			ThreadSettings struct {
+				Cwd    string  `json:"cwd"`
+				Model  string  `json:"model"`
+				Effort *string `json:"effort"`
+			} `json:"threadSettings"`
+		}
+		if err := json.Unmarshal(paramsRaw, &notif); err == nil && s.isCurrentThread(notif.ThreadID) {
+			s.applyThreadRuntimeState(notif.ThreadSettings.Cwd, notif.ThreadSettings.Model, notif.ThreadSettings.Effort)
+		}
 	case "turn/started":
 		var notif turnNotification
 		if err := json.Unmarshal(paramsRaw, &notif); err == nil && s.isCurrentThread(notif.ThreadID) {
@@ -1175,6 +1261,7 @@ func (s *appServerSession) handleNotification(method string, paramsRaw json.RawM
 				return
 			}
 			s.currentTurn = notif.Turn.ID
+			s.turnRevision++
 			s.pendingMsgs = s.pendingMsgs[:0]
 			s.stateMu.Unlock()
 			s.storeContextUsage(nil)
@@ -1183,13 +1270,13 @@ func (s *appServerSession) handleNotification(method string, paramsRaw json.RawM
 	case "item/started":
 		var notif itemNotification
 		if err := json.Unmarshal(paramsRaw, &notif); err == nil && s.isCurrentThread(notif.ThreadID) && s.isCurrentTurn(notif.TurnID) {
-			s.handleItemStarted(notif.Item)
+			s.handleItemStarted(notif.Item, appServerEventScope{threadID: notif.ThreadID, turnID: notif.TurnID})
 		}
 
 	case "item/completed":
 		var notif itemNotification
 		if err := json.Unmarshal(paramsRaw, &notif); err == nil && s.isCurrentThread(notif.ThreadID) && s.isCurrentTurn(notif.TurnID) {
-			s.handleItemCompleted(notif.Item)
+			s.handleItemCompleted(notif.Item, appServerEventScope{threadID: notif.ThreadID, turnID: notif.TurnID})
 		}
 
 	case "turn/completed":
@@ -1203,9 +1290,9 @@ func (s *appServerSession) handleNotification(method string, paramsRaw json.RawM
 				if errMsg == "" {
 					errMsg = "turn failed (no details)"
 				}
-				s.failTurn(fmt.Errorf("%s", errMsg))
+				s.failTurn(fmt.Errorf("%s", errMsg), appServerEventScope{threadID: notif.ThreadID, turnID: notif.Turn.ID})
 			} else {
-				s.completeTurn()
+				s.completeTurn(appServerEventScope{threadID: notif.ThreadID, turnID: notif.Turn.ID})
 			}
 		}
 
@@ -1235,8 +1322,9 @@ func (s *appServerSession) handleNotification(method string, paramsRaw json.RawM
 
 	case "error":
 		var notif errorNotification
-		if err := json.Unmarshal(paramsRaw, &notif); err == nil && strings.TrimSpace(notif.Message) != "" {
-			s.emitError(fmt.Errorf("%s", notif.Message))
+		if err := json.Unmarshal(paramsRaw, &notif); err == nil && strings.TrimSpace(notif.Message) != "" &&
+			(!s.native.enabled || s.isCurrentThread(notif.ThreadID)) {
+			s.emitError(fmt.Errorf("%s", notif.Message), appServerEventScope{threadID: notif.ThreadID, turnID: notif.TurnID})
 		}
 	}
 }
@@ -1251,7 +1339,7 @@ func (s *appServerSession) isCurrentTurn(turnID string) bool {
 	return turnID != "" && turnID == s.currentTurn
 }
 
-func (s *appServerSession) handleItemStarted(item map[string]any) {
+func (s *appServerSession) handleItemStarted(item map[string]any, scopes ...appServerEventScope) {
 	itemType, _ := item["type"].(string)
 	if itemType == "" {
 		return
@@ -1262,33 +1350,33 @@ func (s *appServerSession) handleItemStarted(item map[string]any) {
 		return
 	}
 
-	s.flushPendingAsThinking()
+	s.flushPendingAsThinking(scopes...)
 
 	switch itemType {
 	case "commandExecution":
 		command, _ := item["command"].(string)
-		s.emit(core.Event{Type: core.EventToolUse, ToolName: "Bash", ToolInput: command})
+		s.emit(core.Event{Type: core.EventToolUse, ToolName: "Bash", ToolInput: command, Metadata: s.toolItemMetadata(item)}, scopes...)
 
 	case "mcpToolCall":
 		server, _ := item["server"].(string)
 		tool, _ := item["tool"].(string)
 		name := strings.Trim(strings.Join([]string{server, tool}, ":"), ":")
-		s.emit(core.Event{Type: core.EventToolUse, ToolName: "MCP", ToolInput: name + "\n" + appServerJSON(item["arguments"])})
+		s.emit(core.Event{Type: core.EventToolUse, ToolName: "MCP", ToolInput: name + "\n" + appServerJSON(item["arguments"]), Metadata: s.toolItemMetadata(item)}, scopes...)
 
 	case "webSearch":
 		toolName, input := appServerWebToolDisplay(item)
-		s.emit(core.Event{Type: core.EventToolUse, ToolName: toolName, ToolInput: input})
+		s.emit(core.Event{Type: core.EventToolUse, ToolName: toolName, ToolInput: input, Metadata: s.toolItemMetadata(item)}, scopes...)
 
 	case "dynamicToolCall":
 		tool, _ := item["tool"].(string)
-		s.emit(core.Event{Type: core.EventToolUse, ToolName: tool, ToolInput: appServerJSON(item["arguments"])})
+		s.emit(core.Event{Type: core.EventToolUse, ToolName: tool, ToolInput: appServerJSON(item["arguments"]), Metadata: s.toolItemMetadata(item)}, scopes...)
 
 	case "fileChange":
-		s.emit(core.Event{Type: core.EventToolUse, ToolName: "Patch", ToolInput: appServerJSON(item["changes"])})
+		s.emit(core.Event{Type: core.EventToolUse, ToolName: "Patch", ToolInput: appServerJSON(item["changes"]), Metadata: s.toolItemMetadata(item)}, scopes...)
 	}
 }
 
-func (s *appServerSession) handleItemCompleted(item map[string]any) {
+func (s *appServerSession) handleItemCompleted(item map[string]any, scopes ...appServerEventScope) {
 	itemType, _ := item["type"].(string)
 	if itemType == "" {
 		return
@@ -1298,7 +1386,7 @@ func (s *appServerSession) handleItemCompleted(item map[string]any) {
 	case "reasoning":
 		text := appServerReasoningText(item)
 		if text != "" {
-			s.emit(core.Event{Type: core.EventThinking, Content: text})
+			s.emit(core.Event{Type: core.EventThinking, Content: text}, scopes...)
 		}
 
 	case "agentMessage":
@@ -1327,7 +1415,8 @@ func (s *appServerSession) handleItemCompleted(item map[string]any) {
 			ToolStatus:   strings.TrimSpace(status),
 			ToolExitCode: exitCodePtr,
 			ToolSuccess:  &success,
-		})
+			Metadata:     s.toolItemMetadata(item),
+		}, scopes...)
 
 	case "mcpToolCall":
 		tool, _ := item["tool"].(string)
@@ -1343,7 +1432,8 @@ func (s *appServerSession) handleItemCompleted(item map[string]any) {
 			ToolResult:  truncate(strings.TrimSpace(result), 500),
 			ToolStatus:  strings.TrimSpace(status),
 			ToolSuccess: &success,
-		})
+			Metadata:    s.toolItemMetadata(item),
+		}, scopes...)
 
 	case "webSearch":
 		toolName, result := appServerWebToolDisplay(item)
@@ -1351,7 +1441,8 @@ func (s *appServerSession) handleItemCompleted(item map[string]any) {
 			Type:       core.EventToolResult,
 			ToolName:   toolName,
 			ToolResult: truncate(strings.TrimSpace(result), 500),
-		})
+			Metadata:   s.toolItemMetadata(item),
+		}, scopes...)
 
 	case "dynamicToolCall":
 		tool, _ := item["tool"].(string)
@@ -1364,7 +1455,8 @@ func (s *appServerSession) handleItemCompleted(item map[string]any) {
 			ToolResult:  truncate(strings.TrimSpace(result), 500),
 			ToolStatus:  strings.TrimSpace(status),
 			ToolSuccess: &success,
-		})
+			Metadata:    s.toolItemMetadata(item),
+		}, scopes...)
 	}
 }
 
@@ -1691,31 +1783,53 @@ func rpcIDToInt64(v any) (int64, bool) {
 	return 0, false
 }
 
-func (s *appServerSession) completeTurn() {
+func (s *appServerSession) completeTurn(scopes ...appServerEventScope) {
 	s.stateMu.Lock()
 	if s.currentTurn == "" {
 		s.stateMu.Unlock()
 		return
 	}
+	scope := appServerEventScope{threadID: s.CurrentSessionID(), turnID: s.currentTurn}
+	if len(scopes) != 0 {
+		scope = scopes[0]
+	}
+	msgs := append([]string(nil), s.pendingMsgs...)
+	s.pendingMsgs = s.pendingMsgs[:0]
 	s.currentTurn = ""
+	s.turnRevision++
 	s.stateMu.Unlock()
-	s.flushPendingAsText()
-	s.emit(core.Event{Type: core.EventResult, SessionID: s.CurrentSessionID(), Done: true})
+	for _, text := range msgs {
+		if strings.TrimSpace(text) != "" {
+			s.emit(core.Event{Type: core.EventText, Content: text}, scope)
+		}
+	}
+	s.emit(core.Event{Type: core.EventResult, SessionID: s.CurrentSessionID(), Done: true}, scope)
 }
 
-func (s *appServerSession) failTurn(err error) {
+func (s *appServerSession) failTurn(err error, scopes ...appServerEventScope) {
 	s.stateMu.Lock()
 	if s.currentTurn == "" {
 		s.stateMu.Unlock()
 		return
 	}
+	scope := appServerEventScope{threadID: s.CurrentSessionID(), turnID: s.currentTurn}
+	if len(scopes) != 0 {
+		scope = scopes[0]
+	}
 	s.currentTurn = ""
+	s.turnRevision++
 	s.pendingMsgs = s.pendingMsgs[:0]
 	s.stateMu.Unlock()
-	s.emitError(err)
+	s.emitError(err, scope)
+	if s.native.enabled {
+		// Native consumers retain errors until the terminal result settles the
+		// turn. Retryable error notifications alone must not emit this result.
+		s.emit(core.Event{Type: core.EventResult, SessionID: s.CurrentSessionID(), Done: true}, scope)
+	}
 }
 
-func (s *appServerSession) flushPendingAsThinking() {
+func (s *appServerSession) flushPendingAsThinking(scopes ...appServerEventScope) {
+	scope := s.eventScope(scopes)
 	s.stateMu.Lock()
 	msgs := append([]string(nil), s.pendingMsgs...)
 	s.pendingMsgs = s.pendingMsgs[:0]
@@ -1723,12 +1837,13 @@ func (s *appServerSession) flushPendingAsThinking() {
 
 	for _, text := range msgs {
 		if strings.TrimSpace(text) != "" {
-			s.emit(core.Event{Type: core.EventThinking, Content: text})
+			s.emit(core.Event{Type: core.EventThinking, Content: text}, scope)
 		}
 	}
 }
 
-func (s *appServerSession) flushPendingAsText() {
+func (s *appServerSession) flushPendingAsText(scopes ...appServerEventScope) {
+	scope := s.eventScope(scopes)
 	s.stateMu.Lock()
 	msgs := append([]string(nil), s.pendingMsgs...)
 	s.pendingMsgs = s.pendingMsgs[:0]
@@ -1736,12 +1851,26 @@ func (s *appServerSession) flushPendingAsText() {
 
 	for _, text := range msgs {
 		if strings.TrimSpace(text) != "" {
-			s.emit(core.Event{Type: core.EventText, Content: text})
+			s.emit(core.Event{Type: core.EventText, Content: text}, scope)
 		}
 	}
 }
 
-func (s *appServerSession) emit(event core.Event) {
+func (s *appServerSession) emit(event core.Event, scopes ...appServerEventScope) {
+	if s.native.enabled {
+		scope := s.eventScope(scopes)
+		if scope.threadID != "" || scope.turnID != "" {
+			if event.Metadata == nil {
+				event.Metadata = make(map[string]any, 2)
+			}
+			if scope.threadID != "" {
+				event.Metadata["threadId"] = scope.threadID
+			}
+			if scope.turnID != "" {
+				event.Metadata["turnId"] = scope.turnID
+			}
+		}
+	}
 	s.eventsMu.Lock()
 	defer s.eventsMu.Unlock()
 	if s.eventsClosed {
@@ -1763,11 +1892,11 @@ func (s *appServerSession) closeEvents() {
 	}
 }
 
-func (s *appServerSession) emitError(err error) {
+func (s *appServerSession) emitError(err error, scopes ...appServerEventScope) {
 	if err == nil {
 		return
 	}
-	s.emit(core.Event{Type: core.EventError, Error: err})
+	s.emit(core.Event{Type: core.EventError, Error: err}, scopes...)
 }
 
 func (s *appServerSession) rejectPending(err error) {
@@ -1787,83 +1916,11 @@ func (s *appServerSession) request(method string, params any, out any) error {
 }
 
 func (s *appServerSession) requestWithTimeout(method string, params any, out any, timeout time.Duration) error {
-	id := s.nextID.Add(1)
-	ch := make(chan rpcResponseEnvelope, 1)
-
-	s.pendingMu.Lock()
-	if s.pending == nil {
-		s.pending = make(map[int64]chan rpcResponseEnvelope)
-	}
-	s.pending[id] = ch
-	s.pendingMu.Unlock()
-
-	payload := map[string]any{
-		"jsonrpc": "2.0",
-		"id":      id,
-		"method":  method,
-		"params":  params,
-	}
-
-	deadline := time.Now().Add(timeout)
-	if err := s.writeJSONWithTimeout(method, payload, timeout); err != nil {
-		s.pendingMu.Lock()
-		delete(s.pending, id)
-		s.pendingMu.Unlock()
-		return err
-	}
-	remaining := time.Until(deadline)
-	if remaining <= 0 {
-		s.pendingMu.Lock()
-		delete(s.pending, id)
-		s.pendingMu.Unlock()
-		return fmt.Errorf("%s timed out", method)
-	}
-
-	timer := time.NewTimer(remaining)
-	defer timer.Stop()
-	ctxDone := s.contextDone()
-	select {
-	case resp := <-ch:
-		if resp.Error != nil {
-			return fmt.Errorf("%s", strings.TrimSpace(resp.Error.Message))
-		}
-		if out != nil {
-			if err := json.Unmarshal(resp.Result, out); err != nil {
-				return fmt.Errorf("decode %s response: %w", method, err)
-			}
-		}
-		return nil
-	case <-ctxDone:
-		return s.contextErr()
-	case <-timer.C:
-		s.pendingMu.Lock()
-		delete(s.pending, id)
-		s.pendingMu.Unlock()
-		return fmt.Errorf("%s timed out", method)
-	}
+	return s.requestWithContext(context.Background(), method, params, out, timeout)
 }
 
 func (s *appServerSession) writeJSONWithTimeout(method string, v any, timeout time.Duration) error {
-	done := make(chan error, 1)
-	go func() {
-		done <- s.writeJSON(v)
-	}()
-
-	timer := time.NewTimer(timeout)
-	defer timer.Stop()
-
-	ctxDone := s.contextDone()
-	select {
-	case err := <-done:
-		return err
-	case <-ctxDone:
-		return s.contextErr()
-	case <-timer.C:
-		err := fmt.Errorf("%s write timed out", method)
-		slog.Warn("codex app-server write timed out, closing session", "method", method, "timeout", timeout)
-		s.abortTransport()
-		return err
-	}
+	return s.writeJSONWithContext(context.Background(), method, v, timeout)
 }
 
 func (s *appServerSession) contextDone() <-chan struct{} {

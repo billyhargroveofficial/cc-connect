@@ -154,5 +154,12 @@ credentials/
 .codex
 cc-connect-new
 
+# Connect Bots keeps a separate client and build output from upstream web/.
+/connect-bots
+!studio/dist/
+studio/dist/*
+!studio/dist/.keep
+studio/tsconfig.tsbuildinfo
+
 # Stray workspace-state files some core tests leave behind
 core/test_ws_*.json

@@ -26,23 +26,31 @@ import (
 // unbounded growth from stderr output in long-running RPC sessions.
 // Writes beyond the cap are silently discarded.
 type cappedStderrWriter struct {
+	mu  sync.Mutex
 	buf bytes.Buffer
 }
 
 const maxStderrSize = 64 * 1024
 
 func (w *cappedStderrWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	size := len(p)
 	if w.buf.Len() >= maxStderrSize {
-		return len(p), nil
+		return size, nil
 	}
 	n := maxStderrSize - w.buf.Len()
 	if len(p) > n {
 		p = p[:n]
 	}
-	return w.buf.Write(p)
+	_, err := w.buf.Write(p)
+	// Discarded bytes are consumed too: os/exec must keep draining stderr.
+	return size, err
 }
 
 func (w *cappedStderrWriter) String() string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
 	return w.buf.String()
 }
 
@@ -69,11 +77,16 @@ type piSession struct {
 	sendWg    sync.WaitGroup // tracks in-flight Send() calls
 	alive     atomic.Bool
 
-	thinkingBuf strings.Builder
-	thinkingMu  sync.Mutex
-	modelsCW    map[string]int // cached from ~/.pi/agent/models.json
-	usageMu     sync.Mutex
-	lastUsage   *core.ContextUsage
+	thinkingBuf         strings.Builder
+	thinkingMu          sync.Mutex
+	modelsCW            map[string]int // cached from ~/.pi/agent/models.json
+	usageMu             sync.Mutex
+	lastUsage           *core.ContextUsage
+	nativeEvents        bool
+	nativeHandler       core.NativeEventHandler
+	sessionDir          string
+	nativeModel         string // current model observed on the reader goroutine
+	nativeContextWindow int
 
 	// pendingErr buffers the most recent assistant errorMessage. Pi
 	// auto-retries transient provider failures (e.g. HTTP 429 rate limits)
@@ -90,6 +103,11 @@ type piSession struct {
 	rpcStdinMu sync.Mutex
 	stderrBuf  cappedStderrWriter
 	rpcReady   chan struct{} // closed once after handleEvent stores sessionId from the get_state probe written by startRPC
+	rpcDone    chan struct{}
+	rpcSeq     atomic.Uint64
+	rpcMu      sync.Mutex
+	rpcPending map[string]chan piRPCResponse
+	closeOnce  sync.Once
 
 	// Extension UI: maps Pi's extension_ui_request id -> cc-connect RequestID
 	extPendingMu  sync.Mutex
@@ -117,27 +135,36 @@ func (s *piSession) sessionIDReady() bool {
 
 // ── Constructor ──────────────────────────────────────────────
 
-func newPiSession(ctx context.Context, cmd string, extraArgs []string, workDir, model, mode, thinking string, rpc bool, resumeID string, extraEnv []string) (*piSession, error) {
+func newPiSession(ctx context.Context, cmd string, extraArgs []string, workDir, model, mode, thinking string, rpc bool, resumeID string, extraEnv []string, options ...piSessionOptions) (*piSession, error) {
+	var opts piSessionOptions
+	if len(options) > 0 {
+		opts = options[0]
+	}
 	ctx, cancel := context.WithCancel(ctx)
 	s := &piSession{
-		cmd:       cmd,
-		extraArgs: extraArgs,
-		workDir:   workDir,
-		model:     model,
-		mode:      mode,
-		thinking:  thinking,
-		rpc:       rpc,
-		extraEnv:  extraEnv,
-		attachDir: filepath.Join(workDir, ".cc-connect", "attachments", fmt.Sprintf("pi_%d", time.Now().UnixNano())),
-		events:    make(chan core.Event, 64),
-		ctx:       ctx,
-		cancel:    cancel,
-		modelsCW:  loadModelsContextWindows(),
+		cmd:           cmd,
+		extraArgs:     extraArgs,
+		workDir:       workDir,
+		model:         model,
+		mode:          mode,
+		thinking:      thinking,
+		rpc:           rpc,
+		extraEnv:      extraEnv,
+		attachDir:     filepath.Join(workDir, ".cc-connect", "attachments", fmt.Sprintf("pi_%d", time.Now().UnixNano())),
+		events:        make(chan core.Event, 64),
+		ctx:           ctx,
+		cancel:        cancel,
+		modelsCW:      loadModelsContextWindows(),
+		nativeEvents:  opts.nativeEvents,
+		nativeHandler: opts.nativeHandler,
+		sessionDir:    opts.sessionDir,
+		nativeModel:   model,
 	}
 	s.alive.Store(true)
 
 	if rpc {
 		s.rpcReady = make(chan struct{})
+		s.rpcDone = make(chan struct{})
 		s.extPending = make(map[string]string)
 		s.extPendingRev = make(map[string]string)
 		s.extMethod = make(map[string]string)
@@ -150,6 +177,9 @@ func newPiSession(ctx context.Context, cmd string, extraArgs []string, workDir, 
 		// Wait for first JSON line (indicates RPC loop is live)
 		select {
 		case <-s.rpcReady:
+		case <-s.rpcDone:
+			cancel()
+			return nil, fmt.Errorf("pi: RPC process exited before reporting its session")
 		case <-time.After(30 * time.Second):
 			s.killRPC()
 			cancel()
@@ -171,8 +201,10 @@ func newPiSession(ctx context.Context, cmd string, extraArgs []string, workDir, 
 
 func (s *piSession) startRPC(resumeID string) error {
 	args := append(append([]string{}, s.extraArgs...), "--mode", "rpc")
-	if resumeID != "" {
-		args = append(args, "--session-id", resumeID)
+	var err error
+	args, err = s.appendSessionArgs(args, resumeID)
+	if err != nil {
+		return err
 	}
 	if s.model != "" {
 		args = append(args, "--model", s.model)
@@ -251,6 +283,13 @@ func (s *piSession) killRPC() {
 func (s *piSession) readLoopRPC(stdout io.ReadCloser) {
 	defer s.wg.Done()
 	defer func() { _ = stdout.Close() }()
+	defer func() {
+		s.alive.Store(false)
+		s.failPendingRPC(fmt.Errorf("pi: RPC process exited"))
+		if s.rpcDone != nil {
+			close(s.rpcDone)
+		}
+	}()
 
 	scanner := bufio.NewScanner(stdout)
 	scanner.Buffer(make([]byte, 0, 64*1024), 10*1024*1024)
@@ -288,6 +327,36 @@ func (s *piSession) readLoopRPC(stdout io.ReadCloser) {
 	// Process exited — reap the child and signal the engine.
 	// killRPC (now with Wait()) ensures the zombie is collected.
 	s.killRPC()
+	if s.nativeEvents {
+		// A prompt can already have been acknowledged when the process dies.
+		// Fail that asynchronous turn as well as any pending RPC waiters; no
+		// agent_settled notification can arrive after EOF. Mark the adapter dead
+		// before publishing completion so the next prompt cannot reuse it.
+		s.alive.Store(false)
+		if s.ctx.Err() != nil {
+			return // Explicit Stop/Close owns intentional cancellation.
+		}
+		err := fmt.Errorf("pi: RPC process exited unexpectedly")
+		if scanErr := scanner.Err(); scanErr != nil {
+			slog.Error("piSession: scanner error", "error", scanErr)
+			err = fmt.Errorf("read stdout: %w", scanErr)
+		}
+		if stderr := strings.TrimSpace(s.stderrBuf.String()); stderr != "" {
+			err = fmt.Errorf("pi: %s", stderr)
+		}
+		select {
+		case s.events <- core.Event{Type: core.EventError, Error: err}:
+		case <-s.ctx.Done():
+			return
+		}
+		select {
+		case s.events <- core.Event{Type: core.EventResult, Done: true}:
+		case <-s.ctx.Done():
+		}
+		// Fatal completion does not prove that Pi persisted a session file.
+		// Preserve an already committed ID without materializing a planned one.
+		return
+	}
 
 	if err := scanner.Err(); err != nil {
 		slog.Error("piSession: scanner error", "error", err)
@@ -355,6 +424,11 @@ func (s *piSession) Send(msg string, messageID string, images []core.ImageAttach
 	}
 
 	if s.rpc {
+		if s.nativeEvents {
+			// RPC accepts image content explicitly; unlike the interactive
+			// CLI, @path in the message is just text and does not load vision.
+			return s.sendNativePrompt(promptWithFileRefs(msg, filePaths), images)
+		}
 		return s.sendRPC(msg, imageAtFiles, filePaths)
 	}
 	return s.sendJSON(msg, imageAtFiles, filePaths)
@@ -375,6 +449,19 @@ func (s *piSession) Send(msg string, messageID string, images []core.ImageAttach
 // sees, which triggers a 400 for files larger than the model's context.
 func (s *piSession) sendJSON(prompt string, imageAtFiles []string, filePaths []string) error {
 	args := buildJSONArgs(s.extraArgs, promptWithFileRefs(prompt, filePaths), s.CurrentSessionID(), s.model, s.thinking, imageAtFiles)
+	if s.sessionDir != "" {
+		// --session-id creates a missing ID. Product sessions instead resolve
+		// an existing file before resuming, so a lost session cannot look new.
+		args = buildJSONArgs(s.extraArgs, promptWithFileRefs(prompt, filePaths), "", s.model, s.thinking, nil)
+		var err error
+		args, err = s.appendSessionArgs(args, s.CurrentSessionID())
+		if err != nil {
+			return err
+		}
+		for _, path := range imageAtFiles {
+			args = append(args, "@"+path)
+		}
+	}
 
 	slog.Debug("piSession: spawning json mode", "cmd", s.cmd, "sessionID", s.CurrentSessionID())
 
@@ -456,6 +543,10 @@ func (s *piSession) writeRPCCommand(cmd map[string]any) error {
 	b = append(b, '\n')
 
 	s.rpcStdinMu.Lock()
+	if s.rpcStdin == nil {
+		s.rpcStdinMu.Unlock()
+		return fmt.Errorf("piSession: RPC stdin is unavailable")
+	}
 	_, err = s.rpcStdin.Write(b)
 	s.rpcStdinMu.Unlock()
 	if err != nil {
@@ -544,6 +635,10 @@ func composeRPCPrompt(prompt string, atFiles []string) string {
 
 func (s *piSession) handleEvent(raw map[string]any) {
 	eventType, _ := raw["type"].(string)
+	s.observeNativeEvent(eventType, raw)
+	if s.nativeEvents {
+		s.captureNativeUsage(raw)
+	}
 
 	switch eventType {
 	case "session":
@@ -557,6 +652,7 @@ func (s *piSession) handleEvent(raw map[string]any) {
 		}
 
 	case "response":
+		s.deliverRPCResponse(raw)
 		// Startup probe response: matches the get_state request id set by
 		// startRPC. Stores sessionId so readLoopRPC can close rpcReady and
 		// the engine can persist it via the next EventResult.SessionID.
@@ -590,6 +686,11 @@ func (s *piSession) handleEvent(raw map[string]any) {
 
 	case "agent_end":
 		s.handleAgentEnd(raw)
+		if s.rpc && s.nativeEvents {
+			// Pi can still retry, compact, or process queued continuations.
+			// Native clients wait for the session-level agent_settled event.
+			break
+		}
 		if willRetry, _ := raw["willRetry"].(bool); willRetry {
 			// Pi is auto-retrying a transient failure (e.g. 429) inside
 			// this turn: it emits agent_end with willRetry=true, then
@@ -618,6 +719,11 @@ func (s *piSession) handleEvent(raw map[string]any) {
 			case s.events <- evt:
 			case <-s.ctx.Done():
 			}
+		}
+
+	case "agent_settled":
+		if s.rpc && s.nativeEvents {
+			s.finishNativeTurn()
 		}
 
 	case "compaction_start":
@@ -663,13 +769,17 @@ func (s *piSession) handleEvent(raw map[string]any) {
 		// compactions. The only side effect is a redundant
 		// ws.BeginTurn/EndTurn pair, accepted as belt-and-suspenders.
 		if errMsg, _ := raw["errorMessage"].(string); errMsg != "" {
+			if s.nativeEvents {
+				s.pendingErr = errMsg
+				break
+			}
 			evt := core.Event{Type: core.EventError, Error: fmt.Errorf("%s", errMsg)}
 			select {
 			case s.events <- evt:
 			case <-s.ctx.Done():
 			}
 		}
-		if s.rpc {
+		if s.rpc && !s.nativeEvents {
 			sid := s.CurrentSessionID()
 			evt := core.Event{Type: core.EventResult, SessionID: sid, Done: true}
 			select {
@@ -930,7 +1040,7 @@ func (s *piSession) emitToolFromMessage(ame map[string]any) {
 		if itemType, _ := tc["type"].(string); itemType == "toolCall" {
 			name, _ := tc["name"].(string)
 			input := extractToolInput(tc)
-			evt := core.Event{Type: core.EventToolUse, ToolName: name, ToolInput: input}
+			evt := core.Event{Type: core.EventToolUse, ToolName: name, ToolInput: input, Metadata: s.nativeToolMetadata(tc["id"])}
 			select {
 			case s.events <- evt:
 			case <-s.ctx.Done():
@@ -962,7 +1072,7 @@ func (s *piSession) emitToolFromMessage(ame map[string]any) {
 			if itemType == "toolCall" {
 				name, _ := item["name"].(string)
 				input := extractToolInput(item)
-				evt := core.Event{Type: core.EventToolUse, ToolName: name, ToolInput: input}
+				evt := core.Event{Type: core.EventToolUse, ToolName: name, ToolInput: input, Metadata: s.nativeToolMetadata(item["id"])}
 				select {
 				case s.events <- evt:
 				case <-s.ctx.Done():
@@ -998,6 +1108,7 @@ func (s *piSession) handleMessageEnd(raw map[string]any) {
 			Type:     core.EventToolResult,
 			ToolName: toolName,
 			Content:  truncStr(output, 500),
+			Metadata: s.nativeToolMetadata(msg["toolCallId"]),
 		}
 		select {
 		case s.events <- evt:
@@ -1017,6 +1128,17 @@ func (s *piSession) handleMessageEnd(raw map[string]any) {
 			s.pendingErr = ""
 		}
 	}
+}
+
+func (s *piSession) nativeToolMetadata(value any) map[string]any {
+	if !s.nativeEvents {
+		return nil
+	}
+	id, _ := value.(string)
+	if id == "" {
+		return nil
+	}
+	return map[string]any{"toolCallId": id}
 }
 
 func extractToolResult(msg map[string]any) string {
@@ -1056,6 +1178,13 @@ func (s *piSession) handleAgentEnd(raw map[string]any) {
 		usageRaw, _ := msg["usage"].(map[string]any)
 		if usageRaw == nil {
 			continue
+		}
+		if s.nativeEvents {
+			if model, ok := msg["model"].(string); ok && model != "" {
+				s.nativeModel = model
+			}
+			s.storeNativeUsage(usageRaw)
+			return
 		}
 
 		model, _ := msg["model"].(string)
@@ -1220,22 +1349,21 @@ func (s *piSession) Alive() bool {
 }
 
 func (s *piSession) Close() error {
-	s.alive.Store(false)
-
-	// Cancel context to interrupt any in-flight Send() or readLoopRPC.
-	s.cancel()
-
-	if s.rpc {
-		s.killRPC()
-	}
-
-	// Wait for all in-flight Send() calls to finish (json mode) or be
-	// interrupted by ctx cancellation (both modes). Only then are we sure
-	// no goroutine can still write to s.events.
-	s.sendWg.Wait()
-	s.wg.Wait()
-
-	close(s.events)
+	s.closeOnce.Do(func() {
+		s.alive.Store(false)
+		s.cancel()
+		s.failPendingRPC(fmt.Errorf("pi: session is closed"))
+		if s.rpc {
+			if s.rpcStdin != nil {
+				_ = s.rpcStdin.Close()
+			}
+			s.killRPC()
+		}
+		// Reader and Send are the only writers to the legacy event channel.
+		s.sendWg.Wait()
+		s.wg.Wait()
+		close(s.events)
+	})
 	return nil
 }
 

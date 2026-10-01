@@ -1,0 +1,39 @@
+# Separate product targets keep the upstream cc-connect Makefile untouched.
+GO ?= go
+PNPM ?= pnpm
+BINARY ?= bin/connect-bots
+ADDR ?= 127.0.0.1:9830
+GO_TEST_FLAGS ?=
+
+.PHONY: all install-deps studio build run dev-api dev-studio check check-upstream
+
+all: build
+
+install-deps:
+	$(PNPM) --dir studio install --frozen-lockfile
+
+studio: install-deps
+	$(PNPM) --dir studio run build
+
+build: studio
+	mkdir -p "$(dir $(BINARY))"
+	$(GO) build -trimpath -ldflags '-s -w' -o "$(BINARY)" ./cmd/connect-bots
+
+run: build
+	"$(abspath $(BINARY))" --addr "$(ADDR)"
+
+dev-api:
+	$(GO) run ./cmd/connect-bots --addr "$(ADDR)"
+
+dev-studio: install-deps
+	$(PNPM) --dir studio run dev
+
+check: studio
+	$(PNPM) --dir studio test
+	$(GO) vet -tags no_web ./...
+	$(GO) test -race ./bots ./core ./agent/codex ./agent/pi ./cmd/connect-bots
+
+# The upstream suite includes legacy harnesses and their local CLI prerequisites.
+# CI uses their existing gates to skip real Cursor login/model/storage probes.
+check-upstream:
+	CI=1 PATH="$$HOME/.local/bin:$$PATH" $(GO) test -tags no_web $(GO_TEST_FLAGS) ./...

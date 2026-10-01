@@ -1,0 +1,329 @@
+.composer-minimal .composer {
+  box-shadow: none;
+}
+
+.composer-minimal .composer-tools .icon-button:first-child {
+  background: transparent;
+}
+
+.composer-minimal .composer-bottom {
+  position: relative;
+  flex-wrap: nowrap;
+  justify-content: flex-end;
+  gap: 3px;
+  padding: 2px 1px 0;
+  min-height: 40px;
+}
+
+.composer-minimal .model-controls-in-menu {
+  position: static;
+  width: 100%;
+  min-width: 0;
+  justify-content: flex-start;
+}
+
+.composer-minimal .model-trigger {
+  border: none;
+  background: transparent;
+  width: 100%;
+  padding: 9px 10px;
+  min-height: 56px;
+  max-width: 100%;
+  gap: 9px;
+  text-align: left;
+  color: var(--text);
+}
+
+.composer-minimal .model-trigger:hover:not(:disabled) {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.composer-minimal .model-trigger > .model-trigger-label {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  max-width: none;
+}
+
+.model-trigger-label > strong {
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.model-trigger-label > small {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.composer-minimal .model-trigger .model-current-name {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.model-current-effort {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex-shrink: 0;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.model-current-effort::before {
+  content: "·";
+  margin-right: 2px;
+}
+
+.model-current-effort.is-ultra {
+  color: var(--accent);
+}
+
+.composer-minimal .model-popover .model-choice small,
+.composer-minimal .model-popover .model-group-label,
+.composer-minimal .model-popover footer {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.composer-minimal .composer-actions-menu .model-popover {
+  bottom: -1px;
+  left: -1px;
+  right: -1px;
+  width: auto;
+  z-index: 33;
+}
+
+.model-controls-in-menu > .popover-backdrop {
+  z-index: 32;
+}
+
+.effort-setting {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px 10px;
+  border-bottom: 1px solid var(--border);
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.effort-setting select {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 7px 9px;
+  min-height: 36px;
+  color: var(--text);
+  background: var(--surface);
+  font-size: 12px;
+}
+
+.composer-minimal .context-control {
+  position: relative;
+  order: initial;
+  margin: 0;
+}
+
+.context-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-height: 36px;
+  padding: 6px;
+  border-radius: 12px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.context-trigger:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.context-control.is-compacting .context-trigger {
+  color: var(--accent);
+}
+
+.context-popover {
+  position: absolute;
+  right: 0;
+  bottom: 43px;
+  z-index: 31;
+  width: min(265px, calc(100vw - 34px));
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 10px;
+  background: var(--surface-raised);
+  box-shadow: var(--shadow);
+  color: var(--text);
+}
+
+.context-popover > header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0 4px 2px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.context-popover dl {
+  display: grid;
+  gap: 9px;
+  margin: 10px 4px 14px;
+  font-size: 12px;
+}
+
+.context-popover dl > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.context-popover dt {
+  color: var(--muted);
+}
+
+.context-popover dd {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.context-popover p {
+  margin: 0 4px 12px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.composer-minimal .context-popover .compact-button {
+  width: 100%;
+  justify-content: flex-start;
+  gap: 8px;
+  min-height: 40px;
+  padding: 8px;
+  border-radius: 9px;
+  font-size: 12px;
+  background: var(--surface);
+}
+
+.composer-actions {
+  position: relative;
+  flex-shrink: 0;
+}
+
+.composer-actions-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 36px;
+  min-height: 36px;
+  padding: 6px;
+  border-radius: 12px;
+  color: var(--muted);
+  background: transparent;
+}
+
+.composer-actions-trigger:hover {
+  color: var(--text);
+  background: var(--surface-hover);
+}
+
+.composer-actions-menu {
+  position: absolute;
+  right: 0;
+  bottom: 43px;
+  z-index: 31;
+  width: min(285px, calc(100vw - 34px));
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface-raised);
+  box-shadow: var(--shadow);
+}
+
+.composer-actions-menu > button {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  min-height: 42px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: transparent;
+  text-align: left;
+  font-size: 12px;
+}
+
+.composer-actions-menu > button:hover:not(:disabled) {
+  background: var(--surface-hover);
+}
+
+.composer-micro-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  margin: 0 auto 0 6px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+@media (max-width: 700px) {
+  .composer-minimal .composer-bottom {
+    padding-top: 0;
+    min-height: 44px;
+  }
+
+  .composer-minimal .context-control {
+    position: static;
+  }
+
+  .composer-minimal .context-trigger,
+  .composer-minimal .composer-actions-trigger,
+  .composer-minimal .composer-tools .icon-button,
+  .composer-minimal .send-button {
+    min-height: 44px;
+  }
+
+  .composer-minimal .composer-tools .icon-button,
+  .composer-minimal .composer-actions-trigger,
+  .composer-minimal .context-trigger,
+  .composer-minimal .send-button {
+    min-width: 44px;
+  }
+
+  .composer-minimal .send-button {
+    width: 40px;
+    height: 40px;
+  }
+
+  .composer-minimal .context-popover,
+  .composer-minimal .composer-actions-menu {
+    bottom: 47px;
+  }
+
+  .composer-minimal .effort-setting select {
+    min-height: 44px;
+    font-size: 16px;
+  }
+
+  .composer-minimal .model-choice,
+  .composer-minimal .composer-actions-menu > button,
+  .composer-minimal .context-popover .compact-button {
+    min-height: 44px;
+  }
+}

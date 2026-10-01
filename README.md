@@ -1,3 +1,18 @@
+# Connect Bots
+
+This fork includes **Connect Bots**: persistent Codex and Pi bots with independent
+workspaces, a coordinator, and a responsive React web app. Conversations retain
+searches, tools, reasoning summaries, subagents and native goals. Instructions,
+skills, voice input and optional Telegram connections are managed in the app.
+
+See [Connect Bots documentation](docs/connect-bots/README.md) for setup,
+[deployment](docs/connect-bots/DEPLOYMENT.md) and
+[validation](docs/connect-bots/validation.md). Build with
+`make -f Makefile.connect-bots build`, then run `./bin/connect-bots`.
+
+The existing cc-connect entry point is retained. The upstream project is
+documented below.
+
 <p align="center">
   <img src="./docs/images/banner.svg" alt="CC-Connect Banner" width="800"/>
 </p>

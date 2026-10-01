@@ -81,7 +81,7 @@ local file and never returned by the API.
 
 Event types: `message` ({role,content,attachments,source}), `native` (core.NativeEvent),
 `agent` (normalized core.Event with error converted to string), `turn`
-({status,backend,model,effort,outputTokens,generationMs,tokensPerSecond,error}),
+({status,backend,model,effort,serviceTier,outputTokens,generationMs,tokensPerSecond,error}),
 `bot` (updated Bot), `handoff`, `goal_action` (native mutation audit),
 `goal_carry` (paused configuration transfer), `maintenance`, `system` ({content}).
 Manual compaction uses `compact_action` with one stable request ID; native
@@ -104,3 +104,14 @@ native turn before releasing the busy state.
 
 Defaults: Codex `gpt-6-sol/max`; Pi `deepseek/deepseek-flash/max`; inventory
 Codex `gpt-6-luna/max`. Runtime catalogs determine available model efforts.
+
+`Bot.serviceTier` is the selected Codex tier ID, or an empty string for automatic
+selection. `Model.serviceTiers` retains each model's advertised IDs, names and
+descriptions from `model/list`; `defaultServiceTier` is included when advertised.
+No tiers are fabricated for Pi or models with an empty catalog. The selected tier
+is sent as `serviceTier` on native thread and turn requests. Returning to automatic
+selection explicitly clears a resumed thread's saved override through
+`thread/settings/update` with `serviceTier: null`. Model, effort and tier changes
+resume the same native conversation; they apply to the next turn and remain in
+that turn's journal metadata. Provider authorization and tier pricing remain
+properties of the selected runtime and account.

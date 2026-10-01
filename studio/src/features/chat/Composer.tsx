@@ -356,7 +356,7 @@ export default function Composer({
               aria-label="Прикрепить файл"
               title="Прикрепить файл"
             >
-              <Plus size={19} />
+              {pendingUploads ? <LoaderCircle size={18} className="spin" /> : <Plus size={19} />}
             </button>
             {capabilities?.voice && (
               <button
@@ -370,7 +370,9 @@ export default function Composer({
                     : "Выбрать аудиофайл · для микрофона нужен HTTPS"
                 }
               >
-                {recording ? (
+                {transcribing ? (
+                  <LoaderCircle size={17} className="spin" />
+                ) : recording ? (
                   <Square size={16} />
                 ) : (
                   <Mic size={18} />
@@ -378,6 +380,40 @@ export default function Composer({
               </button>
             )}
           </div>
+          <div className="composer-trailing">
+            <ContextControl state={context} busy={busy || sending} onError={onError} />
+            <div className="composer-actions">
+              <button
+                ref={actionsTrigger}
+                className="composer-actions-trigger"
+                onClick={() => setActionsOpen(!actionsOpen)}
+                aria-label="Ещё действия"
+                aria-expanded={actionsOpen}
+                aria-haspopup="dialog"
+                aria-controls={actionsOpen ? actionsId : undefined}
+                title="Ещё действия"
+              ><MoreHorizontal size={19} /></button>
+              {actionsOpen && <>
+                <button className="popover-backdrop" tabIndex={-1} onClick={closeActions} aria-label="Закрыть действия" />
+                <div className="composer-actions-menu" ref={actionsDialog} tabIndex={-1} id={actionsId} role="dialog" aria-modal={!modelPickerOpen} aria-label="Действия с сообщением">
+                  <ModelPicker
+                    bot={bot}
+                    capabilities={capabilities}
+                    disabled={busy || sending || context.compacting || context.requesting}
+                    onBotChange={onBotChange}
+                    onOpenChange={setModelPickerOpen}
+                    onError={onError}
+                  />
+                  {capabilities?.voice && <button
+                    onClick={() => {
+                      closeActions();
+                      audioInput.current?.click();
+                    }}
+                    disabled={transcribing}
+                  ><AudioLines size={16} /><span>Распознать аудиофайл</span></button>}
+                </div>
+              </>}
+            </div>
           {busy ? (
             <button
               className="send-button stop-button"
@@ -414,50 +450,12 @@ export default function Composer({
               )}
             </button>
           )}
+          </div>
         </div>
       </div>
-      <div className="composer-bottom">
-        {(transcribing || pendingUploads) && <span className="composer-micro-status" role="status">
-          <LoaderCircle size={13} className="spin" />
-          {transcribing ? "Распознаём…" : "Загружаем…"}
-        </span>}
-        <ContextControl state={context} busy={busy || sending} onError={onError} />
-        <div className="composer-actions">
-          <button
-            ref={actionsTrigger}
-            className="composer-actions-trigger"
-            onClick={() => setActionsOpen(!actionsOpen)}
-            aria-label="Ещё действия"
-            aria-expanded={actionsOpen}
-            aria-haspopup="dialog"
-            aria-controls={actionsOpen ? actionsId : undefined}
-            title="Ещё действия"
-          ><MoreHorizontal size={18} /></button>
-          {actionsOpen && <>
-            <button className="popover-backdrop" tabIndex={-1} onClick={closeActions} aria-label="Закрыть действия" />
-            <div className="composer-actions-menu" ref={actionsDialog} tabIndex={-1} id={actionsId} role="dialog" aria-modal={!modelPickerOpen} aria-label="Действия с сообщением">
-              <ModelPicker
-                bot={bot}
-                capabilities={capabilities}
-                disabled={busy || sending || context.compacting || context.requesting}
-                onBotChange={(updated) => {
-                  onBotChange(updated);
-                  closeActions();
-                }}
-                onOpenChange={setModelPickerOpen}
-                onError={onError}
-              />
-              {capabilities?.voice && <button
-                onClick={() => {
-                  closeActions();
-                  audioInput.current?.click();
-                }}
-                disabled={transcribing}
-              ><AudioLines size={16} /><span>Распознать аудиофайл</span></button>}
-            </div>
-          </>}
-        </div>
-      </div>
+      {(transcribing || pendingUploads) && <span className="composer-live-status" role="status">
+        {transcribing ? "Распознаём речь…" : "Загружаем файлы…"}
+      </span>}
       <input
         hidden
         type="file"

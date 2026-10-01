@@ -15,6 +15,7 @@ export interface Bot {
   backend: string;
   model: string;
   effort: string;
+  serviceTier?: string;
   workDir: string;
   status: string;
   threads: Record<string, string>;
@@ -44,6 +45,13 @@ export interface Model {
   name: string;
   backend: string;
   efforts: string[];
+  serviceTiers?: ServiceTier[];
+  defaultServiceTier?: string;
+}
+export interface ServiceTier {
+  id: string;
+  name: string;
+  description: string;
 }
 export interface BackendCapabilities {
   available: boolean;

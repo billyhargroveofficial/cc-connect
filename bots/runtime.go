@@ -640,7 +640,7 @@ func terminalStatus(status string) bool {
 }
 
 func turnPayload(bot Bot, status string, result TurnResult) map[string]any {
-	return map[string]any{"status": status, "backend": bot.Backend, "model": bot.Model, "effort": bot.Effort,
+	return map[string]any{"status": status, "backend": bot.Backend, "model": bot.Model, "effort": bot.Effort, "serviceTier": bot.ServiceTier,
 		"outputTokens": result.OutputTokens, "generationMs": result.GenerationMS,
 		"tokensPerSecond": result.TokensPerSec, "throughputEstimated": true, "error": result.Error}
 }

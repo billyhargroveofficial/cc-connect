@@ -12,6 +12,24 @@ function backgroundNative(seq, method, params, backend = 'codex', extra = {}) {
   return { ...native(seq, method, params, backend, extra), turnId: '' };
 }
 
+test('turn service tier stays scoped to its historical turn and survives sparse lifecycle updates', () => {
+  const [fast, automatic] = buildTranscript([
+    event(1, 'turn', { status: 'running', backend: 'codex', model: 'gpt-test', effort: 'max', serviceTier: 'priority' }),
+    event(2, 'turn', { status: 'completed', outputTokens: 20 }),
+    event(3, 'turn', { status: 'running', backend: 'codex', serviceTier: '' }, 'turn-2'),
+    event(4, 'turn', { status: 'completed' }, 'turn-2'),
+  ]);
+  assert.equal(fast.serviceTier, 'priority');
+  assert.equal(fast.status, 'completed');
+  assert.equal(automatic.serviceTier, '');
+
+  const [cleared] = buildTranscript([
+    event(1, 'turn', { status: 'running', serviceTier: 'priority' }),
+    event(2, 'turn', { status: 'completed', serviceTier: '' }),
+  ]);
+  assert.equal(cleared.serviceTier, '', 'an explicit automatic tier overrides an earlier value');
+});
+
 test('snapshot/SSE overlap is ordered and idempotent, scoped to the bot, with complete tool output', () => {
   const longOutput = 'verified line\n'.repeat(600);
   const start = native(2, 'item/started', { item: { id: 'shell-1', type: 'commandExecution', command: 'run-check', status: 'inProgress' } });

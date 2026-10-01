@@ -148,7 +148,10 @@ function Message({ message, botId }: { message: TranscriptMessage; botId: string
       {content && <Markdown content={content} />}
       <Attachments botId={botId} attachments={message.attachments} />
     </div>
-    {user ? <div className="transcript-message-meta">{delegated && <span>От бота {delegated.sender} · </span>}{message.source === 'telegram' && <span>Telegram · </span>}{dateTime(message.time)}</div>
+    {user ? <div className={`transcript-message-meta${!delegated && message.source !== 'telegram' ? ' is-time-only' : ''}`}>
+      {delegated && <span>От бота {delegated.sender}</span>}{message.source === 'telegram' && <span>Telegram</span>}
+      <time className="transcript-message-time" dateTime={message.time}>{dateTime(message.time)}</time>
+    </div>
       : message.content && <div className="transcript-message-actions"><CopyButton content={message.content} label="Копировать ответ" /></div>}
   </article>;
 }
@@ -257,6 +260,19 @@ function pendingRequests(turn: TranscriptTurn): UserRequest[] {
   return [...requests.values()];
 }
 
+// Keep only an opened disclosure's content mounted for its short exit
+// animation. Collapsed tool payloads stay lazy even in long conversations.
+function useDisclosureContent(open: boolean) {
+  const [retained, setRetained] = useState(open);
+  useEffect(() => {
+    if (open) { setRetained(true); return; }
+    if (!retained) return;
+    const timer = window.setTimeout(() => setRetained(false), 200);
+    return () => window.clearTimeout(timer);
+  }, [open, retained]);
+  return open || retained;
+}
+
 function Subagents({ activity, onPermission, onQuestion }: { activity: Activity; onPermission: PermissionHandler; onQuestion?: PermissionHandler }) {
   const states = record(activity.data.agentsStates);
   const targets = Array.isArray(activity.data.receiverThreadIds) ? activity.data.receiverThreadIds.map(string) : [];
@@ -288,19 +304,23 @@ function Subagents({ activity, onPermission, onQuestion }: { activity: Activity;
 }
 
 function ActivityItem({ activity, onPermission, onQuestion }: { activity: Activity; onPermission: PermissionHandler; onQuestion?: PermissionHandler }) {
+  const contentId = useId();
   const running = isRunning(activity.status);
   const [override, setOverride] = useState<{ running: boolean; open: boolean } | null>(null);
   const open = override?.running === running ? override.open : false;
+  const renderContent = useDisclosureContent(open);
   const simpleText = activity.kind === 'thinking' || activity.kind === 'commentary';
   const title = activity.kind === 'subagent' ? collabLabels[activity.title] || activity.title : activity.title;
   const input = json(activity.input);
   const preview = activity.text || input;
-  return <details className={`transcript-activity-item transcript-activity-${activity.kind}`} open={open}
-    onToggle={event => setOverride({ running, open: event.currentTarget.open })}>
-    <summary><span className="transcript-activity-icon">{activityIcon(activity)}</span><span className="transcript-activity-title">{title}
+  return <div className={`transcript-activity-item transcript-activity-${activity.kind}${open ? ' is-open' : ''}`}>
+    <button type="button" className="transcript-activity-summary" aria-expanded={open} aria-controls={contentId}
+      onClick={() => setOverride({ running, open: !open })}>
+      <span className="transcript-activity-icon">{activityIcon(activity)}</span><span className="transcript-activity-title">{title}
       {!simpleText && preview && <small>{preview.split('\n')[0]}</small>}
-    </span><span className="transcript-activity-summary-meta"><Status value={activity.status} /><ChevronDown size={13} /></span></summary>
-    {open && <div className="transcript-activity-content">
+    </span><span className="transcript-activity-summary-meta"><Status value={activity.status} /><ChevronDown size={13} aria-hidden="true" /></span></button>
+    <div className={`transcript-disclosure${open ? ' is-open' : ''}`} id={contentId} aria-hidden={!open} inert={!open}>
+      <div className="transcript-disclosure-inner">{renderContent && <div className="transcript-activity-content">
       {simpleText && activity.text && <Markdown content={activity.text} />}
       {activity.kind === 'thinking' && !activity.text && <p className="transcript-muted">Ожидаем доступное от модели содержание.</p>}
       {activity.kind === 'plan' && <Plan activity={activity} />}
@@ -316,8 +336,9 @@ function ActivityItem({ activity, onPermission, onQuestion }: { activity: Activi
         {duration(activity.data.durationMs) && <span>{duration(activity.data.durationMs)}</span>}
       </div>}
       <RawDetails value={activity.data} />
-    </div>}
-  </details>;
+      </div>}</div>
+    </div>
+  </div>;
 }
 
 function currentActivityLabel(turn: TranscriptTurn) {
@@ -347,8 +368,9 @@ function TurnActivity({ turn, onPermission, onQuestion }: { turn: TranscriptTurn
   const [override, setOverride] = useState<{ running: boolean; open: boolean } | null>(null);
   const running = isRunning(turn.status);
   const open = override?.running === running ? override.open : false;
+  const renderContent = useDisclosureContent(open);
   const resolvedRequests = turn.requests.filter(request => request.resolved);
-  const hasStats = Boolean(turn.model || turn.outputTokens !== undefined || turn.tokensPerSecond !== undefined);
+  const hasStats = Boolean(turn.model || turn.serviceTier || turn.outputTokens !== undefined || turn.tokensPerSecond !== undefined);
   if (!turn.activities.length && !running && !resolvedRequests.length && !hasStats) return null;
   const serviceTitle = !turn.users.length && !turn.responses.length && turn.activities.length === 1
     && turn.activities[0].kind === 'event' ? turn.activities[0].title : '';
@@ -364,17 +386,20 @@ function TurnActivity({ turn, onPermission, onQuestion }: { turn: TranscriptTurn
       {turn.activities.length > 0 && <small className="transcript-activity-count" aria-label={`Количество действий: ${turn.activities.length}`}>{turn.activities.length}</small>}
       <ChevronDown size={13} className={open ? 'is-open' : ''} aria-hidden="true" />
     </button>
-    <div className="transcript-activity-list" id={contentId} hidden={!open}>{open && <>
+    <div className={`transcript-disclosure${open ? ' is-open' : ''}`} id={contentId} aria-hidden={!open} inert={!open}>
+      <div className="transcript-disclosure-inner">{renderContent && <div className="transcript-activity-list">
       {turn.activities.map(activity => <ActivityItem key={activity.id} activity={activity} onPermission={onPermission} onQuestion={onQuestion} />)}
       {resolvedRequests.map(request => <RequestCard key={request.id} request={request} onPermission={onPermission} onQuestion={onQuestion} />)}
       {!running && hasStats && <div className="transcript-turn-stats">
-        <span>{[turn.backend === 'pi' ? 'Pi' : turn.backend === 'codex' ? 'Codex' : turn.backend, turn.model, turn.effort].filter(Boolean).join(' · ')}</span>
+        <span>{[turn.backend === 'pi' ? 'Pi' : turn.backend === 'codex' ? 'Codex' : turn.backend, turn.model, turn.effort,
+          ['priority', 'fast'].includes(turn.serviceTier) ? 'Fast' : turn.serviceTier].filter(Boolean).join(' · ')}</span>
         <span title="Оценка по времени генерации. Время выполнения инструментов исключено, где runtime сообщил тайминги.">{turn.tokensPerSecond !== undefined && turn.tokensPerSecond > 0 ? `≈ ${turn.tokensPerSecond.toFixed(1)}` : '—'} ток/с</span>
         {turn.outputTokens !== undefined && turn.outputTokens > 0 && <span>{turn.outputTokens.toLocaleString('ru')} токенов</span>}
         {duration(turn.generationMs) && <span>{duration(turn.generationMs)} генерации</span>}
       </div>}
       <RawJournal events={turn.events} />
-    </>}</div>
+      </div>}</div>
+    </div>
   </section>;
 }
 
@@ -487,7 +512,6 @@ function Turn({ bot, turn, onPermission, onQuestion, onRetry }: TranscriptProps 
     {turn.users.map(message => <Message key={message.id} message={message} botId={bot.id} />)}
     {turn.notices.map((notice, index) => <div className="transcript-notice" key={index}><MessageSquare size={13} /><Markdown content={notice} /></div>)}
     {hasBotContent && <div className="transcript-bot-response">
-      {!service && <div className="transcript-response-heading"><Avatar bot={bot} size={25} /><strong>{bot.name}</strong></div>}
       <div className="transcript-response-body">
         <TurnActivity turn={turn} onPermission={onPermission} onQuestion={onQuestion} />
         {pendingRequests(turn).map(request => <RequestCard key={request.id} request={request} onPermission={onPermission} onQuestion={onQuestion} />)}

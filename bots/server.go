@@ -166,7 +166,14 @@ func (s *Server) patchBot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var bot Bot
-	err := s.mutateIdleBot(id, func() error {
+	mutateIdle := s.mutateIdleBot
+	if _, tierOnly := fields["serviceTier"]; tierOnly && len(fields) == 1 && s.runtime != nil {
+		// Tier-only edits retain the loaded native thread. Its next turn/control
+		// request applies the setting before continuing; accepting a turn still
+		// shares the same lifecycle lock as the persistent profile mutation.
+		mutateIdle = s.runtime.WithIdleBotAccess
+	}
+	err := mutateIdle(id, func() error {
 		var err error
 		bot, err = s.store.PatchBot(id, fields)
 		return err
@@ -432,7 +439,7 @@ func (s *Server) mutateIdleBot(id string, mutate func() error) error {
 
 func editableBotField(field string) bool {
 	switch field {
-	case "name", "role", "avatar", "chief", "backend", "model", "effort", "disabledSkills", "telegram":
+	case "name", "role", "avatar", "chief", "backend", "model", "effort", "serviceTier", "disabledSkills", "telegram":
 		return true
 	default:
 		return false

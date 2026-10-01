@@ -1,18 +1,219 @@
+.composer-minimal {
+  padding-bottom: 14px;
+}
+
 .composer-minimal .composer {
+  position: relative;
+  padding: 8px 9px 4px;
+  border-radius: 20px;
   box-shadow: none;
+  transition: border-color 180ms ease, background-color 180ms ease;
+}
+
+.composer-minimal .composer textarea {
+  padding: 2px 6px 4px;
+  min-height: 30px;
+  line-height: 1.5;
+}
+
+.composer-minimal .composer-toolbar {
+  min-height: 44px;
+  gap: 4px;
+  flex-wrap: nowrap;
+}
+
+.composer-minimal .composer-tools,
+.composer-trailing {
+  display: flex;
+  align-items: center;
+  flex-wrap: nowrap;
+  flex-shrink: 0;
+  gap: 0;
+}
+
+.composer-minimal .composer-tools .icon-button,
+.composer-actions-trigger,
+.context-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 44px;
+  min-height: 44px;
+  height: 44px;
+  padding: 6px;
+  border-radius: 12px;
+  background: transparent;
+  color: var(--muted);
+  transition: color 150ms ease, background-color 150ms ease, transform 150ms ease;
 }
 
 .composer-minimal .composer-tools .icon-button:first-child {
   background: transparent;
 }
 
-.composer-minimal .composer-bottom {
+.composer-actions-trigger:hover,
+.context-trigger:hover {
+  color: var(--text);
+  background: var(--surface-hover);
+}
+
+.composer-actions-trigger:active,
+.context-trigger:active {
+  transform: scale(.94);
+}
+
+.composer-minimal .send-button {
   position: relative;
-  flex-wrap: nowrap;
-  justify-content: flex-end;
-  gap: 3px;
-  padding: 2px 1px 0;
-  min-height: 40px;
+  isolation: isolate;
+  width: 44px;
+  height: 44px;
+  min-width: 44px;
+  min-height: 44px;
+  background: transparent;
+  opacity: 1;
+}
+
+.composer-minimal .send-button::before {
+  content: "";
+  position: absolute;
+  inset: 5px;
+  border-radius: 50%;
+  background: var(--text);
+  z-index: -1;
+  transition: transform 150ms ease, background-color 150ms ease;
+}
+
+.composer-minimal .send-button:hover:not(:disabled)::before {
+  transform: scale(1.06);
+}
+
+.composer-minimal .send-button:active:not(:disabled)::before {
+  transform: scale(.94);
+}
+
+.composer-minimal .send-button:disabled::before {
+  background: var(--surface-hover);
+}
+
+.composer-minimal .send-button:disabled,
+.composer-minimal .send-button:hover {
+  background: transparent;
+  opacity: 1;
+}
+
+.composer-minimal .context-control,
+.composer-actions {
+  position: static;
+  order: initial;
+  margin: 0;
+  flex-shrink: 0;
+}
+
+.context-trigger {
+  gap: 5px;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.context-control.is-compacting .context-trigger {
+  color: var(--accent);
+}
+
+.context-popover,
+.composer-actions-menu {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 8px);
+  z-index: 31;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface-raised);
+  box-shadow: var(--shadow);
+  color: var(--text);
+}
+
+.context-popover {
+  width: min(265px, calc(100vw - 24px));
+  padding: 8px;
+}
+
+.context-popover > header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding-left: 5px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.context-popover > header .icon-button,
+.composer-minimal .model-popover > header .icon-button {
+  width: 44px;
+  height: 44px;
+  min-width: 44px;
+}
+
+.context-popover dl {
+  display: grid;
+  gap: 8px;
+  margin: 4px 5px 12px;
+  font-size: 12px;
+}
+
+.context-popover dl > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.context-popover dt {
+  color: var(--muted);
+}
+
+.context-popover dd {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.context-popover p {
+  margin: 0 5px 10px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.composer-minimal .context-popover .compact-button {
+  width: 100%;
+  justify-content: flex-start;
+  gap: 8px;
+  min-height: 44px;
+  padding: 8px;
+  border-radius: 9px;
+  font-size: 12px;
+  background: var(--surface);
+}
+
+.composer-actions-menu {
+  width: min(320px, calc(100vw - 24px));
+  padding: 5px;
+}
+
+.composer-actions-menu > button {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  min-height: 44px;
+  padding: 8px 10px;
+  border-radius: 9px;
+  background: transparent;
+  text-align: left;
+  font-size: 12px;
+}
+
+.composer-actions-menu > button:hover:not(:disabled) {
+  background: var(--surface-hover);
 }
 
 .composer-minimal .model-controls-in-menu {
@@ -26,10 +227,11 @@
   border: none;
   background: transparent;
   width: 100%;
-  padding: 9px 10px;
-  min-height: 56px;
+  padding: 8px 10px;
+  min-height: 52px;
   max-width: 100%;
   gap: 9px;
+  border-radius: 9px;
   text-align: left;
   color: var(--text);
 }
@@ -43,7 +245,7 @@
   display: flex;
   flex: 1;
   flex-direction: column;
-  gap: 4px;
+  gap: 3px;
   min-width: 0;
   max-width: none;
 }
@@ -69,7 +271,8 @@
   white-space: nowrap;
 }
 
-.model-current-effort {
+.model-current-effort,
+.model-current-tier {
   display: inline-flex;
   align-items: center;
   gap: 3px;
@@ -78,20 +281,14 @@
   font-size: 11px;
 }
 
-.model-current-effort::before {
+.model-current-effort::before,
+.model-current-tier::before {
   content: "·";
-  margin-right: 2px;
+  margin: 0 3px;
 }
 
 .model-current-effort.is-ultra {
   color: var(--accent);
-}
-
-.composer-minimal .model-popover .model-choice small,
-.composer-minimal .model-popover .model-group-label,
-.composer-minimal .model-popover footer {
-  color: var(--muted);
-  font-size: 11px;
 }
 
 .composer-minimal .composer-actions-menu .model-popover {
@@ -99,231 +296,180 @@
   left: -1px;
   right: -1px;
   width: auto;
+  padding: 5px;
+  max-height: min(520px, calc(100dvh - 140px));
   z-index: 33;
+  overscroll-behavior: contain;
 }
 
 .model-controls-in-menu > .popover-backdrop {
   z-index: 32;
 }
 
-.effort-setting {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 10px;
-  padding: 6px 8px 10px;
-  border-bottom: 1px solid var(--border);
-  font-size: 11px;
+.composer-minimal .model-popover > header {
+  padding: 0 0 0 9px;
   color: var(--muted);
+  font-size: 11px;
 }
 
-.effort-setting select {
+.model-settings {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 8px;
+  padding: 0 5px 10px;
+  margin-bottom: 3px;
+  border-bottom: 1px solid var(--border);
+}
+
+.model-settings.has-two-settings {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.model-setting {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.model-setting select {
+  width: 100%;
+  min-width: 0;
+  min-height: 44px;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: 9px;
   padding: 7px 9px;
-  min-height: 36px;
   color: var(--text);
   background: var(--surface);
+  font-size: 13px;
+}
+
+.composer-minimal .model-popover section {
+  margin-bottom: 3px;
+}
+
+.composer-minimal .model-group-label {
+  padding: 9px 9px 3px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.composer-minimal .model-choice {
+  min-height: 44px;
+  padding: 8px 9px;
+}
+
+.composer-minimal .model-choice strong {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   font-size: 12px;
+  font-weight: 500;
 }
 
-.composer-minimal .context-control {
-  position: relative;
-  order: initial;
-  margin: 0;
+.composer-minimal .model-choice strong > svg {
+  color: var(--muted);
 }
 
-.context-trigger {
-  display: inline-flex;
+.composer-minimal .model-popover footer {
+  margin-top: 6px;
+  padding: 8px 9px 3px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.composer-minimal .upload-chips {
+  flex-wrap: nowrap;
+  align-items: center;
+  min-height: 44px;
+  gap: 8px;
+  overflow-x: auto;
+  padding: 0 2px;
+  overscroll-behavior-x: contain;
+}
+
+.composer-minimal .upload-chip {
+  flex-shrink: 0;
+  max-width: min(230px, calc(100vw - 48px));
+  padding: 6px 8px;
+  border-radius: 9px;
+}
+
+.composer-minimal .upload-chip button {
+  width: 44px;
+  height: 44px;
+  min-width: 44px;
+  flex-shrink: 0;
   align-items: center;
   justify-content: center;
-  gap: 5px;
-  min-height: 36px;
-  padding: 6px;
-  border-radius: 12px;
-  background: transparent;
-  color: var(--muted);
-  font-size: 10px;
-  font-variant-numeric: tabular-nums;
+  margin: -10px -8px -10px -7px;
+}
+
+.composer-minimal .recording-state {
+  min-height: 30px;
+  padding: 2px 6px 4px;
+  gap: 7px;
+}
+
+.composer-minimal .recording-state .text-button {
+  min-height: 44px;
+  padding-inline: 4px;
+  font-size: 11px;
+}
+
+.composer-live-status {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
   white-space: nowrap;
 }
 
-.context-trigger:hover {
-  background: var(--surface-hover);
-  color: var(--text);
+@keyframes composer-pop-in {
+  from { opacity: 0; transform: translateY(5px) scale(.985); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
 }
 
-.context-control.is-compacting .context-trigger {
-  color: var(--accent);
+@keyframes composer-menu-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
 }
 
-.context-popover {
-  position: absolute;
-  right: 0;
-  bottom: 43px;
-  z-index: 31;
-  width: min(265px, calc(100vw - 34px));
-  border: 1px solid var(--border);
-  border-radius: 14px;
-  padding: 10px;
-  background: var(--surface-raised);
-  box-shadow: var(--shadow);
-  color: var(--text);
-}
+@media (prefers-reduced-motion: no-preference) {
+  .composer-minimal .context-popover,
+  .composer-minimal .model-popover {
+    animation: composer-pop-in 160ms cubic-bezier(.2,.8,.2,1);
+    transform-origin: bottom right;
+  }
 
-.context-popover > header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 0 4px 2px;
-  color: var(--muted);
-  font-size: 11px;
-}
-
-.context-popover dl {
-  display: grid;
-  gap: 9px;
-  margin: 10px 4px 14px;
-  font-size: 12px;
-}
-
-.context-popover dl > div {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.context-popover dt {
-  color: var(--muted);
-}
-
-.context-popover dd {
-  margin: 0;
-  font-variant-numeric: tabular-nums;
-}
-
-.context-popover p {
-  margin: 0 4px 12px;
-  color: var(--muted);
-  font-size: 11px;
-  line-height: 1.5;
-}
-
-.composer-minimal .context-popover .compact-button {
-  width: 100%;
-  justify-content: flex-start;
-  gap: 8px;
-  min-height: 40px;
-  padding: 8px;
-  border-radius: 9px;
-  font-size: 12px;
-  background: var(--surface);
-}
-
-.composer-actions {
-  position: relative;
-  flex-shrink: 0;
-}
-
-.composer-actions-trigger {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 36px;
-  min-height: 36px;
-  padding: 6px;
-  border-radius: 12px;
-  color: var(--muted);
-  background: transparent;
-}
-
-.composer-actions-trigger:hover {
-  color: var(--text);
-  background: var(--surface-hover);
-}
-
-.composer-actions-menu {
-  position: absolute;
-  right: 0;
-  bottom: 43px;
-  z-index: 31;
-  width: min(285px, calc(100vw - 34px));
-  padding: 6px;
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  background: var(--surface-raised);
-  box-shadow: var(--shadow);
-}
-
-.composer-actions-menu > button {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  width: 100%;
-  min-height: 42px;
-  padding: 8px 10px;
-  border-radius: 8px;
-  background: transparent;
-  text-align: left;
-  font-size: 12px;
-}
-
-.composer-actions-menu > button:hover:not(:disabled) {
-  background: var(--surface-hover);
-}
-
-.composer-micro-status {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  min-width: 0;
-  margin: 0 auto 0 6px;
-  color: var(--muted);
-  font-size: 11px;
+  .composer-minimal .composer-actions-menu {
+    animation: composer-menu-in 120ms ease;
+  }
 }
 
 @media (max-width: 700px) {
-  .composer-minimal .composer-bottom {
-    padding-top: 0;
-    min-height: 44px;
+  .composer-wrap.composer-minimal {
+    width: calc(100% - 16px);
+    padding-bottom: calc(6px + env(safe-area-inset-bottom));
   }
 
-  .composer-minimal .context-control {
-    position: static;
+  .composer-minimal .composer {
+    padding: 7px 7px 3px;
+    border-radius: 19px;
   }
 
-  .composer-minimal .context-trigger,
-  .composer-minimal .composer-actions-trigger,
-  .composer-minimal .composer-tools .icon-button,
-  .composer-minimal .send-button {
-    min-height: 44px;
-  }
-
-  .composer-minimal .composer-tools .icon-button,
-  .composer-minimal .composer-actions-trigger,
-  .composer-minimal .context-trigger,
-  .composer-minimal .send-button {
-    min-width: 44px;
-  }
-
-  .composer-minimal .send-button {
-    width: 40px;
-    height: 40px;
-  }
-
-  .composer-minimal .context-popover,
-  .composer-minimal .composer-actions-menu {
-    bottom: 47px;
-  }
-
-  .composer-minimal .effort-setting select {
-    min-height: 44px;
+  .composer-minimal .composer textarea {
     font-size: 16px;
+    min-height: 30px;
+    line-height: 1.5;
+    padding: 2px 6px 4px;
   }
 
-  .composer-minimal .model-choice,
-  .composer-minimal .composer-actions-menu > button,
-  .composer-minimal .context-popover .compact-button {
-    min-height: 44px;
+  .composer-minimal .model-setting select {
+    font-size: 16px;
   }
 }

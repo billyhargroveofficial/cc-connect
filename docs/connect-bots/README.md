@@ -14,8 +14,8 @@ Telegram adapters. The original Go module and upstream attribution are retained.
 
 - Create persistent bots with independent folders and a shared coordinator.
 - Use Codex through a dedicated app-server, or Pi with a configured DeepSeek provider.
-- Change the model and effort from the conversation. Codex goals, ultra and
-  subagents appear when the installed runtime supports them.
+- Change the model, effort and supported Codex service tier from the conversation.
+  Codex goals, ultra and subagents appear when the installed runtime supports them.
 - See the provider's context usage and start context compaction with its actual
   progress shown in the conversation.
 - Inspect searches, tool calls, reasoning summaries and outputs. Completed
@@ -27,8 +27,12 @@ Telegram adapters. The original Go module and upstream attribution are retained.
   optionally connect a bot to Telegram. Telegram and the web app use the same bot conversation.
 - Run daily temporary-file inventory with a junior model.
 
-Open “Ещё действия” (⋯) → “Модель и рассуждение” beneath the composer to change
-the model or effort. For manual compaction, open the context indicator and choose
+Open “Ещё действия” (⋯) → “Настройки модели” in the composer's toolbar to change
+the model, effort or service tier. The tier selector appears when the selected
+Codex model advertises tiers in its live catalog; names and descriptions come
+from the app-server. “Авто” clears the saved tier override and lets the runtime
+choose. These settings apply to subsequent turns in the same conversation.
+For manual compaction, open the context indicator in that toolbar and choose
 “Сжать контекст” while the bot is idle.
 
 One installation belongs to one owner. Bots run with that owner's local harness
@@ -78,8 +82,8 @@ this editor.
 
 Switching between Codex and Pi retains the visible product journal and transfers
 recent conversation context. Each harness keeps its own native thread ID; it
-does not gain the other harness's hidden state. The selected model and effort
-apply to the next turn.
+does not gain the other harness's hidden state. The selected model, effort and
+supported service tier apply to the next turn.
 
 Output tokens per second are an estimate where the provider does not report
 generation timing. Thinking blocks contain reasoning exposed by the provider.

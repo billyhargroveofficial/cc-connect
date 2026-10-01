@@ -91,6 +91,11 @@ export default function ModelPicker({
   );
   const efforts = current?.efforts || [];
   const confirmedEffort = efforts.includes(bot.effort);
+  const serviceTiers = current?.serviceTiers || [];
+  const selectedTier = serviceTiers.find((tier) => tier.id === bot.serviceTier);
+  const autoTier = serviceTiers.find((tier) => tier.id === current?.defaultServiceTier);
+  const tierName = selectedTier?.name || bot.serviceTier || "Авто";
+  const showServiceTier = serviceTiers.length > 0 || (bot.backend === "codex" && !!bot.serviceTier);
   async function choose(model: Model) {
     const backend = capabilities?.backends[model.backend];
     if (!backend?.available || disabled || saving) return;
@@ -106,6 +111,9 @@ export default function ModelPicker({
           backend: model.backend,
           model: model.id,
           effort,
+          serviceTier: model.serviceTiers?.some((tier) => tier.id === bot.serviceTier)
+            ? bot.serviceTier
+            : "",
         }),
       );
       close();
@@ -120,7 +128,17 @@ export default function ModelPicker({
     setSaving(true);
     try {
       onBotChange(await api.updateBot(bot.id, { effort }));
-      close();
+    } catch (error) {
+      onError(errorMessage(error));
+    } finally {
+      setSaving(false);
+    }
+  }
+  async function changeServiceTier(serviceTier: string) {
+    if (disabled || saving || (serviceTier && !serviceTiers.some((tier) => tier.id === serviceTier))) return;
+    setSaving(true);
+    try {
+      onBotChange(await api.updateBot(bot.id, { serviceTier }));
     } catch (error) {
       onError(errorMessage(error));
     } finally {
@@ -137,16 +155,16 @@ export default function ModelPicker({
         aria-expanded={open}
         aria-haspopup="dialog"
         aria-controls={open ? popoverId : undefined}
-        aria-label={`Модель: ${current?.name || bot.model || bot.backend}${confirmedEffort ? `. Уровень рассуждения: ${bot.effort}` : ""}`}
+        aria-label={`Модель: ${current?.name || bot.model || bot.backend}${confirmedEffort ? `. Уровень рассуждения: ${bot.effort}` : ""}${showServiceTier ? `. Service tier: ${tierName}` : ""}`}
         title={
           disabled
             ? "Модель можно сменить после завершения хода"
-            : "Модель и уровень рассуждения"
+            : "Модель, effort и service tier"
         }
       >
         <Cpu size={16} />
         <span className="model-trigger-label">
-          <strong>Модель и рассуждение</strong>
+          <strong>Настройки модели</strong>
           <small>
             <span className="model-current-name">{current?.name || bot.model || bot.backend}</span>
             {confirmedEffort && (
@@ -155,6 +173,7 @@ export default function ModelPicker({
                 {bot.effort === "ultra" ? "Ultra" : bot.effort}
               </span>
             )}
+            {showServiceTier && <span className="model-current-tier">{tierName}</span>}
           </small>
         </span>
         <ChevronDown size={12} />
@@ -174,10 +193,10 @@ export default function ModelPicker({
             id={popoverId}
             role="dialog"
             aria-modal="true"
-            aria-label="Модель и уровень рассуждения"
+            aria-label="Модель, effort и service tier"
           >
             <header>
-              <span>Модель и рассуждение</span>
+              <span>Модель</span>
               <button
                 className="icon-button"
                 onClick={close}
@@ -186,9 +205,10 @@ export default function ModelPicker({
                 <X size={15} />
               </button>
             </header>
+            {(efforts.length > 0 || showServiceTier) && <div className={`model-settings ${efforts.length && showServiceTier ? "has-two-settings" : ""}`}>
             {efforts.length > 0 && (
-              <label className="effort-setting">
-                <span>Уровень рассуждения</span>
+              <label className="model-setting">
+                <span>Effort</span>
                 <select
                   aria-label="Уровень рассуждения"
                   value={confirmedEffort ? bot.effort : ""}
@@ -204,6 +224,23 @@ export default function ModelPicker({
                 </select>
               </label>
             )}
+            {showServiceTier && (
+              <label className="model-setting">
+                <span>Service tier</span>
+                <select
+                  aria-label="Service tier"
+                  value={bot.serviceTier || ""}
+                  title={selectedTier?.description || (autoTier ? `Авто: ${autoTier.name}. ${autoTier.description}` : "Выбор сервера для следующего ответа")}
+                  onChange={(event) => void changeServiceTier(event.target.value)}
+                  disabled={disabled || saving}
+                >
+                  <option value="">Авто</option>
+                  {bot.serviceTier && !selectedTier && <option value={bot.serviceTier} disabled>{bot.serviceTier} (недоступно)</option>}
+                  {serviceTiers.map((tier) => <option key={tier.id} value={tier.id} title={tier.description}>{tier.name || tier.id}</option>)}
+                </select>
+              </label>
+            )}
+            </div>}
             {[
               "codex",
               "pi",
@@ -241,17 +278,7 @@ export default function ModelPicker({
                       onClick={() => void choose(model)}
                     >
                       <span>
-                        <strong>{model.name || model.id}</strong>
-                        <small>
-                          {model.efforts.includes("ultra") ? (
-                            <>
-                              <Zap size={11} />
-                              Ultra
-                            </>
-                          ) : (
-                            model.id
-                          )}
-                        </small>
+                        <strong>{model.name || model.id}{model.efforts.includes("ultra") && <Zap size={11} aria-label="Поддерживает Ultra" />}</strong>
                       </span>
                       {bot.backend === model.backend &&
                         bot.model === model.id && <Check size={16} />}

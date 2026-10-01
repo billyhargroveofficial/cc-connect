@@ -170,7 +170,8 @@ svg {
   background: transparent;
   transition:
     background 0.15s,
-    color 0.15s;
+    color 0.15s,
+    transform 0.15s cubic-bezier(.2,.8,.2,1);
 }
 .icon-button:hover {
   background: var(--surface-hover);
@@ -178,6 +179,9 @@ svg {
 }
 .icon-button:disabled {
   opacity: 0.4;
+}
+.icon-button:active:not(:disabled) {
+  transform: scale(.93);
 }
 .primary-button,
 .secondary-button {
@@ -735,6 +739,11 @@ svg {
   flex-direction: column;
   position: relative;
   min-width: 0;
+  animation: chat-room-enter 180ms cubic-bezier(.2,.8,.2,1) both;
+}
+@keyframes chat-room-enter {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 .chat-header {
   height: 61px;
@@ -980,7 +989,11 @@ svg {
   border-radius: 50%;
   background: var(--text);
   color: var(--bg);
-  transition: opacity 0.15s;
+  transition:
+    opacity 0.15s,
+    transform 0.15s cubic-bezier(.2,.8,.2,1),
+    background 0.15s,
+    color 0.15s;
 }
 .send-button:hover {
   opacity: 0.8;
@@ -988,6 +1001,9 @@ svg {
 .send-button:disabled {
   background: var(--surface-hover);
   color: var(--faint);
+}
+.send-button:active:not(:disabled) {
+  transform: scale(.9);
 }
 .stop-button {
   background: var(--text);
@@ -1548,9 +1564,9 @@ svg {
     font-size: 13px;
   }
   .chat-header {
-    height: 59px;
-    padding: 0 14px 0 8px;
-    gap: 8px;
+    height: 54px;
+    padding: 0 10px 0 5px;
+    gap: 6px;
   }
   .mobile-back {
     display: inline-flex;
@@ -1603,21 +1619,21 @@ svg {
     display: none;
   }
   .chat-scroll {
-    padding: 14px 16px 20px;
+    padding: 10px 14px 12px;
     scrollbar-gutter: auto;
   }
   .composer-wrap {
-    width: calc(100% - 26px);
-    padding-bottom: calc(12px + env(safe-area-inset-bottom));
+    width: calc(100% - 20px);
+    padding-bottom: calc(8px + env(safe-area-inset-bottom));
   }
   .composer {
-    border-radius: 26px;
-    padding: 9px 9px 7px;
+    border-radius: 23px;
+    padding: 7px 8px 6px;
   }
   .composer textarea {
     font-size: 16px;
-    line-height: 1.55;
-    padding: 6px 6px 9px;
+    line-height: 1.45;
+    padding: 5px 6px 6px;
   }
   .upload-chips {
     row-gap: 15px;

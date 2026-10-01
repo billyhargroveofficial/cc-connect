@@ -24,6 +24,7 @@ var (
 	ErrInvalid     = errors.New("invalid request")
 	botIDPattern   = regexp.MustCompile(`^bot_[a-f0-9]{32}$`)
 	envNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+	tierIDPattern  = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,63}$`)
 )
 
 type diskState struct {
@@ -307,6 +308,8 @@ func (s *Store) PatchBot(id string, fields map[string]json.RawMessage) (Bot, err
 				target = &bot.Model
 			case "effort":
 				target = &bot.Effort
+			case "serviceTier":
+				target = &bot.ServiceTier
 			case "disabledSkills":
 				target = &bot.DisabledSkills
 			case "telegram":
@@ -341,6 +344,9 @@ func (s *Store) PatchBot(id string, fields map[string]json.RawMessage) (Bot, err
 			}
 			if _, explicit := fields["effort"]; !explicit {
 				bot.Effort = ""
+			}
+			if _, explicit := fields["serviceTier"]; !explicit {
+				bot.ServiceTier = ""
 			}
 			applyBotDefaults(bot)
 		}
@@ -558,7 +564,7 @@ func (s *Store) recoverInterrupted() error {
 		if _, err := s.UpdateBot(bot.ID, func(bot *Bot) error { bot.Status = "interrupted"; return nil }); err != nil {
 			return err
 		}
-		if _, err := s.AppendEvent(bot.ID, turnID, "turn", map[string]any{"status": "interrupted", "backend": bot.Backend, "model": bot.Model, "effort": bot.Effort, "error": "The server restarted. This turn was interrupted and was not resubmitted."}); err != nil {
+		if _, err := s.AppendEvent(bot.ID, turnID, "turn", map[string]any{"status": "interrupted", "backend": bot.Backend, "model": bot.Model, "effort": bot.Effort, "serviceTier": bot.ServiceTier, "error": "The server restarted. This turn was interrupted and was not resubmitted."}); err != nil {
 			return err
 		}
 	}
@@ -582,6 +588,9 @@ func (s *Store) validateBotLocked(bot Bot) error {
 	}
 	if bot.Model == "" || len(bot.Model) > 256 || len(bot.Effort) > 32 {
 		return fmt.Errorf("%w: invalid model settings", ErrInvalid)
+	}
+	if bot.ServiceTier != "" && (bot.Backend != "codex" || !tierIDPattern.MatchString(bot.ServiceTier)) {
+		return fmt.Errorf("%w: invalid Codex service tier", ErrInvalid)
 	}
 	if bot.Chief && bot.Status != "archived" {
 		for _, existing := range s.bots {

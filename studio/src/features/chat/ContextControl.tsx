@@ -43,7 +43,7 @@ export default function ContextControl({ state, busy, onError }: {
       onClick={() => setOpen(!open)}
     >
       {compacting || requesting ? <LoaderCircle size={13} className="spin" /> : <Gauge size={13} />}
-      <span>{compacting ? "Сжимаем…" : requesting ? "Запрос…" : percent === undefined ? "—" : `${context?.estimated ? "≈ " : ""}${Math.round(percent)}%`}</span>
+      <span>{compacting || requesting ? "…" : percent === undefined ? "—" : `${context?.estimated ? "≈ " : ""}${Math.round(percent)}%`}</span>
     </button>
     {open && <>
       <button className="popover-backdrop" tabIndex={-1} onClick={close} aria-label="Закрыть контекст" />

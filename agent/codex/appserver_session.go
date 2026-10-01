@@ -45,6 +45,7 @@ type threadStartResponse struct {
 	Cwd             string  `json:"cwd"`
 	Model           string  `json:"model"`
 	ReasoningEffort *string `json:"reasoningEffort"`
+	ServiceTier     *string `json:"serviceTier"`
 	Thread          struct {
 		ID string `json:"id"`
 	} `json:"thread"`
@@ -54,6 +55,7 @@ type threadResumeResponse struct {
 	Cwd             string  `json:"cwd"`
 	Model           string  `json:"model"`
 	ReasoningEffort *string `json:"reasoningEffort"`
+	ServiceTier     *string `json:"serviceTier"`
 	Thread          struct {
 		ID string `json:"id"`
 	} `json:"thread"`
@@ -144,17 +146,19 @@ type appServerRequestUserInputAnswer struct {
 }
 
 type appServerSession struct {
-	url               string
-	workDir           string
-	model             string
-	effort            string
-	mode              string
-	baseURL           string
-	modelProvider     string
-	extraEnv          []string
-	codexHome         string
-	promptPreamble    string
-	attachedTransport bool
+	url                   string
+	workDir               string
+	model                 string
+	effort                string
+	serviceTier           string
+	serviceTierConfigured bool
+	mode                  string
+	baseURL               string
+	modelProvider         string
+	extraEnv              []string
+	codexHome             string
+	promptPreamble        string
+	attachedTransport     bool
 
 	events chan core.Event
 
@@ -228,6 +232,9 @@ func newAppServerSession(ctx context.Context, url, workDir, model, effort, mode,
 	}
 	if len(nativeOptions) != 0 {
 		s.native = nativeOptions[0]
+		if s.native.serviceTier != nil {
+			s.serviceTier, s.serviceTierConfigured = *s.native.serviceTier, true
+		}
 	}
 	s.alive.Store(true)
 
@@ -380,9 +387,16 @@ func (s *appServerSession) ensureThread(resumeID string) error {
 		if resp.Thread.ID == "" {
 			return fmt.Errorf("codex app-server resume returned empty thread id")
 		}
-		s.applyThreadRuntimeState(resp.Cwd, resp.Model, resp.ReasoningEffort)
+		s.applyThreadRuntimeState(resp.Cwd, resp.Model, resp.ReasoningEffort, resp.ServiceTier)
 		s.threadID.Store(resp.Thread.ID)
 		s.flushNativeThreadStart(resp.Thread.ID)
+		if s.native.serviceTier != nil && *s.native.serviceTier == "" {
+			// A resume with an omitted/null override can retain the saved tier.
+			// The settings method explicitly distinguishes clearing from omission.
+			if err := s.RPC(s.ctx, "thread/settings/update", map[string]any{"threadId": resp.Thread.ID, "serviceTier": nil}, nil); err != nil {
+				return fmt.Errorf("codex app-server clear service tier: %w", err)
+			}
+		}
 		slog.Info("codex app-server thread resumed", "thread_id", resp.Thread.ID)
 		return nil
 	}
@@ -398,7 +412,7 @@ func (s *appServerSession) ensureThread(resumeID string) error {
 	if resp.Thread.ID == "" {
 		return fmt.Errorf("codex app-server start returned empty thread id")
 	}
-	s.applyThreadRuntimeState(resp.Cwd, resp.Model, resp.ReasoningEffort)
+	s.applyThreadRuntimeState(resp.Cwd, resp.Model, resp.ReasoningEffort, resp.ServiceTier)
 	s.threadID.Store(resp.Thread.ID)
 	s.flushNativeThreadStart(resp.Thread.ID)
 	slog.Info("codex app-server thread started", "thread_id", resp.Thread.ID)
@@ -430,6 +444,13 @@ func (s *appServerSession) threadRequestParams() map[string]any {
 	if model := s.GetModel(); model != "" {
 		params["model"] = model
 	}
+	if tier, configured := s.getServiceTier(); configured {
+		if tier == "" {
+			params["serviceTier"] = nil
+		} else {
+			params["serviceTier"] = tier
+		}
+	}
 	if approval, sandbox := appServerModeSettings(s.mode); approval != "" {
 		params["approvalPolicy"] = approval
 		if sandbox != "" {
@@ -450,7 +471,7 @@ func appServerModeSettings(mode string) (approval string, sandbox string) {
 	}
 }
 
-func (s *appServerSession) applyThreadRuntimeState(workDir, model string, effort *string) {
+func (s *appServerSession) applyThreadRuntimeState(workDir, model string, effort, serviceTier *string) {
 	s.runtimeMu.Lock()
 	defer s.runtimeMu.Unlock()
 	if dir := strings.TrimSpace(workDir); dir != "" {
@@ -460,6 +481,11 @@ func (s *appServerSession) applyThreadRuntimeState(workDir, model string, effort
 		s.model = m
 	}
 	s.effort = normalizeRuntimeReasoningEffort(stringValue(effort))
+	// Older servers may omit this field. Retain an explicit requested tier in
+	// that case; a settings notification/RPC can still clear it with null.
+	if serviceTier != nil {
+		s.serviceTier = *serviceTier
+	}
 }
 
 func (s *appServerSession) refreshUsage(ctx context.Context) error {
@@ -560,6 +586,9 @@ func (s *appServerSession) Send(prompt string, messageID string, images []core.I
 	}
 	if effort := s.GetReasoningEffort(); effort != "" {
 		params["effort"] = effort
+	}
+	if tier, configured := s.getServiceTier(); configured && tier != "" {
+		params["serviceTier"] = tier
 	}
 	if approval, _ := appServerModeSettings(s.mode); approval != "" {
 		params["approvalPolicy"] = approval
@@ -1016,6 +1045,12 @@ func (s *appServerSession) GetReasoningEffort() string {
 	return strings.TrimSpace(s.effort)
 }
 
+func (s *appServerSession) getServiceTier() (string, bool) {
+	s.runtimeMu.RLock()
+	defer s.runtimeMu.RUnlock()
+	return s.serviceTier, s.serviceTierConfigured
+}
+
 func (s *appServerSession) GetUsage(ctx context.Context) (*core.UsageReport, error) {
 	if err := s.refreshUsage(ctx); err != nil {
 		if cached := s.cachedUsage(); cached != nil {
@@ -1244,13 +1279,22 @@ func (s *appServerSession) handleNotification(method string, paramsRaw json.RawM
 		var notif struct {
 			ThreadID       string `json:"threadId"`
 			ThreadSettings struct {
-				Cwd    string  `json:"cwd"`
-				Model  string  `json:"model"`
-				Effort *string `json:"effort"`
+				Cwd         string          `json:"cwd"`
+				Model       string          `json:"model"`
+				Effort      *string         `json:"effort"`
+				ServiceTier json.RawMessage `json:"serviceTier"`
 			} `json:"threadSettings"`
 		}
 		if err := json.Unmarshal(paramsRaw, &notif); err == nil && s.isCurrentThread(notif.ThreadID) {
-			s.applyThreadRuntimeState(notif.ThreadSettings.Cwd, notif.ThreadSettings.Model, notif.ThreadSettings.Effort)
+			s.applyThreadRuntimeState(notif.ThreadSettings.Cwd, notif.ThreadSettings.Model, notif.ThreadSettings.Effort, nil)
+			if len(notif.ThreadSettings.ServiceTier) != 0 {
+				var tier *string
+				if json.Unmarshal(notif.ThreadSettings.ServiceTier, &tier) == nil {
+					s.runtimeMu.Lock()
+					s.serviceTier = stringValue(tier)
+					s.runtimeMu.Unlock()
+				}
+			}
 		}
 	case "turn/started":
 		var notif turnNotification

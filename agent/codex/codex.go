@@ -69,6 +69,15 @@ func New(opts map[string]any) (core.Agent, error) {
 	developerInstructions, _ := opts["developer_instructions"].(string)
 	nativeEvents, _ := opts["native_events"].(bool)
 	appServerConfig, _ := opts["app_server_config"].(map[string]any)
+	var serviceTier *string
+	if value, configured := opts["service_tier"]; configured {
+		tier, ok := value.(string)
+		if !ok {
+			return nil, fmt.Errorf("codex: service_tier must be a string")
+		}
+		tier = strings.TrimSpace(tier)
+		serviceTier = &tier
+	}
 	if _, err := json.Marshal(appServerConfig); err != nil {
 		return nil, fmt.Errorf("codex: invalid app_server_config: %w", err)
 	}
@@ -116,6 +125,7 @@ func New(opts map[string]any) (core.Agent, error) {
 		appServerNative: appServerNativeOptions{
 			enabled:               nativeEvents,
 			config:                cloneAppServerMap(appServerConfig),
+			serviceTier:           serviceTier,
 			developerInstructions: strings.TrimSpace(developerInstructions),
 		},
 	}, nil

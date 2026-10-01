@@ -16,6 +16,7 @@ import (
 type appServerNativeOptions struct {
 	enabled               bool
 	config                map[string]any
+	serviceTier           *string
 	developerInstructions string
 	observer              core.NativeEventHandler
 	tools                 []map[string]any
@@ -125,10 +126,11 @@ func (s *appServerSession) RPC(ctx context.Context, method string, params any, r
 		// authoritative thread/settings/updated notification.
 		data, _ := json.Marshal(params)
 		var update struct {
-			ThreadID string  `json:"threadId"`
-			Cwd      *string `json:"cwd"`
-			Model    *string `json:"model"`
-			Effort   *string `json:"effort"`
+			ThreadID    string          `json:"threadId"`
+			Cwd         *string         `json:"cwd"`
+			Model       *string         `json:"model"`
+			Effort      *string         `json:"effort"`
+			ServiceTier json.RawMessage `json:"serviceTier"`
 		}
 		if json.Unmarshal(data, &update) == nil && s.isCurrentThread(update.ThreadID) {
 			s.runtimeMu.Lock()
@@ -140,6 +142,13 @@ func (s *appServerSession) RPC(ctx context.Context, method string, params any, r
 			}
 			if update.Effort != nil {
 				s.effort = normalizeRuntimeReasoningEffort(*update.Effort)
+			}
+			if len(update.ServiceTier) != 0 {
+				var tier *string
+				if json.Unmarshal(update.ServiceTier, &tier) == nil {
+					s.serviceTier = stringValue(tier)
+					s.serviceTierConfigured = true
+				}
 			}
 			s.runtimeMu.Unlock()
 		}

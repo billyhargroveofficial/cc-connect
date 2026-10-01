@@ -67,6 +67,7 @@ export interface TranscriptTurn {
   backend: string;
   model: string;
   effort: string;
+  serviceTier: string;
   outputTokens?: number;
   tokensPerSecond?: number;
   generationMs?: number;
@@ -133,7 +134,7 @@ function normalizedStatus(value: unknown): string {
 
 function newTurn(id: string, time: string, status = 'running'): TranscriptTurn {
   return {
-    id, status, time, backend: '', model: '', effort: '',
+    id, status, time, backend: '', model: '', effort: '', serviceTier: '',
     users: [], responses: [], activities: [], requests: [], notices: [], events: [],
   };
 }
@@ -868,6 +869,7 @@ export function buildTranscript(events: JournalEvent[], botId?: string): Transcr
         turn.status = normalizedStatus(data.status) || turn.status;
         turn.backend = string(data.backend) || turn.backend; turn.model = string(data.model) || turn.model;
         turn.effort = string(data.effort) || turn.effort;
+        if (typeof data.serviceTier === 'string') turn.serviceTier = data.serviceTier;
         turn.outputTokens = finiteNumber(data.outputTokens) ?? turn.outputTokens;
         turn.generationMs = finiteNumber(data.generationMs) ?? turn.generationMs;
         turn.tokensPerSecond = finiteNumber(data.tokensPerSecond) ?? turn.tokensPerSecond;

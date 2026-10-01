@@ -25,6 +25,7 @@ type Bot struct {
 	Backend        string            `json:"backend"`
 	Model          string            `json:"model"`
 	Effort         string            `json:"effort"`
+	ServiceTier    string            `json:"serviceTier"`
 	WorkDir        string            `json:"workDir"`
 	Status         string            `json:"status"`
 	Threads        map[string]string `json:"threads"`
@@ -58,10 +59,20 @@ type MessageRequest struct {
 }
 
 type Model struct {
-	ID      string   `json:"id"`
-	Name    string   `json:"name"`
-	Backend string   `json:"backend"`
-	Efforts []string `json:"efforts"`
+	ID                 string        `json:"id"`
+	Name               string        `json:"name"`
+	Backend            string        `json:"backend"`
+	Efforts            []string      `json:"efforts"`
+	ServiceTiers       []ServiceTier `json:"serviceTiers"`
+	DefaultServiceTier string        `json:"defaultServiceTier,omitempty"`
+}
+
+// ServiceTier options come from the selected harness's model catalog. An empty
+// bot selection leaves the service tier to that harness's automatic selection.
+type ServiceTier struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
 }
 
 type Capabilities struct {

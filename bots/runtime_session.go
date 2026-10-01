@@ -40,6 +40,9 @@ func (r *Runtime) agentOptions(bot Bot) (map[string]any, string, error) {
 			return nil, "", err
 		}
 		opts["reasoning_effort"], opts["developer_instructions"] = bot.Effort, instructions
+		// Always include the option, including the empty automatic selection, so
+		// resuming a thread can clear a previously explicit service tier.
+		opts["service_tier"] = bot.ServiceTier
 		// Native shared-user and cwd AGENTS remain the harness's responsibility.
 		if opts["mode"] == nil {
 			opts["mode"] = "yolo"
@@ -157,6 +160,28 @@ func (r *Runtime) ensureSession(ctx context.Context, s *botRuntime, bot Bot) (co
 	s.mu.Lock()
 	if s.session != nil && s.session.Alive() && s.signature == signature && s.configSignatures[bot.Backend] == configSignature {
 		session := s.session
+		s.mu.Unlock()
+		return session, nil
+	}
+	if s.session != nil && s.session.Alive() && s.backend == "codex" && bot.Backend == "codex" &&
+		s.configSignatures[bot.Backend] == configSignature && s.bot.Model == bot.Model && s.bot.Effort == bot.Effort && s.bot.ServiceTier != bot.ServiceTier {
+		// A tier-only change is a native setting update on this loaded thread.
+		// Preserve its context, goal and adapter instead of reconnecting it.
+		session := s.session
+		s.mu.Unlock()
+		rpc, ok := session.(core.AgentRPCSession)
+		if !ok {
+			return nil, fmt.Errorf("Codex service tier control is unavailable")
+		}
+		var tier any
+		if bot.ServiceTier != "" {
+			tier = bot.ServiceTier
+		}
+		if err := rpc.RPC(ctx, "thread/settings/update", map[string]any{"threadId": session.CurrentSessionID(), "serviceTier": tier}, nil); err != nil {
+			return nil, fmt.Errorf("update Codex service tier: %w", err)
+		}
+		s.mu.Lock()
+		s.bot, s.signature = bot, signature
 		s.mu.Unlock()
 		return session, nil
 	}
@@ -419,7 +444,7 @@ func sessionConfigSignature(bot Bot, options map[string]any) string {
 	config := map[string]any{}
 	for key, value := range options {
 		switch key {
-		case "model", "reasoning_effort", "thinking", "app_server_url":
+		case "model", "reasoning_effort", "service_tier", "thinking", "app_server_url":
 			continue
 		}
 		config[key] = value

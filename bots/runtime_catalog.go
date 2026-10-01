@@ -253,8 +253,18 @@ func (r *Runtime) botCatalogSession(ctx context.Context, bot Bot) (catalogLease,
 		s.mu.Lock()
 		session, backend := s.session, s.backend
 		busy := s.current != nil
+		pendingTier := backend == "codex" && s.bot.Model == bot.Model && s.bot.Effort == bot.Effort && s.bot.ServiceTier != bot.ServiceTier
 		s.mu.Unlock()
 		if session != nil && session.Alive() && backend == bot.Backend {
+			if pendingTier {
+				// An idle tier edit retained this adapter. Apply it before a goal
+				// resume or control request can use the loaded native thread.
+				s.lifecycle.Unlock()
+				if _, err := r.ensureSession(ctx, s, bot); err != nil {
+					return catalogLease{}, err
+				}
+				continue
+			}
 			rpc, ok := session.(core.AgentRPCSession)
 			if !ok {
 				s.lifecycle.Unlock()
@@ -336,6 +346,8 @@ func codexCatalog(ctx context.Context, rpc core.AgentRPCSession) ([]Model, error
 				SupportedReasoningEfforts []struct {
 					ReasoningEffort string `json:"reasoningEffort"`
 				} `json:"supportedReasoningEfforts"`
+				ServiceTiers       []ServiceTier `json:"serviceTiers"`
+				DefaultServiceTier string        `json:"defaultServiceTier"`
 			} `json:"data"`
 			NextCursor string `json:"nextCursor"`
 		}
@@ -348,11 +360,20 @@ func codexCatalog(ctx context.Context, rpc core.AgentRPCSession) ([]Model, error
 				continue
 			}
 			seen["model:"+id] = true
-			model := Model{ID: id, Name: catalogText(item.DisplayName, item.Name, id), Backend: "codex", Efforts: []string{}}
+			model := Model{ID: id, Name: catalogText(item.DisplayName, item.Name, id), Backend: "codex", Efforts: []string{}, ServiceTiers: []ServiceTier{}, DefaultServiceTier: item.DefaultServiceTier}
 			for _, effort := range item.SupportedReasoningEfforts {
 				if effort.ReasoningEffort != "" {
 					model.Efforts = append(model.Efforts, effort.ReasoningEffort)
 				}
+			}
+			seenTiers := make(map[string]bool)
+			for _, tier := range item.ServiceTiers {
+				if tier.ID == "" || seenTiers[tier.ID] {
+					continue
+				}
+				seenTiers[tier.ID] = true
+				tier.Name = catalogText(tier.Name, tier.ID)
+				model.ServiceTiers = append(model.ServiceTiers, tier)
 			}
 			models = append(models, model)
 		}
@@ -403,7 +424,7 @@ func piCatalog(ctx context.Context, rpc core.AgentRPCSession) ([]Model, error) {
 			continue
 		}
 		seen[id] = true
-		model := Model{ID: id, Name: catalogText(item.Name, item.ID), Backend: "pi", Efforts: []string{}}
+		model := Model{ID: id, Name: catalogText(item.Name, item.ID), Backend: "pi", Efforts: []string{}, ServiceTiers: []ServiceTier{}}
 		if stateErr == nil && levelsErr == nil && state.Model != nil && state.Model.Provider == item.Provider && state.Model.ID == item.ID {
 			model.Efforts = append(model.Efforts, levels.Levels...)
 		}

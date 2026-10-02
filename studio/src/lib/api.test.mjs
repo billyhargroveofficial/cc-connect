@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { api, accountURL, fileURL, nodeBinaryURL, onApiAccountChanged, setApiAccount, setApiNode } from './api.ts';
+import { api, accountURL, fileURL, nodeBinaryURL, onApiAccountChanged, onSkillsChanged, setApiAccount, setApiNode } from './api.ts';
 
 test('queue and steer use the exact native contract and captured workspace identity', async () => {
   const original = globalThis.fetch, calls = [];
@@ -22,6 +22,53 @@ test('queue and steer use the exact native contract and captured workspace ident
     assert.ok(calls.every(call => call.options.headers.get('X-Connect-Bots-Account') === 'captured-account'));
     assert.ok(calls.every(call => call.options.headers.get('X-Connect-Bots-Node') === 'captured-mac'));
   } finally { setApiAccount(null); globalThis.fetch = original; }
+});
+
+test('skill catalogs are abortable and bound explicitly while message skills remain structured', async () => {
+  const original = globalThis.fetch, calls = [];
+  const controller = new AbortController();
+  const skills = [{ id: 'project/review', name: 'review', path: '/project/review/SKILL.md' }];
+  setApiAccount('active-account'); setApiNode('active-node');
+  globalThis.fetch = async (path, options) => { calls.push({ path, options }); return new Response(JSON.stringify({ skills, status: 'queued', turnId: 'active' }), { status: 200 }); };
+  const binding = { accountId: 'captured-account', nodeId: 'captured-mac' };
+  try {
+    await api.skills('bot/a', controller.signal, binding);
+    await api.send('bot/a', 'Use this skill', [], 'queue', binding, skills);
+    assert.equal(calls[0].path, '/api/studio/bots/bot%2Fa/skills');
+    assert.equal(calls[0].options.signal, controller.signal);
+    assert.deepEqual(JSON.parse(calls[1].options.body), { text: 'Use this skill', attachments: [], mode: 'queue', skills });
+    assert.ok(calls.every(call => call.options.headers.get('X-Connect-Bots-Account') === 'captured-account'));
+    assert.ok(calls.every(call => call.options.headers.get('X-Connect-Bots-Node') === 'captured-mac'));
+  } finally { setApiAccount(null); globalThis.fetch = original; }
+});
+
+test('skill mutations publish project/global invalidation bound to their original account and node', async () => {
+  const original = globalThis.fetch, changes = [], calls = [];
+  let finish;
+  const unsubscribe = onSkillsChanged(change => changes.push(change));
+  setApiAccount('account-a'); setApiNode('mac-a');
+  globalThis.fetch = async (path, options) => { calls.push({ path, options }); return new Response('{}', { status: 200 }); };
+  try {
+    await api.createSkill('bot-a', 'project', 'content');
+    await api.createSkill(undefined, 'shared', 'content');
+    await api.saveSkillContent('/private/project/SKILL.md', 'updated', 'bot-a');
+    await api.saveSkillContent('/private/shared/SKILL.md', 'updated');
+    await api.saveDisabledSkills('bot-a', ['disabled']);
+    assert.deepEqual(changes, [
+      { accountId: 'account-a', nodeId: 'mac-a', botId: 'bot-a' }, { accountId: 'account-a', nodeId: 'mac-a' },
+      { accountId: 'account-a', nodeId: 'mac-a', botId: 'bot-a' }, { accountId: 'account-a', nodeId: 'mac-a' },
+      { accountId: 'account-a', nodeId: 'mac-a', botId: 'bot-a' },
+    ]);
+    globalThis.fetch = (_, options) => { calls.push({ options }); return new Promise(resolve => { finish = () => resolve(new Response('{}', { status: 200 })); }); };
+    const mutation = api.createSkill('bot-a', 'late', 'content');
+    setApiAccount('account-b'); setApiNode('mac-b'); finish(); await mutation;
+    assert.deepEqual(changes.at(-1), { accountId: 'account-a', nodeId: 'mac-a', botId: 'bot-a' });
+    assert.equal(calls.at(-1).options.headers.get('X-Connect-Bots-Account'), 'account-a');
+    assert.equal(calls.at(-1).options.headers.get('X-Connect-Bots-Node'), 'mac-a');
+    globalThis.fetch = async () => new Response(JSON.stringify({ error: 'Rejected' }), { status: 400 });
+    await assert.rejects(api.createSkill('bot-b', 'failed', 'content'), /Rejected/);
+    assert.equal(changes.length, 6, 'rejected mutations never advertise a changed catalog');
+  } finally { unsubscribe(); setApiAccount(null); globalThis.fetch = original; }
 });
 
 test('account APIs use same-origin cookies and explicit username/password payloads', async () => {

@@ -39,6 +39,7 @@ type RuntimeConfig struct {
 	Instructions       func(string) (string, error)
 	SessionOptions     func(string) (map[string]any, error)
 	ResolveAttachments func(string, []Attachment) ([]Attachment, error)
+	ResolveSkills      func(string, []SkillAttachment) ([]SkillAttachment, error)
 	PublishFiles       func(string, []string) ([]Attachment, error)
 	VoiceAvailable     bool
 	AgentOptions       map[string]map[string]any
@@ -271,6 +272,10 @@ func (r *Runtime) sendMessage(ctx, workCtx context.Context, id string, request M
 	}
 	s.lifecycle.Lock()
 	defer s.lifecycle.Unlock()
+	request, err = r.resolveMessageSkills(id, request)
+	if err != nil {
+		return "", err
+	}
 	return r.startMessageLocked(s, workCtx, request, nil)
 }
 
@@ -278,7 +283,7 @@ func (r *Runtime) prepareMessage(ctx context.Context, id string, request Message
 	if err := ctx.Err(); err != nil {
 		return MessageRequest{}, err
 	}
-	if strings.TrimSpace(request.Text) == "" && len(request.Attachments) == 0 {
+	if strings.TrimSpace(request.Text) == "" && len(request.Attachments) == 0 && len(request.Skills) == 0 {
 		return MessageRequest{}, fmt.Errorf("%w: message is empty", ErrInvalid)
 	}
 	if len(request.Text) > 1<<20 {
@@ -300,7 +305,7 @@ func (r *Runtime) prepareMessage(ctx context.Context, id string, request Message
 	if request.Source == "" {
 		request.Source = "web"
 	}
-	return request, nil
+	return r.resolveMessageSkills(id, request)
 }
 
 // startMessageLocked accepts only an idle bot. Delegation deliberately retains
@@ -347,7 +352,7 @@ func (r *Runtime) startMessageLocked(s *botRuntime, workCtx context.Context, req
 	r.turns[turnID] = t
 	r.mu.Unlock()
 	if _, err = r.store.AppendEvent(id, turnID, "message", map[string]any{
-		"role": "user", "content": request.Text, "attachments": publicMessageAttachments(request.Attachments), "source": request.Source,
+		"role": "user", "content": request.Text, "attachments": publicMessageAttachments(request.Attachments), "skills": cloneSkillAttachments(request.Skills), "source": request.Source,
 	}); err == nil {
 		_, err = r.store.UpdateBot(id, func(bot *Bot) error { bot.Status = "running"; return nil })
 	}

@@ -108,6 +108,15 @@ const activity = {
   text: '', input: { cmd: 'pwd' }, output: '', data: { type: 'commandExecution' },
 };
 
+test('sent user skill references remain compact named chips beside text and files', () => {
+  const message = { id: 'user', role: 'user', content: 'Review this.', attachments: [], time: '', skills: [{ id: 'shared-review', name: 'review' }, { id: 'project-writer', name: 'writer' }] };
+  const view = disclosure('Message', { botId: 'bot', message });
+  assert.equal(view.find(node => node.props?.className === 'transcript-skill-chips').props['aria-label'], 'Attached skills');
+  assert.deepEqual(view.findAll(node => node.props?.className === 'transcript-skill-chip').map(node => node.props.children[1]), ['review', 'writer']);
+  const onlySkills = disclosure('Message', { botId: 'bot', message: { ...message, content: '' } });
+  assert.equal(onlySkills.findAll(node => node.props?.className === 'transcript-skill-chip').length, 2, 'skill-only messages are visible');
+});
+
 test('tool disclosure becomes inaccessible while its exit animation retains the payload', () => {
   const view = disclosure('ActivityItem', { activity, onPermission() {} });
   assert.equal(view.panel().props['aria-hidden'], true);

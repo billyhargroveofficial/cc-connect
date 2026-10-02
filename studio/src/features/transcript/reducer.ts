@@ -15,6 +15,7 @@ export interface TranscriptMessage {
   role: string;
   content: string;
   attachments: TranscriptAttachment[];
+  skills?: { id: string; name: string }[];
   source?: string;
   artifact?: boolean;
   time: string;
@@ -338,10 +339,18 @@ function attachments(value: unknown): TranscriptAttachment[] {
 }
 
 function message(event: JournalEvent, data: RecordValue): TranscriptMessage {
+  const seen = new Set<string>();
+  const skills = array(data.skills).map(record).map(skill => ({ id: string(skill.id), name: string(skill.name) }))
+    .filter(skill => {
+      if (!skill.id || !skill.name || seen.has(skill.id)) return false;
+      seen.add(skill.id);
+      return true;
+    });
   return {
     id: `message-${event.seq}`, role: string(data.role) || 'assistant', content: string(data.content) || string(data.caption),
     attachments: attachments(data.attachments), source: string(data.source) || undefined, time: event.time, seq: event.seq,
     artifact: data.artifact === true || data.source === 'files',
+    ...(skills.length ? { skills } : {}),
   };
 }
 

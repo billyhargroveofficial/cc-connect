@@ -123,6 +123,14 @@ func TestNodeRunUsesOwnWorkspaceNativeSkillsAndLoopbackToolListener(t *testing.T
 		if skills.Code != http.StatusOK || !strings.Contains(skills.Body.String(), "shared-skill") || !strings.Contains(skills.Body.String(), "codex-skill") {
 			t.Fatal("node lost its native local skills", skills.Code, skills.Body.String())
 		}
+		if runtimeConfig.ResolveSkills == nil {
+			t.Fatal("node did not enable structured message skills")
+		}
+		skillPath := filepath.Join(codexHome, "skills", "codex-skill", "SKILL.md")
+		resolvedSkills, err := runtimeConfig.ResolveSkills(botID, []bots.SkillAttachment{{ID: skillPath, Name: "forged", Path: "/etc/passwd"}})
+		if err != nil || len(resolvedSkills) != 1 || resolvedSkills[0].Name != "codex-skill" || resolvedSkills[0].Path != skillPath {
+			t.Fatalf("node did not validate its native message skill: %+v %v", resolvedSkills, err)
+		}
 		for _, path := range []string{"/api/studio/login", "/api/studio/register", "/api/studio/internal/tools"} {
 			recorder := httptest.NewRecorder()
 			handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, path, nil))

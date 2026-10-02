@@ -187,6 +187,9 @@
 .composer-minimal .recording-dot { animation: none; }
 .composer-minimal .recording-state .text-button { min-height: 40px; padding-inline: 4px; font-size: 11px; }
 .composer-live-status { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.composer-skill-error { display: flex; align-items: center; gap: 8px; padding: 0 8px; color: var(--danger); font-size: 11px; }
+.composer-skill-error > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.composer-skill-error > .text-button { flex-shrink: 0; min-height: 44px; padding: 6px 4px; font-size: 11px; }
 
 .working-strip { display: flex; align-items: center; justify-content: space-between; height: 30px; padding: 0 9px; margin: 0; color: var(--muted); font-size: 11px; }
 .working-identity { display: inline-flex; align-items: center; gap: 7px; min-width: 0; }

@@ -538,6 +538,10 @@ func (s *appServerSession) storeContextUsage(usage *core.ContextUsage) {
 }
 
 func (s *appServerSession) Send(prompt string, messageID string, images []core.ImageAttachment, files []core.FileAttachment) error {
+	return s.SendWithSkills(prompt, messageID, images, files, nil)
+}
+
+func (s *appServerSession) SendWithSkills(prompt string, messageID string, images []core.ImageAttachment, files []core.FileAttachment, skills []core.SkillAttachment) error {
 	if !s.alive.Load() {
 		return fmt.Errorf("session is closed")
 	}
@@ -564,7 +568,7 @@ func (s *appServerSession) Send(prompt string, messageID string, images []core.I
 		return fmt.Errorf("codex app-server thread id is empty")
 	}
 
-	input := make([]map[string]any, 0, 1+len(imagePaths))
+	input := make([]map[string]any, 0, 1+len(imagePaths)+len(skills))
 	input = append(input, map[string]any{
 		"type":          "text",
 		"text":          prompt,
@@ -575,6 +579,9 @@ func (s *appServerSession) Send(prompt string, messageID string, images []core.I
 			"type": "localImage",
 			"path": path,
 		})
+	}
+	for _, skill := range skills {
+		input = append(input, map[string]any{"type": "skill", "name": skill.Name, "path": skill.Path})
 	}
 
 	params := map[string]any{

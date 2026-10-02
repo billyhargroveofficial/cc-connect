@@ -5,7 +5,7 @@ import {
   LoaderCircle,
   ArrowDown,
 } from "lucide-react";
-import type { Attachment, Bot, Capabilities, Event, NodeInfo } from "../../lib/types";
+import type { Attachment, Bot, Capabilities, Event, NodeInfo, SkillReference } from "../../lib/types";
 import { api, errorMessage } from "../../lib/api";
 import { isWorking, statusLabel } from "../../lib/events";
 import Avatar from "../../components/Avatar";
@@ -16,6 +16,7 @@ import BotIsland from "./BotIsland";
 import { createChatStatusProjector } from "../../lib/chatStatus";
 import { QueuePanel, SessionStatus, WorkingStrip } from "./LiveStatus";
 import { useMessageQueue } from "./useMessageQueue";
+import { skillMentionText } from "./skillMentions";
 import {
   AnimatePresence, m, useIsPresent, useReducedMotion,
   controlMotion, fade, fadeUp, popoverMotion,
@@ -129,9 +130,11 @@ function ChatRoom({
     observer.observe(scroll.current);
     return () => observer.disconnect();
   }, []);
-  const send = useCallback(async (text: string, attachments: Attachment[]) => {
+  const send = useCallback(async (text: string, attachments: Attachment[], skills: SkillReference[] = []) => {
     const started = Date.now();
-    const response = await api.send(bot.id, text, attachments, working ? "queue" : undefined, queue.binding);
+    const nativeSkills = capabilities?.skillAttachments === true;
+    const response = await api.send(bot.id, nativeSkills ? text : skillMentionText(text, skills), attachments,
+      working ? "queue" : undefined, queue.binding, nativeSkills ? skills : []);
     if (activeScope.current !== draftScope) return;
     if (response.status === "queued") queue.refresh();
     else if (response.status !== "steered") {
@@ -139,7 +142,7 @@ function ChatRoom({
       setPending(response.turnId);
       nearBottom.current = true;
     }
-  }, [bot.id, draftScope, working, queue.binding, queue.refresh]);
+  }, [bot.id, draftScope, working, queue.binding, queue.refresh, capabilities?.skillAttachments]);
   const permission = useCallback(async (
     requestId: string,
     behavior: string,

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -417,7 +418,11 @@ func (r *Runtime) runTurn(s *botRuntime, t *runtimeTurn, request MessageRequest)
 		err = t.ctx.Err()
 	}
 	if err == nil {
-		err = session.Send(prompt, t.id, images, files)
+		if skillSession, ok := session.(core.AgentSkillSession); ok && len(request.Skills) > 0 {
+			err = skillSession.SendWithSkills(prompt, t.id, images, files, runtimeSkills(request.Skills))
+		} else {
+			err = session.Send(promptWithSkillRefs(prompt, request.Skills), t.id, images, files)
+		}
 	}
 	if err == nil {
 		err = r.acceptHandoff(s, t, session)
@@ -634,11 +639,24 @@ func (r *Runtime) recentContext(botID, currentTurn string) (string, error) {
 		if events[i].Type != "message" || events[i].TurnID == currentTurn {
 			continue
 		}
-		var message struct{ Role, Content string }
-		if json.Unmarshal(events[i].Data, &message) != nil || message.Content == "" {
+		var message struct {
+			Role, Content string
+			Skills        []SkillAttachment
+		}
+		if json.Unmarshal(events[i].Data, &message) != nil {
 			continue
 		}
-		text := message.Role + ": " + message.Content
+		content := message.Content
+		if skills := historicalSkillSummary(message.Skills); skills != "" {
+			if content != "" {
+				content += "\n"
+			}
+			content += skills
+		}
+		if content == "" {
+			continue
+		}
+		text := message.Role + ": " + content
 		if len(text) > 8_000 {
 			text = text[:8_000] + "\n[older text truncated for handoff]"
 		}
@@ -649,6 +667,31 @@ func (r *Runtime) recentContext(botID, currentTurn string) (string, error) {
 		messages[i], messages[j] = messages[j], messages[i]
 	}
 	return strings.Join(messages, "\n\n"), nil
+}
+
+// Handoffs preserve that the owner selected a workflow without replaying the
+// old selection. Paths are deliberately omitted: a historical skill may have
+// been disabled or deleted before this fresh provider session was created.
+func historicalSkillSummary(skills []SkillAttachment) string {
+	names := make([]string, 0, min(len(skills), maxMessageSkills))
+	for _, skill := range skills {
+		if len(names) == maxMessageSkills {
+			break
+		}
+		name := strings.TrimSpace(skill.Name)
+		if name == "" {
+			continue
+		}
+		runes := []rune(name)
+		if len(runes) > 128 {
+			name = string(runes[:128]) + "…"
+		}
+		names = append(names, strconv.Quote("$"+name))
+	}
+	if len(names) == 0 {
+		return ""
+	}
+	return "[Historical skill attachments (metadata only; do not activate automatically): " + strings.Join(names, ", ") + "]"
 }
 
 func (r *Runtime) readSession(s *botRuntime, epoch uint64, session core.AgentSession) {

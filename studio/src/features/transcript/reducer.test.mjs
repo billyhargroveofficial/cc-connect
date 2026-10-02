@@ -23,6 +23,21 @@ function backgroundNative(seq, method, params, backend = 'codex', extra = {}) {
   return { ...native(seq, method, params, backend, extra), turnId: '' };
 }
 
+test('structured user skill attachments survive journal replay without paths or duplicate IDs', () => {
+  const [turn] = buildTranscript([
+    event(1, 'message', { role: 'user', content: '', skills: [
+      { id: 'shared-review', name: 'review', path: '/private/shared/SKILL.md' },
+      { id: 'project-review', name: 'review', path: '/private/project/SKILL.md' },
+      { id: 'shared-review', name: 'review', path: '/private/shared/SKILL.md' },
+      null, { name: 'invalid' },
+    ] }),
+    event(2, 'turn', { status: 'running' }),
+  ]);
+  assert.equal(turn.users[0].content, '');
+  assert.deepEqual(turn.users[0].skills, [{ id: 'shared-review', name: 'review' }, { id: 'project-review', name: 'review' }]);
+  assert.equal(JSON.stringify(turn.users[0]).includes('/private/'), false);
+});
+
 test('completed service history folds once before the final answer without swallowing files, prompts, steered input, or later activity', () => {
   const [turn] = buildTranscript([
     event(1, 'message', { role: 'user', content: 'Make a report.' }),

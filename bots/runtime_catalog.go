@@ -41,7 +41,7 @@ func (r *Runtime) capabilities(ctx context.Context, botID string) (Capabilities,
 		}
 		selected = &bot
 	}
-	result := Capabilities{Models: []Model{}, Voice: r.cfg.VoiceAvailable, Backends: make(map[string]BackendCapabilities)}
+	result := Capabilities{Models: []Model{}, Voice: r.cfg.VoiceAvailable, SkillAttachments: r.cfg.ResolveSkills != nil, Backends: make(map[string]BackendCapabilities)}
 	type discovery struct {
 		backend string
 		models  []Model

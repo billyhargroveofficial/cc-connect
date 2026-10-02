@@ -39,6 +39,7 @@ export function useMessageQueue(botId: string, draftScope: string, revision: num
         if (controller.signal.aborted) return;
         const next = { messages: Array.isArray(result.messages) ? result.messages.map(message => ({
           ...message, attachments: Array.isArray(message.attachments) ? message.attachments : [],
+          skills: Array.isArray(message.skills) ? message.skills : [],
         })) : [], paused: result.paused === true };
         setState(previous => previous.identity === identity && JSON.stringify(previous.snapshot) === JSON.stringify(next) ? previous : { identity, snapshot: next });
         if (!mutationError.current) setError("");

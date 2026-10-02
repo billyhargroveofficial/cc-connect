@@ -126,6 +126,11 @@ The first node version does not move existing bots or delegate between hosts;
 a coordinator operates within its current host.
 Turning off a skill for a bot does not rewrite the owner's global harness
 configuration.
+Type `$` in the message composer to find and attach enabled skills for that bot.
+Selections belong to one message and stay attached when it is queued or steered.
+Codex receives native skill inputs; Pi receives explicit references to the same
+validated installed workflow files. Attaching a skill does not enable a disabled
+skill or change the bot's permanent configuration.
 
 For the owner, the bot's skill list follows its selected backend: native Codex and
 Pi folders appear only for that harness, while product and project skills remain

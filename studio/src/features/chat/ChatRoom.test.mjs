@@ -6,6 +6,7 @@ import ts from 'typescript';
 import { createChatStatusProjector } from '../../lib/chatStatus.ts';
 import { isWorking, statusLabel } from '../../lib/events.ts';
 import { motionTestModule } from '../../lib/motion-stub.mjs';
+import { skillMentionText } from './skillMentions.ts';
 
 const source = ts.transpileModule(readFileSync(new URL('./ChatRoom.tsx', import.meta.url), 'utf8'), {
   compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX },
@@ -32,6 +33,7 @@ function chat({ receipt = { status: 'queued', turnId: 'active', queueId: 'q' } }
     '../../hooks/useBotContext': { useBotContext: () => ({ context: { percent: 25 }, compacting: false, requesting: false }) },
     './BotIsland': { default: 'BotIsland' }, './LiveStatus': { WorkingStrip: 'WorkingStrip', SessionStatus: 'SessionStatus', QueuePanel: 'QueuePanel' },
     './useMessageQueue': { useMessageQueue: () => queue },
+    './skillMentions': { skillMentionText },
   };
   const exports = {};
   runInNewContext(source, { exports, require: name => { assert.ok(name in modules, `Unexpected import ${name}`); return modules[name]; } });
@@ -44,7 +46,7 @@ function chat({ receipt = { status: 'queued', turnId: 'active', queueId: 'q' } }
     return visit(render());
   }
   return { calls, find, refreshed: () => refreshed, props,
-    send: (text = 'Next task') => find(node => node.type === 'Composer').props.onSend(text, []),
+    send: (text = 'Next task', skills = []) => find(node => node.type === 'Composer').props.onSend(text, [], skills),
   };
 }
 
@@ -74,4 +76,18 @@ test('Working is outside history and directly adjacent above composer with statu
   assert.match(css, /\.working-strip\s*\{[^}]*margin:\s*0;/);
   assert.match(css, /\.chat-input-stack \.composer-wrap\.composer-minimal\s*\{[^}]*padding-bottom:\s*0;/);
   assert.match(css, /\.session-statusline\s*\{[^}]*flex-wrap:\s*nowrap;[^}]*overflow-x:\s*auto;/);
+});
+
+test('native skill attachments retain identity through the queue while older hosts get text mentions', async () => {
+  const skills = [{ id: 'skill-id', name: 'review', path: '/private/project/review/SKILL.md' }];
+  const native = chat();
+  native.props.capabilities.skillAttachments = true;
+  await native.send('Review this.', skills);
+  assert.equal(native.calls[0][1], 'Review this.');
+  assert.equal(native.calls[0][3], 'queue');
+  assert.equal(native.calls[0][5], skills);
+  const legacy = chat();
+  await legacy.send('Review this.', skills);
+  assert.equal(legacy.calls[0][1], '$review\nReview this.');
+  assert.equal(legacy.calls[0][5].length, 0, 'older hosts never receive an unsupported skills field');
 });

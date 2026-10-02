@@ -53,21 +53,23 @@ type Attachment struct {
 }
 
 type MessageRequest struct {
-	Text        string       `json:"text"`
-	Attachments []Attachment `json:"attachments,omitempty"`
-	Mode        string       `json:"mode,omitempty"`
-	Source      string       `json:"-"`
+	Text        string            `json:"text"`
+	Attachments []Attachment      `json:"attachments,omitempty"`
+	Skills      []SkillAttachment `json:"skills,omitempty"`
+	Mode        string            `json:"mode,omitempty"`
+	Source      string            `json:"-"`
 }
 
 // QueuedMessage is a durable owner message awaiting its own turn. Attachment
 // paths never cross the HTTP boundary; the workspace resolves IDs at dispatch.
 type QueuedMessage struct {
-	ID          string       `json:"id"`
-	Text        string       `json:"text"`
-	Attachments []Attachment `json:"attachments,omitempty"`
-	Source      string       `json:"source"`
-	CreatedAt   time.Time    `json:"createdAt"`
-	Status      string       `json:"status"`
+	ID          string            `json:"id"`
+	Text        string            `json:"text"`
+	Attachments []Attachment      `json:"attachments,omitempty"`
+	Skills      []SkillAttachment `json:"skills,omitempty"`
+	Source      string            `json:"source"`
+	CreatedAt   time.Time         `json:"createdAt"`
+	Status      string            `json:"status"`
 }
 
 type MessageReceipt struct {
@@ -99,9 +101,18 @@ type ServiceTier struct {
 }
 
 type Capabilities struct {
-	Models   []Model                        `json:"models"`
-	Voice    bool                           `json:"voice"`
-	Backends map[string]BackendCapabilities `json:"backends"`
+	Models           []Model                        `json:"models"`
+	Voice            bool                           `json:"voice"`
+	SkillAttachments bool                           `json:"skillAttachments"`
+	Backends         map[string]BackendCapabilities `json:"backends"`
+}
+
+// SkillAttachment identifies an installed workflow selected for one message.
+// Names and paths supplied by clients are always replaced by the bot catalog.
+type SkillAttachment struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	Path string `json:"path,omitempty"`
 }
 
 type BackendCapabilities struct {

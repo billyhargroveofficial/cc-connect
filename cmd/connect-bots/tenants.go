@@ -247,7 +247,7 @@ func tenantRuntimeConfig(config TenantManagerConfig, store *bots.Store, workspac
 		AgentOptions: options, PiExtensionPath: extension,
 		InternalURL: config.InternalURL, InternalToken: token,
 		Instructions: workspace.AgentInstructions, SessionOptions: workspace.SkillSessionOptions,
-		ResolveAttachments: workspace.ResolveAttachments, PublishFiles: workspace.PublishFiles,
+		ResolveAttachments: workspace.ResolveAttachments, ResolveSkills: workspace.ResolveSkills, PublishFiles: workspace.PublishFiles,
 		VoiceAvailable: config.FlovURL != "",
 	}
 }

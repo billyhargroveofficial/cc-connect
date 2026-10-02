@@ -8,11 +8,14 @@ import {
   X,
   FileText,
   AudioLines,
+  DollarSign,
 } from "lucide-react";
-import type { Attachment, Bot, Capabilities } from "../../lib/types";
+import type { Attachment, Bot, Capabilities, SkillReference } from "../../lib/types";
 import { api, errorMessage } from "../../lib/api";
 import ModelPicker, { PresenceSurface, useDialogFocus } from "./ModelPicker";
 import type { useBotContext } from "../../hooks/useBotContext";
+import SkillPicker from "./SkillPicker";
+import { useComposerSkills } from "./useComposerSkills";
 import {
   AnimatePresence, m, useIsPresent, useReducedMotion,
   controlMotion, fade, rowMotion, motionSpring, motionTransition,
@@ -48,7 +51,7 @@ function Composer({
   draftScope: string;
   capabilities: Capabilities | null;
   busy: boolean;
-  onSend: (text: string, attachments: Attachment[]) => Promise<void>;
+  onSend: (text: string, attachments: Attachment[], skills?: SkillReference[]) => Promise<void>;
   onBotChange: (bot: Bot) => void;
   onError: (error: string) => void;
   context: ReturnType<typeof useBotContext>;
@@ -66,15 +69,27 @@ function Composer({
   const [actionsOpen, setActionsOpen] = useState(false);
   const [modelPickerOpen, setModelPickerOpen] = useState(false);
   const actionsId = useId();
+  const skillsId = useId();
   const input = useRef<HTMLInputElement>(null);
   const audioInput = useRef<HTMLInputElement>(null);
   const textarea = useRef<HTMLTextAreaElement>(null);
   const textRevision = useRef(0);
+  const composing = useRef(false);
   const actionsTrigger = useRef<HTMLButtonElement>(null);
   const actionsDialog = useRef<HTMLDivElement>(null);
   const recorder = useRef<MediaRecorder | null>(null);
   const stream = useRef<MediaStream | null>(null);
   const audioChunks = useRef<Blob[]>([]);
+  function changeText(value: string) {
+    textRevision.current += 1;
+    setText(value);
+  }
+  const skills = useComposerSkills({
+    botId: bot.id, draftScope, text, textarea, onTextChange: changeText,
+    availabilityKey: JSON.stringify([bot.backend, [...(bot.disabledSkills || [])].sort()]),
+    canValidate: !offline && present,
+    blocked: !present || suspended || offline || recording || transcribing || actionsOpen || modelPickerOpen,
+  });
   const uploadLifecycle = useRef({ epoch: 0, active: true, present, draftScope, botId: bot.id });
   uploadLifecycle.current.present = present;
   uploadLifecycle.current.draftScope = draftScope;
@@ -144,6 +159,7 @@ function Composer({
     (upload) => !upload.attachment && !upload.error,
   );
   async function send() {
+    const submittedSkills = skills.snapshot();
     if (
       !present ||
       suspended ||
@@ -153,7 +169,8 @@ function Composer({
       pendingUploads ||
       transcribing ||
       recording ||
-      (!text.trim() && !uploads.some((u) => u.attachment))
+      submittedSkills === null ||
+      (!text.trim() && !uploads.some((u) => u.attachment) && !submittedSkills.length)
     )
       return;
     const submittedText = text;
@@ -165,18 +182,21 @@ function Composer({
     const current = () => lifecycle.active && lifecycle.present && lifecycle.epoch === epoch
       && lifecycle.draftScope === draftScope && lifecycle.botId === bot.id;
     setSending(true);
+    skills.close();
     try {
       await onSend(
         submittedText.trim(),
         submittedUploads.flatMap((upload) =>
           upload.attachment ? [upload.attachment] : [],
         ),
+        submittedSkills,
       );
       if (!current()) return;
       // Acknowledging this message must not discard the next draft prepared
       // while the request was in flight, even if its text was edited back.
       setText((current) => textRevision.current === submittedRevision ? "" : current);
       setUploads((current) => current.filter((upload) => !submittedKeys.has(upload.key)));
+      skills.acknowledge(submittedSkills);
       textarea.current?.focus();
     } catch (error) {
       if (current()) onError(errorMessage(error));
@@ -314,7 +334,12 @@ function Composer({
         }}
       >
         <AnimatePresence initial={false}>
-        {uploads.length > 0 && (
+          {skills.open && <SkillPicker key="skill-picker" id={skillsId} skills={skills.matches} index={skills.index}
+            status={skills.status} error={skills.error} onChoose={skills.choose} onHighlight={skills.highlight}
+            onClose={skills.close} onRetry={skills.retry} />}
+        </AnimatePresence>
+        <AnimatePresence initial={false}>
+        {(uploads.length > 0 || skills.selected.length > 0) && (
           <PresenceSurface
             key="uploads"
             initial={{ opacity: 0, height: 0 }}
@@ -325,6 +350,12 @@ function Composer({
           >
           <div className="upload-chips">
             <AnimatePresence initial={false}>
+            {skills.selected.map((skill) => <PresenceSurface key={`skill:${skill.id}`}
+              variants={reducedMotion ? fade : rowMotion} initial="hidden" animate="visible" exit="exit"
+              className="upload-chip skill-chip">
+              <DollarSign size={14} aria-hidden="true" /><span title={skill.name}>{skill.name}</span>
+              <m.button {...controlMotion} type="button" onClick={() => skills.remove(skill.id)} aria-label={`Remove skill ${skill.name}`}><X size={13} /></m.button>
+            </PresenceSurface>)}
             {uploads.map((upload) => (
               <PresenceSurface
                 layout="position"
@@ -406,10 +437,11 @@ function Composer({
             style={{ display: recording ? "none" : undefined }}
             value={text}
             onChange={(event) => {
-              textRevision.current += 1;
-              setText(event.target.value);
+              changeText(event.target.value);
+              if (!composing.current) skills.update(event.target.value, event.target.selectionStart ?? event.target.value.length, event.target.selectionEnd ?? event.target.value.length);
             }}
             onKeyDown={(event) => {
+              if (skills.keyDown(event)) return;
               if (
                 event.key === "Enter" &&
                 !event.shiftKey &&
@@ -420,6 +452,9 @@ function Composer({
                 void send();
               }
             }}
+            onSelect={(event) => skills.update(event.currentTarget.value, event.currentTarget.selectionStart, event.currentTarget.selectionEnd)}
+            onCompositionStart={() => { composing.current = true; skills.close(); }}
+            onCompositionEnd={(event) => { composing.current = false; skills.update(event.currentTarget.value, event.currentTarget.selectionStart, event.currentTarget.selectionEnd); }}
             onPaste={(event) => {
               if (event.clipboardData.files.length) {
                 event.preventDefault();
@@ -436,6 +471,10 @@ function Composer({
                   : `Message ${bot.name}`
             }
             aria-label={`Message ${bot.name}`}
+            aria-autocomplete="list"
+            aria-expanded={skills.open}
+            aria-controls={skills.open ? skillsId : undefined}
+            aria-activedescendant={skills.open && skills.matches.length ? `${skillsId}-option-${skills.index}` : undefined}
             rows={1}
             disabled={transcribing}
           />
@@ -506,11 +545,12 @@ function Composer({
               onClick={() => void send()}
               disabled={offline || suspended ||
                 sending ||
+                skills.validating ||
                 context.compacting || context.requesting ||
                 pendingUploads ||
                 transcribing ||
                 recording ||
-                (!text.trim() && !uploads.some((u) => u.attachment))
+                (!text.trim() && !uploads.some((u) => u.attachment) && !skills.selected.length)
               }
               aria-label="Send message"
               title={offline ? "Host is offline · your draft is kept" : busy ? "Add to queue" : "Send"}
@@ -536,6 +576,13 @@ function Composer({
         {transcribing ? "Transcribing voice…" : "Uploading files…"}
       </span>}
       {offline && !transcribing && !pendingUploads && <span className="composer-live-status composer-offline-status" role="status">Host offline · your draft is kept</span>}
+      {!offline && present && skills.validating && skills.status === "error" && <div className="composer-skill-error">
+        <span title={skills.error}>{skills.error || "Could not check selected skills."}</span>
+        <button type="button" className="text-button" onClick={skills.retry} aria-label="Retry checking skills">Retry</button>
+      </div>}
+      {!offline && !transcribing && !pendingUploads && skills.validating && <span className="composer-live-status" role="status">
+        {skills.status === "error" ? "Could not check selected skills." : "Checking skills…"}
+      </span>}
       <input
         hidden
         type="file"

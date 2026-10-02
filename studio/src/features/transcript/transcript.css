@@ -174,3 +174,5 @@
   .transcript-spin{animation:none}
   .transcript-activity-toggle,.transcript-history-toggle,.transcript-message-actions>.transcript-icon-button,.transcript-attachment-download{transition:none}
 }
+.transcript-skill-chips{display:flex;flex-wrap:wrap;gap:5px;margin-top:8px}
+.transcript-skill-chip{display:inline-flex;align-items:center;gap:2px;max-width:100%;padding:4px 7px;border-radius:8px;background:color-mix(in srgb,currentColor 10%,transparent);font-size:11px;line-height:1.4;overflow-wrap:anywhere}

@@ -68,6 +68,11 @@ export interface Attachment {
   path?: string;
   url?: string;
 }
+export interface SkillReference {
+  id: string;
+  name: string;
+  path: string;
+}
 export type MessageMode = "queue" | "steer";
 export interface MessageReceipt {
   turnId: string;
@@ -78,6 +83,7 @@ export interface QueuedMessage {
   id: string;
   text: string;
   attachments: Attachment[];
+  skills?: SkillReference[];
   source: string;
   createdAt: string;
   status: string;
@@ -109,6 +115,7 @@ export interface Capabilities {
   models: Model[];
   voice: boolean;
   backends: Record<string, BackendCapabilities>;
+  skillAttachments?: boolean;
 }
 export interface Skill {
   id: string;

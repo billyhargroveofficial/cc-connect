@@ -14,6 +14,7 @@ import type {
   NodeEnrollment,
   NodeInfo,
   Skill,
+  SkillReference,
 } from "./types";
 const BASE = "/api/studio";
 export interface StudioUser {
@@ -35,9 +36,15 @@ export interface WorkspaceBinding {
   accountId?: string;
   nodeId?: string;
 }
+export interface SkillsChanged {
+  accountId: string;
+  nodeId: string;
+  botId?: string;
+}
 let activeAccount: string | null = null;
 let activeNode = "local";
 const accountChangedListeners = new Set<(accountId: string) => void>();
+const skillsChangedListeners = new Set<(change: SkillsChanged) => void>();
 const publicPaths = new Set(["/session", "/login", "/register", "/health"]);
 export function setApiAccount(accountId: string | null) {
   if (accountId !== activeAccount) activeNode = "local";
@@ -52,6 +59,10 @@ const workspacePath = (path: string) => {
 export function onApiAccountChanged(listener: (accountId: string) => void) {
   accountChangedListeners.add(listener);
   return () => { accountChangedListeners.delete(listener); };
+}
+export function onSkillsChanged(listener: (change: SkillsChanged) => void) {
+  skillsChangedListeners.add(listener);
+  return () => { skillsChangedListeners.delete(listener); };
 }
 export class ApiError extends Error {
   status: number;
@@ -126,6 +137,12 @@ function json<T>(path: string, method: string, body?: unknown, expectedAccount?:
     body: body === undefined ? undefined : JSON.stringify(body),
   }, expectedAccount, expectedNode);
 }
+async function skillMutation<T>(path: string, method: string, body: unknown, botId?: string) {
+  const change: SkillsChanged = { accountId: activeAccount || "", nodeId: activeNode, ...(botId ? { botId } : {}) };
+  const result = await json<T>(path, method, body, change.accountId, change.nodeId);
+  for (const listener of skillsChangedListeners) listener(change);
+  return result;
+}
 const botPath = (id: string) => `/bots/${encodeURIComponent(id)}`;
 const scopePath = (id?: string) => (id ? botPath(id) : "/user");
 export const api = {
@@ -155,11 +172,12 @@ export const api = {
     ),
   events: (id: string, after = 0) =>
     request<{ events: Event[] }>(`${botPath(id)}/events?after=${after}`),
-  send: (id: string, text: string, attachments: Attachment[] = [], mode?: MessageMode, binding?: WorkspaceBinding) =>
+  send: (id: string, text: string, attachments: Attachment[] = [], mode?: MessageMode, binding?: WorkspaceBinding, skills: SkillReference[] = []) =>
     json<MessageReceipt>(`${botPath(id)}/messages`, "POST", {
       text,
       attachments,
       ...(mode ? { mode } : {}),
+      ...(skills.length ? { skills } : {}),
     }, binding?.accountId, binding?.nodeId),
   queue: (id: string, signal?: AbortSignal, binding?: WorkspaceBinding) =>
     request<MessageQueueSnapshot>(`${botPath(id)}/queue`, { signal }, binding?.accountId, binding?.nodeId),
@@ -205,19 +223,20 @@ export const api = {
     request<Instructions>(`${scopePath(id)}/instructions`),
   saveInstructions: (id: string | undefined, content: string) =>
     json<Instructions>(`${scopePath(id)}/instructions`, "PUT", { content }),
-  skills: (id?: string) =>
-    request<{ skills: Skill[] }>(`${scopePath(id)}/skills`),
+  skills: (id?: string, signal?: AbortSignal, binding?: WorkspaceBinding) =>
+    request<{ skills: Skill[] }>(`${scopePath(id)}/skills`, { signal }, binding?.accountId, binding?.nodeId),
   saveDisabledSkills: (id: string, disabledSkills: string[]) =>
-    json<Bot>(`${botPath(id)}/skills`, "PATCH", { disabledSkills }),
+    skillMutation<Bot>(`${botPath(id)}/skills`, "PATCH", { disabledSkills }, id),
   createSkill: (id: string | undefined, name: string, content: string) =>
-    json<Skill>(`${scopePath(id)}/skills`, "POST", { name, content }),
+    skillMutation<Skill>(`${scopePath(id)}/skills`, "POST", { name, content }, id),
   skillContent: (path: string) =>
     request<Instructions>(`/skills/content?path=${encodeURIComponent(path)}`),
-  saveSkillContent: (path: string, content: string) =>
-    json<Instructions>(
+  saveSkillContent: (path: string, content: string, botId?: string) =>
+    skillMutation<Instructions>(
       `/skills/content?path=${encodeURIComponent(path)}`,
       "PUT",
       { content },
+      botId,
     ),
   upload: (id: string, file: File) => {
     const body = new FormData();

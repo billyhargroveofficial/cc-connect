@@ -84,14 +84,18 @@ export const QueuePanel = memo(function QueuePanel({ snapshot, pending, busy, of
       <CornerDownRight size={14} className="queue-mark" aria-hidden="true" />
       <span className="queued-message-content" title={message.text || message.attachments.map(file => file.name).join(", ")}>
         {message.attachments.length > 0 && <span className="queue-attachment-count">{message.attachments.length} {message.attachments.length === 1 ? "file" : "files"}</span>}
+        {message.skills?.[0] && <span className="queue-skill-chip" title={message.skills[0].name}>${message.skills[0].name}</span>}
+        {(message.skills?.length || 0) > 1 && <span className="queue-skill-more"
+          title={message.skills!.slice(1).map(skill => `$${skill.name}`).join(", ")}
+          aria-label={`${message.skills!.length - 1} more attached skills: ${message.skills!.slice(1).map(skill => skill.name).join(", ")}`}>+{message.skills!.length - 1}</span>}
         <span>{message.text || message.attachments.map(file => file.name).join(", ")}</span>
       </span>
       <m.button {...controlMotion} className="queue-steer" disabled={disabled || !busy} onClick={() => void onSteer(message.id)}
-        aria-label={`Steer queued message: ${message.text || message.attachments[0]?.name || "attachment"}`} title={busy ? "Send to the current turn" : "Steer is available during a turn"}>
+        aria-label={`Steer queued message: ${message.text || message.attachments[0]?.name || message.skills?.[0]?.name || "attachment"}`} title={busy ? "Send to the current turn" : "Steer is available during a turn"}>
         {pending === `steer:${message.id}` ? <LoaderCircle size={13} className="spin" /> : <CornerDownRight size={13} />}<span>Steer</span>
       </m.button>
       <m.button {...controlMotion} className="queue-remove" disabled={disabled} onClick={() => void onRemove(message.id)}
-        aria-label={`Remove queued message: ${message.text || message.attachments[0]?.name || "attachment"}`}>
+        aria-label={`Remove queued message: ${message.text || message.attachments[0]?.name || message.skills?.[0]?.name || "attachment"}`}>
         {pending === `remove:${message.id}` ? <LoaderCircle size={13} className="spin" /> : <Trash2 size={13} />}
       </m.button>
     </div>)}

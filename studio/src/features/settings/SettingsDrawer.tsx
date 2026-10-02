@@ -543,7 +543,7 @@ function SkillEditor({ skill, botId, onBack, onSaved }: { skill: Skill | null; b
     if (busy || readOnly) return
     setBusy(true); setError('')
     try {
-      if (skill) await api.saveSkillContent(skill.path, content)
+      if (skill) await api.saveSkillContent(skill.path, content, skill.scope === 'project' ? botId : undefined)
       else {
         const source = hasFrontmatter ? content : `---\nname: ${JSON.stringify(name.trim())}\ndescription: ${JSON.stringify(description.trim())}\n---\n\n${content}\n`
         await api.createSkill(botId, name.trim(), source)

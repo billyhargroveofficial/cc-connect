@@ -227,6 +227,8 @@ function Message({ message, botId, details, streaming = false }: {
     className={user ? 'transcript-user-message' : `transcript-assistant-message${message.artifact ? ' transcript-artifact-message' : ''}`}>
     <div className={user ? 'transcript-user-bubble' : 'transcript-message-body'}>
       {content && (streaming ? <StreamingText content={content} /> : <Markdown content={content} />)}
+      {user && message.skills?.length ? <div className="transcript-skill-chips" aria-label="Attached skills">{message.skills.map(skill =>
+        <span className="transcript-skill-chip" key={skill.id}><span aria-hidden="true">$</span>{skill.name}</span>)}</div> : null}
       <Attachments botId={botId} attachments={message.attachments} />
     </div>
     {user ? <div className={`transcript-message-meta${!delegated && message.source !== 'telegram' ? ' is-time-only' : ''}`}>

@@ -168,9 +168,9 @@ never returned by the API.
 - `GET /bots/:id` -> Bot; `PATCH /bots/:id` partial Bot; `DELETE` archives bot.
 - `GET /bots/:id/events?after=seq` -> `{events:Event[]}`.
 - `GET /events?after=seq` SSE event `event`, data Event (account workspace sequence).
-- `POST /bots/:id/messages` `{text,attachments?}` -> `{turnId}` (202).
+- `POST /bots/:id/messages` `{text,attachments?,skills?:[{id,name?,path?}],mode?:"queue"|"steer"}` -> `{turnId,status,queueId?}` (202). Skill IDs resolve against the selected bot's current enabled catalog; client names and paths are replaced by catalog metadata. A path-only reference must resolve to the same installed catalog.
 - `POST /bots/:id/stop`; `POST /bots/:id/permission` `{requestId,behavior,updatedInput?,message?}`.
-- `GET /capabilities?botId=...` -> Capabilities for the selected bot; `GET /bots/:id/goal`; `PUT` native goal fields; `DELETE`.
+- `GET /capabilities?botId=...` -> Capabilities for the selected bot, including `skillAttachments` when this node supports explicit message skills; `GET /bots/:id/goal`; `PUT` native goal fields; `DELETE`.
 - `GET /bots/:id/context` -> provider-known usage fields and `compacting`.
 - `POST /bots/:id/compact` `{instructions?}` -> `{requestId}` (202); custom instructions are supported by Pi.
 - `GET /bots/:id/instructions` -> `{content,path}`; `PUT` `{content}`.
@@ -181,6 +181,14 @@ never returned by the API.
 - `POST /bots/:id/uploads` multipart `file` -> Attachment; `GET /bots/:id/files/:attachmentId`.
 - `POST /transcribe` multipart `file` -> `{text}`.
 - `GET /maintenance` -> settings and last reports; `PATCH` settings; `POST /maintenance/run`.
+
+Message and queue journal records retain canonical skill references. A queued
+selection is resolved again before dispatch and before steering, so deleting or
+disabling a workflow cannot silently invoke a stale selection after a restart.
+Explicit skills use Codex's native `UserInput` skill entries for both `turn/start`
+and `turn/steer`. Pi's RPC has no equivalent input: the prompt names each validated
+SKILL.md explicitly, avoiding ambiguous `/skill:name` expansion for duplicate
+installed names.
 
 Every protected route dispatches to the workspace from the authenticated account,
 and its selected host, including capabilities, file downloads and SSE. The loopback-only Pi bridge at

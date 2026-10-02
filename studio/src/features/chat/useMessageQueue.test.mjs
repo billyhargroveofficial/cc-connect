@@ -55,6 +55,18 @@ test('text-only queued messages normalize omitted attachment arrays and equal re
   view.unmount();
 });
 
+test('queued skill attachments keep exact references through refresh and steer', async () => {
+  const skills = [{ id: 'project-review', name: 'review', path: '/private/project/SKILL.md' }];
+  const view = queue({ snapshot: { messages: [{ id: 'q', text: '', skills }], paused: false } });
+  const first = await view.load();
+  assert.equal(first.snapshot.messages[0].skills, skills);
+  await first.steer('q');
+  const refreshed = await view.load();
+  assert.equal(refreshed.snapshot, first.snapshot, 'skill-only queue updates preserve equal snapshot identity');
+  assert.equal(view.calls.find(call => call.action === 'steer').id, 'q');
+  view.unmount();
+});
+
 test('failed steer retains the queued item and reports the failure once', async () => {
   const view = queue({ snapshot: { messages: [{ id: 'q', text: 'Keep this instruction' }], paused: false } });
   const first = await view.load();

@@ -29,6 +29,18 @@ type AgentRPCSession interface {
 	RPC(ctx context.Context, method string, params any, result any) error
 }
 
+// SkillAttachment is a workflow resolved and authorized by the caller.
+type SkillAttachment struct {
+	Name string
+	Path string
+}
+
+// AgentSkillSession accepts explicit workflow references in addition to the
+// ordinary message. Sessions without this capability retain their Send API.
+type AgentSkillSession interface {
+	SendWithSkills(prompt string, messageID string, images []ImageAttachment, files []FileAttachment, skills []SkillAttachment) error
+}
+
 // RPCRejectionError represents an explicit negative provider acknowledgement.
 // Transport errors, timeouts, cancellation and malformed replies must never
 // use this type: delivery may already have happened in those cases.

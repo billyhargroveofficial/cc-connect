@@ -314,4 +314,7 @@ func TestTenantRuntimeUsesAccountHomeAndSharedExplicitTransport(t *testing.T) {
 	if !account.VoiceAvailable || account.PiExtensionPath != "/tenant/extension.ts" || account.InternalURL != config.InternalURL {
 		t.Fatal("runtime lost account voice or bridge configuration")
 	}
+	if account.ResolveSkills == nil || owner.ResolveSkills == nil {
+		t.Fatal("runtime lost the tenant-scoped skill attachment resolver")
+	}
 }

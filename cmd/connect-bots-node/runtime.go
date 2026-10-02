@@ -219,7 +219,7 @@ func nodeRuntimeConfig(options nodeRunOptions, workspace *bots.Workspace, codexU
 		},
 		PiExtensionPath: extension, InternalURL: internalURL, InternalToken: token,
 		Instructions: workspace.AgentInstructions, SessionOptions: workspace.SkillSessionOptions,
-		ResolveAttachments: workspace.ResolveAttachments, PublishFiles: workspace.PublishFiles,
+		ResolveAttachments: workspace.ResolveAttachments, ResolveSkills: workspace.ResolveSkills, PublishFiles: workspace.PublishFiles,
 		VoiceAvailable: options.FlovURL != "",
 	}
 }

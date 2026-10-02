@@ -66,6 +66,7 @@ func (r *Runtime) restoreMessageQueue(s *botRuntime, events []Event) {
 			order = append(order, message.ID)
 		}
 		message.Attachments = publicMessageAttachments(message.Attachments)
+		message.Skills = cloneSkillAttachments(message.Skills)
 		pending[message.ID] = message
 	}
 	for _, id := range order {
@@ -102,6 +103,10 @@ func (r *Runtime) SubmitMessage(ctx context.Context, botID string, request Messa
 	}
 	s.lifecycle.Lock()
 	defer s.lifecycle.Unlock()
+	request, err = r.resolveMessageSkills(botID, request)
+	if err != nil {
+		return MessageReceipt{}, err
+	}
 	bot, err := r.store.GetBot(botID)
 	if err != nil {
 		return MessageReceipt{}, err
@@ -140,7 +145,7 @@ func (r *Runtime) enqueueMessageLocked(s *botRuntime, request MessageRequest) (*
 	if err != nil {
 		return nil, err
 	}
-	entry := &runtimeQueuedMessage{message: QueuedMessage{ID: id, Text: request.Text, Attachments: publicMessageAttachments(request.Attachments), Source: request.Source, CreatedAt: r.cfg.Now().UTC(), Status: "queued"}, turn: r.newQueuedTurn(s.id, id)}
+	entry := &runtimeQueuedMessage{message: QueuedMessage{ID: id, Text: request.Text, Attachments: publicMessageAttachments(request.Attachments), Skills: cloneSkillAttachments(request.Skills), Source: request.Source, CreatedAt: r.cfg.Now().UTC(), Status: "queued"}, turn: r.newQueuedTurn(s.id, id)}
 	r.mu.Lock()
 	if r.closed {
 		r.mu.Unlock()
@@ -188,6 +193,7 @@ func (r *Runtime) Queue(botID string) (MessageQueue, error) {
 	for _, entry := range s.queue {
 		message := entry.message
 		message.Attachments = publicMessageAttachments(message.Attachments)
+		message.Skills = cloneSkillAttachments(message.Skills)
 		queue.Messages = append(queue.Messages, message)
 	}
 	return queue, nil
@@ -313,7 +319,7 @@ func (r *Runtime) dispatchQueueLocked(s *botRuntime) {
 	entry := s.queue[0]
 	count := len(s.queue) - 1
 	s.mu.Unlock()
-	request, err := r.prepareMessage(r.ctx, s.id, MessageRequest{Text: entry.message.Text, Attachments: entry.message.Attachments, Source: entry.message.Source})
+	request, err := r.prepareMessage(r.ctx, s.id, MessageRequest{Text: entry.message.Text, Attachments: entry.message.Attachments, Skills: entry.message.Skills, Source: entry.message.Source})
 	if err != nil {
 		r.logJournalError(s.id, "", r.setQueuePaused(s, true, "dispatch_failed", err.Error()))
 		r.logJournalError(s.id, "", r.removeQueuedMessageLocked(s, entry.message.ID, "failed", err.Error()))
@@ -384,7 +390,7 @@ func (r *Runtime) SteerQueuedMessage(ctx context.Context, botID, messageID strin
 	if message == nil {
 		return MessageReceipt{}, ErrNotFound
 	}
-	request, err := r.prepareMessage(ctx, botID, MessageRequest{Text: message.Text, Attachments: message.Attachments, Source: message.Source})
+	request, err := r.prepareMessage(ctx, botID, MessageRequest{Text: message.Text, Attachments: message.Attachments, Skills: message.Skills, Source: message.Source})
 	if err != nil {
 		return MessageReceipt{}, err
 	}
@@ -478,7 +484,7 @@ func (r *Runtime) steerMessageLocked(ctx context.Context, s *botRuntime, request
 		stop()
 		return MessageReceipt{}, &uncertainSteerError{cause: errors.Join(errors.New("the active turn finished while steering was in flight"), clearErr)}
 	}
-	_, err = r.store.AppendEvent(s.id, t.id, "message", map[string]any{"role": "user", "content": request.Text, "attachments": publicMessageAttachments(request.Attachments), "source": request.Source, "mode": "steer", "queueId": queueID})
+	_, err = r.store.AppendEvent(s.id, t.id, "message", map[string]any{"role": "user", "content": request.Text, "attachments": publicMessageAttachments(request.Attachments), "skills": cloneSkillAttachments(request.Skills), "source": request.Source, "mode": "steer", "queueId": queueID})
 	// The provider has accepted the input. Returning a retryable failure here
 	// would let the UI inject it again when persistence alone failed.
 	r.logJournalError(s.id, t.id, err)
@@ -516,13 +522,16 @@ func steerInput(backend, threadID, turnID string, request MessageRequest) (strin
 				input = append(input, map[string]any{"type": "localImage", "path": attachment.Path})
 			}
 		}
+		for _, skill := range request.Skills {
+			input = append(input, map[string]any{"type": "skill", "name": skill.Name, "path": skill.Path})
+		}
 		return "turn/steer", map[string]any{"threadId": threadID, "expectedTurnId": turnID, "input": input}, nil
 	case "pi":
 		images, _, err := runtimeAttachments(request.Attachments)
 		if err != nil {
 			return "", nil, err
 		}
-		params := map[string]any{"message": prompt}
+		params := map[string]any{"message": promptWithSkillRefs(prompt, request.Skills)}
 		if len(images) > 0 {
 			content := make([]map[string]any, 0, len(images))
 			for _, image := range images {

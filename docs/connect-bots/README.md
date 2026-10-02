@@ -27,13 +27,13 @@ Telegram adapters. The original Go module and upstream attribution are retained.
   optionally connect a bot to Telegram. Telegram and the web app use the same bot conversation.
 - Run daily temporary-file inventory with a junior model.
 
-Open “Ещё действия” (⋯) → “Настройки модели” in the composer's toolbar to change
+Open “More actions” (⋯) → “Model settings” in the composer's toolbar to change
 the model, effort or service tier. The tier selector appears when the selected
 Codex model advertises tiers in its live catalog; names and descriptions come
-from the app-server. “Авто” clears the saved tier override and lets the runtime
+from the app-server. “Auto” clears the saved tier override and lets the runtime
 choose. These settings apply to subsequent turns in the same conversation.
 For manual compaction, open the context indicator in that toolbar and choose
-“Сжать контекст” while the bot is idle.
+“Compact context” while the bot is idle.
 
 The conversation has no profile header. Bot identity, status, settings, goals,
 recent requests and published files live in a floating card on the right.

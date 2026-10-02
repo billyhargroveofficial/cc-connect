@@ -40,7 +40,7 @@ func (r *Runtime) publishFiles(botID string, args json.RawMessage) (any, error) 
 	}
 	caption := strings.TrimSpace(input.Caption)
 	if caption == "" {
-		caption = "Готовые файлы"
+		caption = "Files ready"
 	}
 	if _, err := r.store.AppendEvent(botID, turn.id, "message", map[string]any{
 		"role": "assistant", "content": caption, "attachments": attachments,

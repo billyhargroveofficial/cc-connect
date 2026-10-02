@@ -18,14 +18,14 @@ interface SettingsDrawerProps {
 
 export function SettingsDrawer({ bot, bots = [], capabilities, onClose, onBotChange, onArchive, initialTab, global = false }: SettingsDrawerProps) {
   const tabs = global
-    ? [{ id: 'instructions', title: 'Инструкции' }, { id: 'skills', title: 'Навыки' }, { id: 'maintenance', title: 'Уход' }]
-    : [{ id: 'profile', title: 'Профиль' }, { id: 'instructions', title: 'Инструкции' }, { id: 'skills', title: 'Навыки' }]
+    ? [{ id: 'instructions', title: 'Instructions' }, { id: 'skills', title: 'Skills' }, { id: 'maintenance', title: 'Maintenance' }]
+    : [{ id: 'profile', title: 'Profile' }, { id: 'instructions', title: 'Instructions' }, { id: 'skills', title: 'Skills' }]
   const [tab, setTab] = useState(() => tabs.some((entry) => entry.id === initialTab) ? initialTab! : tabs[0].id)
   const scopeId = global ? undefined : bot?.id
   if (!global && !bot) return null
-  return <ModalShell title={global ? 'Общие настройки' : bot!.name}
-    subtitle={global ? 'Инструкции и навыки для всех ботов.' : 'Рабочая среда бота.'} onClose={onClose} drawer>
-    <nav className="cb-settings-tabs" role="tablist" aria-label="Раздел настроек">
+  return <ModalShell title={global ? 'Shared settings' : bot!.name}
+    subtitle={global ? 'Instructions and skills for all bots.' : "Your bot's workspace."} onClose={onClose} drawer>
+    <nav className="cb-settings-tabs" role="tablist" aria-label="Settings sections">
       {tabs.map((entry) => <button key={entry.id} type="button" role="tab" aria-selected={tab === entry.id}
         aria-controls={`cb-settings-tab-${entry.id}`} id={`cb-settings-tab-button-${entry.id}`}
         className={tab === entry.id ? 'is-active' : ''} onClick={() => setTab(entry.id)}>{entry.title}</button>)}
@@ -55,7 +55,7 @@ function ProfilePane({ bot, capabilities, onBotChange, onArchive }: {
     setBusy(true); setError(''); setSuccess('')
     try {
       const updated = await api.updateBot(bot.id, botPayload(draft))
-      setDraft(draftFromBot(updated, capabilities)); onBotChange(updated); setSuccess('Настройки сохранены.')
+      setDraft(draftFromBot(updated, capabilities)); onBotChange(updated); setSuccess('Settings saved.')
     } catch (cause) { setError(errorMessage(cause)) }
     finally { setBusy(false) }
   }
@@ -74,15 +74,15 @@ function ProfilePane({ bot, capabilities, onBotChange, onArchive }: {
       <div className="cb-settings-location"><FolderOpen size={16} /><span>{bot.workDir}</span></div>
       <section className="cb-settings-section cb-settings-archive-section">
         {confirmArchive ? <>
-          <p>Бот исчезнет из списка. История и рабочие файлы сохранятся.</p>
+          <p>The bot will leave the list. Its history and workspace files will be kept.</p>
           <div className="cb-settings-inline-actions">
-            <button type="button" className="cb-settings-button" onClick={() => setConfirmArchive(false)} disabled={busy}>Отмена</button>
+            <button type="button" className="cb-settings-button" onClick={() => setConfirmArchive(false)} disabled={busy}>Cancel</button>
             <button type="button" className="cb-settings-button cb-settings-button--danger" onClick={archive} disabled={busy}>
-              {busy ? <LoaderCircle size={15} className="cb-settings-spin" /> : <Archive size={15} />}Архивировать
+              {busy ? <LoaderCircle size={15} className="cb-settings-spin" /> : <Archive size={15} />}Archive
             </button>
           </div>
         </> : <button type="button" className="cb-settings-text-button" onClick={() => setConfirmArchive(true)} disabled={busy}>
-          <Archive size={15} />Архивировать бота
+          <Archive size={15} />Archive bot
         </button>}
       </section>
       <Notice error={error} success={success} />
@@ -114,28 +114,28 @@ function InstructionsPane({ id }: { id?: string }) {
     setBusy(true); setError(''); setSuccess('')
     try {
       const result = await api.saveInstructions(id, content)
-      setContent(result.content); setSaved(result.content); setPath(result.path); setSuccess('Инструкции сохранены.')
+      setContent(result.content); setSaved(result.content); setPath(result.path); setSuccess('Instructions saved.')
     } catch (cause) { setError(errorMessage(cause)) }
     finally { setBusy(false) }
   }
   return <form onSubmit={save} className="cb-settings-form">
     <div className="cb-settings-scroll">
       <div className="cb-settings-intro"><FileText size={20} />
-        <p>{id ? 'AGENTS.md задаёт постоянные правила этого бота. Общие инструкции и навыки пользователя также доступны.'
-          : 'Этот AGENTS.md добавляет общие правила всем ботам. Он хранится в отдельной папке приложения.'}</p>
+        <p>{id ? 'AGENTS.md defines persistent rules for this bot. Shared instructions and user skills are also available.'
+          : 'This AGENTS.md adds shared rules to all bots. It is stored in a separate app folder.'}</p>
       </div>
       {loading ? <Loading /> : !error || path ? <MarkdownEditor content={content} onChange={(next) => { setContent(next); setSuccess('') }} readOnly={busy} label="AGENTS.md"
-        placeholder="Опишите роль, привычки и правила работы…" /> : null}
+        placeholder="Describe the role, habits, and working rules…" /> : null}
       {path && <div className="cb-settings-location"><FolderOpen size={15} /><span>{path}</span></div>}
       <Notice error={error} success={success} />
     </div>
-    <footer className="cb-settings-footer"><span className="cb-settings-hint">Изменения применяются к следующим сообщениям.</span>
+    <footer className="cb-settings-footer"><span className="cb-settings-hint">Changes apply to future messages.</span>
       <SaveButton busy={busy} disabled={loading || !path || content === saved} /></footer>
   </form>
 }
 
 const scopeNames: Record<string, string> = {
-  nativeUser: 'Пользователь', productUser: 'Общие', project: 'Этот бот', system: 'Встроенные',
+  nativeUser: 'User', productUser: 'Shared', project: 'This bot', system: 'Built-in',
 }
 
 function SkillsPane({ bot, onBotChange }: { bot: Bot | null; onBotChange: (bot: Bot) => void }) {
@@ -168,7 +168,7 @@ function SkillsPane({ bot, onBotChange }: { bot: Bot | null; onBotChange: (bot: 
     setBusy(true); setError(''); setSuccess('')
     try {
       const updated = await api.saveDisabledSkills(bot.id, disabled)
-      onBotChange(updated); setDisabled(updated.disabledSkills ?? []); await load(); setSuccess('Навыки сохранены.')
+      onBotChange(updated); setDisabled(updated.disabledSkills ?? []); await load(); setSuccess('Skills saved.')
     } catch (cause) { setError(errorMessage(cause)) }
     finally { setBusy(false) }
   }
@@ -182,28 +182,28 @@ function SkillsPane({ bot, onBotChange }: { bot: Bot | null; onBotChange: (bot: 
   return <form onSubmit={save} className="cb-settings-form">
     <div className="cb-settings-scroll">
       <div className="cb-settings-intro"><Shield size={20} /><p>{bot
-        ? 'Выберите навыки, доступные этому боту. Общие и пользовательские навыки наследуются; их тоже можно выключить здесь.'
-        : 'Общие навыки доступны каждому боту. Встроенные навыки и навыки пользователя также видны в списке.'}</p></div>
+        ? 'Choose the skills available to this bot. Shared and user skills are inherited; you can also disable them here.'
+        : 'Shared skills are available to every bot. Built-in and user skills are also listed here.'}</p></div>
       <div className="cb-settings-skill-toolbar">
-        <label className="cb-settings-search"><Search size={16} /><input aria-label="Поиск навыков" placeholder="Найти навык" value={query} onChange={(event) => setQuery(event.target.value)} /></label>
-        <button type="button" className="cb-settings-button" onClick={() => setCreating(true)}><Plus size={16} />Добавить</button>
+        <label className="cb-settings-search"><Search size={16} /><input aria-label="Search skills" placeholder="Find a skill" value={query} onChange={(event) => setQuery(event.target.value)} /></label>
+        <button type="button" className="cb-settings-button" onClick={() => setCreating(true)}><Plus size={16} />Add</button>
       </div>
       {loading ? <Loading /> : <div className="cb-settings-skill-list">
         {filtered.map((skill) => <div className="cb-settings-skill-row" key={skill.id}>
           <button className="cb-settings-skill-info" type="button" onClick={() => setEditing(skill)}>
             <span><strong>{skill.name}</strong><em>{scopeNames[skill.scope] ?? skill.scope}</em></span>
-            <p>{skill.description || 'Описание не задано.'}</p>
-            {!skill.editable && <small>Только чтение</small>}
+            <p>{skill.description || 'No description provided.'}</p>
+            {!skill.editable && <small>Read-only</small>}
           </button>
-          {bot && <label className="cb-settings-switch-target"><input type="checkbox" className="cb-settings-switch" aria-label={`Включить навык ${skill.name}`}
+          {bot && <label className="cb-settings-switch-target"><input type="checkbox" className="cb-settings-switch" aria-label={`Enable skill ${skill.name}`}
             checked={!disabled.includes(skill.id)} disabled={busy}
             onChange={(event) => { setDisabled((previous) => event.target.checked ? previous.filter((entry) => entry !== skill.id) : [...new Set([...previous, skill.id])]); setSuccess('') }} /></label>}
         </div>)}
-        {filtered.length === 0 && <p className="cb-settings-empty">{query ? 'Навыков с таким названием нет.' : 'Пока нет навыков. Добавьте первый.'}</p>}
+        {filtered.length === 0 && <p className="cb-settings-empty">{query ? 'No skills match this name.' : 'No skills yet. Add your first one.'}</p>}
       </div>}
       <Notice error={error} success={success} />
     </div>
-    {bot && <footer className="cb-settings-footer"><span className="cb-settings-hint">Выбор действует только для этого бота.</span>
+    {bot && <footer className="cb-settings-footer"><span className="cb-settings-hint">This selection only applies to this bot.</span>
       <SaveButton busy={busy} disabled={loading || !changed} /></footer>}
   </form>
 }
@@ -245,26 +245,26 @@ function SkillEditor({ skill, botId, onBack, onSaved }: { skill: Skill | null; b
   }
   return <form onSubmit={save} className="cb-settings-form">
     <div className="cb-settings-scroll">
-      <button type="button" className="cb-settings-text-button cb-settings-back" onClick={onBack}><ArrowLeft size={16} />Все навыки</button>
-      <h3 className="cb-settings-pane-heading">{skill?.name ?? 'Новый навык'}</h3>
+      <button type="button" className="cb-settings-text-button cb-settings-back" onClick={onBack}><ArrowLeft size={16} />All skills</button>
+      <h3 className="cb-settings-pane-heading">{skill?.name ?? 'New skill'}</h3>
       {!skill && <>
-        <label className="cb-settings-field">Имя папки навыка
+        <label className="cb-settings-field">Skill folder name
           <input value={name} onChange={(event) => setName(event.target.value)} placeholder="research-notes" required pattern={'[A-Za-z0-9][A-Za-z0-9_\\-]{0,63}'} maxLength={64} spellCheck={false} />
-          <small>{botId ? 'Навык будет сохранён в папке этого бота.' : 'Навык будет доступен всем ботам.'}</small>
+          <small>{botId ? "The skill will be saved in this bot's folder." : 'The skill will be available to all bots.'}</small>
         </label>
-        {!hasFrontmatter && <label className="cb-settings-field">Когда применять
+        {!hasFrontmatter && <label className="cb-settings-field">When to use
           <textarea value={description} onChange={(event) => setDescription(event.target.value)} rows={2} required
-            placeholder="Например, когда нужно собрать заметки по научной статье" maxLength={2000} />
+            placeholder="For example, when collecting notes on a research paper" maxLength={2000} />
         </label>}
-        <p className="cb-settings-hint">Опишите порядок работы. Можно также вставить готовый SKILL.md с YAML-заголовком.</p>
+        <p className="cb-settings-hint">Describe the workflow. You can also paste an existing SKILL.md with YAML frontmatter.</p>
       </>}
-      {loading ? <Loading /> : loaded && <MarkdownEditor label={skill ? 'SKILL.md' : 'Порядок работы'} content={content} onChange={setContent} readOnly={readOnly || busy}
-        placeholder="Опишите назначение навыка и шаги работы…" />}
+      {loading ? <Loading /> : loaded && <MarkdownEditor label={skill ? 'SKILL.md' : 'Workflow'} content={content} onChange={setContent} readOnly={readOnly || busy}
+        placeholder="Describe the skill's purpose and workflow steps…" />}
       {path && <div className="cb-settings-location"><FolderOpen size={15} /><span>{path}</span></div>}
       <Notice error={error} />
     </div>
     {!readOnly && <footer className="cb-settings-footer"><span /><SaveButton busy={busy}
-      disabled={loading || !loaded || (skill ? content === saved : !name.trim() || (!hasFrontmatter && !description.trim()))}>{skill ? 'Сохранить' : 'Создать навык'}</SaveButton></footer>}
+      disabled={loading || !loaded || (skill ? content === saved : !name.trim() || (!hasFrontmatter && !description.trim()))}>{skill ? 'Save' : 'Create skill'}</SaveButton></footer>}
   </form>
 }
 
@@ -300,14 +300,14 @@ function MaintenancePane({ capabilities, bots }: { capabilities: Capabilities | 
     setBusy(true); setError(''); setSuccess('')
     try {
       const result = await api.saveMaintenance({ ...draft })
-      setValue(result); setDraft(maintenanceDraft(result)); setSuccess('Настройки фонового ухода сохранены.')
+      setValue(result); setDraft(maintenanceDraft(result)); setSuccess('Maintenance settings saved.')
     } catch (cause) { setError(errorMessage(cause)) }
     finally { setBusy(false) }
   }
   async function run() {
     if (running || value?.running) return
     setRunning(true); setError(''); setSuccess('')
-    try { await api.runMaintenance(); setValue(await api.maintenance()); setSuccess('Инвентаризация запущена. Отчёты появятся ниже.') }
+    try { await api.runMaintenance(); setValue(await api.maintenance()); setSuccess('Inventory started. Reports will appear below.') }
     catch (cause) { setError(errorMessage(cause)) }
     finally { setRunning(false) }
   }
@@ -316,27 +316,27 @@ function MaintenancePane({ capabilities, bots }: { capabilities: Capabilities | 
   const locked = busy || running || Boolean(value?.running)
   return <form onSubmit={save} className="cb-settings-form">
     <div className="cb-settings-scroll">
-      <div className="cb-settings-intro"><Wrench size={20} /><p>Раз в день младшая модель проводит инвентаризацию рабочих папок. Старые файлы из tmp очищаются автоматически; отчёты остаются здесь.</p></div>
+      <div className="cb-settings-intro"><Wrench size={20} /><p>A lightweight model takes inventory of workspaces once a day. Old tmp files are removed automatically; reports stay here.</p></div>
       {loading ? <Loading /> : draft && <>
-        <label className="cb-settings-toggle-row"><span><strong>Ежедневная инвентаризация</strong><small>Работает в фоне, пока сервер приложения запущен.</small></span>
+        <label className="cb-settings-toggle-row"><span><strong>Daily inventory</strong><small>Runs in the background while the app server is running.</small></span>
           <input type="checkbox" className="cb-settings-switch" checked={draft.enabled} disabled={locked} onChange={(event) => { setDraft({ ...draft, enabled: event.target.checked }); setSuccess('') }} />
         </label>
-        <section className="cb-settings-section"><h3>Исполнитель инвентаризации</h3>
+        <section className="cb-settings-section"><h3>Inventory harness</h3>
           <RuntimeFields backend={draft.backend} model={draft.model} effort={draft.effort} capabilities={capabilities} disabled={locked} excludedEfforts={['ultra']}
             onChange={(next) => { setDraft({ ...draft, ...next }); setSuccess('') }} />
-          <label className="cb-settings-field">Хранить временные файлы, часов
+          <label className="cb-settings-field">Temporary file retention, hours
             <input type="number" min={24} max={8760} step={1} value={draft.retentionHours} disabled={locked}
               onChange={(event) => { setDraft({ ...draft, retentionHours: event.target.valueAsNumber }); setSuccess('') }} required />
           </label>
         </section>
         <section className="cb-settings-section">
-          <div className="cb-settings-section-heading"><h3>Последние проверки</h3>
+          <div className="cb-settings-section-heading"><h3>Recent checks</h3>
             <button type="button" className="cb-settings-button" onClick={run} disabled={running || Boolean(value?.running)}>
-              {running || value?.running ? <LoaderCircle size={15} className="cb-settings-spin" /> : <RefreshCw size={15} />}Запустить
+              {running || value?.running ? <LoaderCircle size={15} className="cb-settings-spin" /> : <RefreshCw size={15} />}Run
             </button>
           </div>
-          {lastRunAt && <p className="cb-settings-hint">Последний запуск: {formatDate(lastRunAt)}</p>}
-          {reports.length === 0 ? <p className="cb-settings-empty">Инвентаризации ещё не было.</p> : <div className="cb-settings-report-list">
+          {lastRunAt && <p className="cb-settings-hint">Last run: {formatDate(lastRunAt)}</p>}
+          {reports.length === 0 ? <p className="cb-settings-empty">No inventory runs yet.</p> : <div className="cb-settings-report-list">
             {reports.slice().reverse().map((report, index) => {
               const key = report.id ?? `${report.botId}-${report.startedAt}-${index}`
               return <MaintenanceReport key={key} report={report} botName={bots.find(bot => bot.id === report.botId)?.name} expanded={expanded === key} onToggle={() => setExpanded(expanded === key ? null : key)} />
@@ -360,21 +360,21 @@ function MaintenanceReport({ report, botName, expanded, onToggle }: { report: Ma
   return <div className={`cb-settings-report ${failed ? 'is-failed' : ''}`}>
     <button type="button" className="cb-settings-report-header" aria-expanded={expanded} onClick={onToggle}>
       {inProgress ? <LoaderCircle size={15} className="cb-settings-spin" /> : failed ? <Wrench size={15} /> : deferred ? <Clock3 size={15} /> : <Check size={15} />}
-      <span><strong>{botName ?? report.botName ?? (report.botId ? 'Бот в архиве' : 'Все боты')}</strong><small>{formatDate(report.startedAt ?? report.time ?? '')}</small></span>
-      <em>{inProgress ? 'Идёт проверка' : failed ? 'Ошибка' : deferred ? 'После ответа' : 'Готово'}</em>
+      <span><strong>{botName ?? report.botName ?? (report.botId ? 'Archived bot' : 'All bots')}</strong><small>{formatDate(report.startedAt ?? report.time ?? '')}</small></span>
+      <em>{inProgress ? 'Checking' : failed ? 'Error' : deferred ? 'After response' : 'Done'}</em>
     </button>
     {expanded && <div className="cb-settings-report-details">
       {report.summary && <p>{report.summary}</p>}
-      {removedFiles !== undefined && <p>Удалено временных файлов: {removedFiles}{bytesRemoved !== undefined ? ` · ${formatBytes(bytesRemoved)}` : ''}</p>}
+      {removedFiles !== undefined && <p>Temporary files removed: {removedFiles}{bytesRemoved !== undefined ? ` · ${formatBytes(bytesRemoved)}` : ''}</p>}
       {inventory.length > 0 && <ul>{inventory.map((file) => <li key={file}>{file}</li>)}</ul>}
       {report.error && <p className="cb-settings-report-error">{report.error}</p>}
     </div>}
   </div>
 }
 
-function Loading() { return <div className="cb-settings-loading" role="status"><LoaderCircle size={20} className="cb-settings-spin" />Загрузка…</div> }
+function Loading() { return <div className="cb-settings-loading" role="status"><LoaderCircle size={20} className="cb-settings-spin" />Loading…</div> }
 function formatDate(value: string) {
   const date = new Date(value)
-  return Number.isNaN(date.getTime()) ? 'Время не указано' : date.toLocaleString('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })
+  return Number.isNaN(date.getTime()) ? 'Time not specified' : date.toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })
 }
-function formatBytes(value: number) { return value < 1024 ? `${value} Б` : value < 1024 * 1024 ? `${(value / 1024).toFixed(1)} КБ` : `${(value / (1024 * 1024)).toFixed(1)} МБ` }
+function formatBytes(value: number) { return value < 1024 ? `${value} B` : value < 1024 * 1024 ? `${(value / 1024).toFixed(1)} KB` : `${(value / (1024 * 1024)).toFixed(1)} MB` }

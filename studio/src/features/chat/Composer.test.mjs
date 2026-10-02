@@ -88,7 +88,7 @@ function composer() {
     pauseUploads: () => { uploadsPaused = true; },
     resumeUploads: async () => { uploadsPaused = false; uploadGate.resolve(); await settled(); },
     edit: value => find(node => node.type === 'textarea').props.onChange({ target: { value } }),
-    send: () => find(node => node.props?.['aria-label'] === 'Отправить сообщение').props.onClick(),
+    send: () => find(node => node.props?.['aria-label'] === 'Send message').props.onClick(),
     draft: () => find(node => node.type === 'textarea').props.value,
     uploadNames: () => {
       const chips = find(node => node.props?.className === 'upload-chips');

@@ -316,7 +316,7 @@ func TestRuntimeExplicitGoalResumeTransfersPendingContextBeforeActivatingAfterRe
 	}
 	go resume()
 	ack := nextRuntimeSend(t, factory)
-	if !strings.Contains(ack.prompt, "the project owner chose red") || !strings.Contains(ack.prompt, "Не используй инструменты") {
+	if !strings.Contains(ack.prompt, "the project owner chose red") || !strings.Contains(ack.prompt, "Do not use tools") {
 		t.Fatalf("goal activated without bounded context handoff: %s", ack.prompt)
 	}
 	ack.session.mu.Lock()

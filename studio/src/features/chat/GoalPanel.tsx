@@ -13,12 +13,12 @@ import type { Bot, Event, Goal, GoalSnapshot } from "../../lib/types";
 import { api, errorMessage } from "../../lib/api";
 import { currentGoalUpdate, goalActionRevision, goalFromSnapshot } from "../../lib/currentGoal";
 const labels: Record<string, string> = {
-  active: "В работе",
-  paused: "На паузе",
-  blocked: "Нужна помощь",
-  usageLimited: "Лимит использования",
-  budgetLimited: "Лимит бюджета",
-  complete: "Достигнута",
+  active: "Active",
+  paused: "Paused",
+  blocked: "Needs help",
+  usageLimited: "Usage limit reached",
+  budgetLimited: "Budget limit reached",
+  complete: "Complete",
 };
 export function useGoal(bot: Bot, events: Event[], enabled: boolean) {
   const [goal, setGoal] = useState<Goal | null>(null);
@@ -85,9 +85,9 @@ export function GoalSummary({
       <span className="goal-summary-text">
         <strong>{goal.objective}</strong>
         <span>
-          {labels[goal.status || ""] || goal.status || "Цель"}
+          {labels[goal.status || ""] || goal.status || "Goal"}
           {budget > 0 &&
-            ` · ${used.toLocaleString("ru-RU")} / ${budget.toLocaleString("ru-RU")} токенов`}
+            ` · ${used.toLocaleString("en-US")} / ${budget.toLocaleString("en-US")} tokens`}
         </span>
       </span>
       {budget > 0 && (
@@ -190,15 +190,15 @@ export function GoalDialog({
           <button
             className="icon-button"
             onClick={onClose}
-            aria-label="Закрыть цель"
+            aria-label="Close goal"
           >
             <X size={18} />
           </button>
         </header>
-        <h2 id="goal-title">{goal ? "Цель бота" : "Куда движемся?"}</h2>
+        <h2 id="goal-title">{goal ? "Bot goal" : "What is the goal?"}</h2>
         <p>
-          Задайте результат, к которому {bot.name} будет возвращаться до
-          завершения работы.
+          Define a result that {bot.name} will keep working toward until
+          the task is complete.
         </p>
         <form
           onSubmit={(event) => {
@@ -215,18 +215,18 @@ export function GoalDialog({
               });
           }}
         >
-          <label htmlFor="goal-objective">Ожидаемый результат</label>
+          <label htmlFor="goal-objective">Expected result</label>
           <textarea
             id="goal-objective"
             autoFocus
             rows={4}
             value={objective}
             onChange={(e) => setObjective(e.target.value)}
-            placeholder="Что должно быть готово и как это проверить?"
+            placeholder="What should be ready, and how can it be verified?"
             required
           />
           <label htmlFor="goal-budget">
-            Бюджет токенов <span>необязательно</span>
+            Token budget <span>optional</span>
           </label>
           <input
             id="goal-budget"
@@ -235,14 +235,14 @@ export function GoalDialog({
             step="1"
             value={budget}
             onChange={(e) => setBudget(e.target.value)}
-            placeholder="Без заданного ограничения"
+            placeholder="No limit"
           />
           {goal && (
             <div className="goal-dialog-status">
               <span>{labels[goal.status || ""] || goal.status}</span>
               <span>
-                {Number(goal.tokensUsed || 0).toLocaleString("ru-RU")} токенов
-                использовано
+                {Number(goal.tokensUsed || 0).toLocaleString("en-US")} tokens
+                used
               </span>
             </div>
           )}
@@ -254,7 +254,7 @@ export function GoalDialog({
                   className="icon-button danger-button"
                   disabled={busy}
                   onClick={() => void clear()}
-                  aria-label="Удалить цель"
+                  aria-label="Delete goal"
                 >
                   <Trash2 size={17} />
                 </button>
@@ -266,7 +266,7 @@ export function GoalDialog({
                     onClick={() => void save({ status: "paused" })}
                   >
                     <Pause size={14} />
-                    Пауза
+                    Pause
                   </button>
                 ) : goal.status !== "complete" ? (
                   <button
@@ -276,7 +276,7 @@ export function GoalDialog({
                     onClick={() => void save({ status: "active" })}
                   >
                     <Play size={14} />
-                    Продолжить
+                    Resume
                   </button>
                 ) : null}
               </>
@@ -289,7 +289,7 @@ export function GoalDialog({
               {busy ? (
                 <LoaderCircle size={16} className="spin" />
               ) : (
-                "Сохранить цель"
+                "Save goal"
               )}
             </button>
           </div>

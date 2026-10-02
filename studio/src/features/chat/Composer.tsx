@@ -191,7 +191,7 @@ export default function Composer({
     if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
       audioInput.current?.click();
       onError(
-        "Для микрофона нужен HTTPS. Можно выбрать аудиофайл для диктовки.",
+        "The microphone requires HTTPS. You can choose an audio file for transcription.",
       );
       return;
     }
@@ -228,7 +228,7 @@ export default function Composer({
       stream.current?.getTracks().forEach((track) => track.stop());
       onError(
         error instanceof DOMException && error.name === "NotAllowedError"
-          ? "Доступ к микрофону не разрешён."
+          ? "Microphone access was denied."
           : errorMessage(error),
       );
     }
@@ -277,7 +277,7 @@ export default function Composer({
                       current.filter((u) => u.key !== upload.key),
                     )
                   }
-                  aria-label={`Убрать ${upload.name}`}
+                  aria-label={`Remove ${upload.name}`}
                 >
                   <X size={13} />
                 </button>
@@ -289,7 +289,7 @@ export default function Composer({
           <div className="recording-state">
             <span className="recording-dot" />
             <AudioLines size={19} />
-            <span>Записываем голос</span>
+            <span>Recording voice</span>
             <time>
               {Math.floor(elapsed / 60)}:{String(elapsed % 60).padStart(2, "0")}
             </time>
@@ -306,7 +306,7 @@ export default function Composer({
                 setRecording(false);
               }}
             >
-              Отменить
+              Cancel
             </button>
           </div>
         ) : (
@@ -336,14 +336,14 @@ export default function Composer({
             }}
             placeholder={
               transcribing
-                ? "Распознаём вашу речь…"
+                ? "Transcribing your voice…"
                   : busy
-                  ? "Подготовьте следующее сообщение…"
+                  ? "Prepare your next message…"
                   : context.compacting
-                    ? "Контекст сжимается…"
-                  : `Напишите ${bot.name}`
+                    ? "Compacting context…"
+                  : `Message ${bot.name}`
             }
-            aria-label={`Сообщение боту ${bot.name}`}
+            aria-label={`Message ${bot.name}`}
             rows={1}
             disabled={transcribing}
           />
@@ -353,8 +353,8 @@ export default function Composer({
             <button
               className="icon-button"
               onClick={() => input.current?.click()}
-              aria-label="Прикрепить файл"
-              title="Прикрепить файл"
+              aria-label="Attach file"
+              title="Attach file"
             >
               {pendingUploads ? <LoaderCircle size={18} className="spin" /> : <Plus size={19} />}
             </button>
@@ -363,11 +363,11 @@ export default function Composer({
                 className={`icon-button ${recording ? "is-recording" : ""}`}
                 onClick={() => void microphone()}
                 disabled={transcribing || sending}
-                aria-label={recording ? "Завершить запись" : "Диктовка"}
+                aria-label={recording ? "Finish recording" : "Dictation"}
                 title={
                   window.isSecureContext
-                    ? "Диктовка"
-                    : "Выбрать аудиофайл · для микрофона нужен HTTPS"
+                    ? "Dictation"
+                    : "Choose an audio file · the microphone requires HTTPS"
                 }
               >
                 {transcribing ? (
@@ -387,15 +387,15 @@ export default function Composer({
                 ref={actionsTrigger}
                 className="composer-actions-trigger"
                 onClick={() => setActionsOpen(!actionsOpen)}
-                aria-label="Ещё действия"
+                aria-label="More actions"
                 aria-expanded={actionsOpen}
                 aria-haspopup="dialog"
                 aria-controls={actionsOpen ? actionsId : undefined}
-                title="Ещё действия"
+                title="More actions"
               ><MoreHorizontal size={19} /></button>
               {actionsOpen && <>
-                <button className="popover-backdrop" tabIndex={-1} onClick={closeActions} aria-label="Закрыть действия" />
-                <div className="composer-actions-menu" ref={actionsDialog} tabIndex={-1} id={actionsId} role="dialog" aria-modal={!modelPickerOpen} aria-label="Действия с сообщением">
+                <button className="popover-backdrop" tabIndex={-1} onClick={closeActions} aria-label="Close actions" />
+                <div className="composer-actions-menu" ref={actionsDialog} tabIndex={-1} id={actionsId} role="dialog" aria-modal={!modelPickerOpen} aria-label="Message actions">
                   <ModelPicker
                     bot={bot}
                     capabilities={capabilities}
@@ -410,7 +410,7 @@ export default function Composer({
                       audioInput.current?.click();
                     }}
                     disabled={transcribing}
-                  ><AudioLines size={16} /><span>Распознать аудиофайл</span></button>}
+                  ><AudioLines size={16} /><span>Transcribe audio file</span></button>}
                 </div>
               </>}
             </div>
@@ -419,8 +419,8 @@ export default function Composer({
               className="send-button stop-button"
               onClick={() => void stop()}
               disabled={stopping}
-              aria-label="Остановить бота"
-              title="Остановить"
+              aria-label="Stop bot"
+              title="Stop"
             >
               {stopping ? (
                 <LoaderCircle size={16} className="spin" />
@@ -440,8 +440,8 @@ export default function Composer({
                 recording ||
                 (!text.trim() && !uploads.some((u) => u.attachment))
               }
-              aria-label="Отправить сообщение"
-              title="Отправить"
+              aria-label="Send message"
+              title="Send"
             >
               {sending ? (
                 <LoaderCircle size={16} className="spin" />
@@ -454,7 +454,7 @@ export default function Composer({
         </div>
       </div>
       {(transcribing || pendingUploads) && <span className="composer-live-status" role="status">
-        {transcribing ? "Распознаём речь…" : "Загружаем файлы…"}
+        {transcribing ? "Transcribing voice…" : "Uploading files…"}
       </span>}
       <input
         hidden

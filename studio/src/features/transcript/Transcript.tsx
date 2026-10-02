@@ -34,13 +34,13 @@ export interface TranscriptProps {
 }
 
 const statusLabels: Record<string, string> = {
-  running: 'Работает', starting: 'Запускается', queued: 'В очереди', waiting: 'Ждёт ответ',
-  waiting_permission: 'Ждёт разрешение', inProgress: 'Выполняется', in_progress: 'Выполняется',
-  completed: 'Готово', complete: 'Готово', failed: 'Ошибка', error: 'Ошибка',
-  stopped: 'Остановлено', cancelled: 'Отменено', canceled: 'Отменено', interrupted: 'Прервано',
-  active: 'В работе', paused: 'На паузе', blocked: 'Нужна помощь',
-  usageLimited: 'Лимит использования', budgetLimited: 'Бюджет исчерпан',
-  retrying: 'Повторяет запрос', started: 'Запущен', interacted: 'Получил сообщение',
+  running: 'Working', starting: 'Starting', queued: 'Queued', waiting: 'Awaiting reply',
+  waiting_permission: 'Awaiting approval', inProgress: 'In progress', in_progress: 'In progress',
+  completed: 'Done', complete: 'Done', failed: 'Error', error: 'Error',
+  stopped: 'Stopped', cancelled: 'Cancelled', canceled: 'Cancelled', interrupted: 'Interrupted',
+  active: 'Active', paused: 'Paused', blocked: 'Needs help',
+  usageLimited: 'Usage limit reached', budgetLimited: 'Budget exhausted',
+  retrying: 'Retrying', started: 'Started', interacted: 'Message received',
 };
 
 function statusLabel(status: string) { return statusLabels[status] || status; }
@@ -48,11 +48,11 @@ function statusLabel(status: string) { return statusLabels[status] || status; }
 function dateTime(value: string) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return '';
-  return new Intl.DateTimeFormat('ru', { hour: '2-digit', minute: '2-digit' }).format(date);
+  return new Intl.DateTimeFormat('en-GB', { hour: '2-digit', minute: '2-digit' }).format(date);
 }
 
 function duration(value: unknown) {
-  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? `${(value / 1000).toFixed(1)} с` : '';
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? `${(value / 1000).toFixed(1)} s` : '';
 }
 
 function safeUrl(value: string, allowLocal = false): string | undefined {
@@ -65,7 +65,7 @@ function safeUrl(value: string, allowLocal = false): string | undefined {
   return undefined;
 }
 
-function CopyButton({ content, label = 'Копировать' }: { content: string; label?: string }) {
+function CopyButton({ content, label = 'Copy' }: { content: string; label?: string }) {
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState('');
   useEffect(() => {
@@ -84,13 +84,13 @@ function CopyButton({ content, label = 'Копировать' }: { content: stri
         document.body.append(area); area.select();
         let success = false;
         try { success = document.execCommand('copy'); } finally { area.remove(); }
-        if (!success) throw new Error('Браузер не разрешил копирование');
+        if (!success) throw new Error('The browser did not allow copying');
       }
       setCopied(true); setError('');
-    } catch { setError('Не удалось скопировать. Выделите текст вручную.'); }
+    } catch { setError('Unable to copy. Select the text manually.'); }
   }
   return <button type="button" className="transcript-icon-button" onClick={() => void copy()}
-    aria-label={copied ? 'Скопировано' : label} title={error || (copied ? 'Скопировано' : label)}>
+    aria-label={copied ? 'Copied' : label} title={error || (copied ? 'Copied' : label)}>
     {copied ? <Check size={14} /> : <Copy size={14} />}
   </button>;
 }
@@ -109,9 +109,9 @@ export function Markdown({ content }: { content: string }) {
     remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeHighlight, [rehypeKatex, { strict: false }]]}
     components={{
       a: ({ href, children }) => <a href={href} target="_blank" rel="noreferrer noopener">{children}<ArrowUpRight size={11} className="transcript-link-arrow" /></a>,
-      pre: ({ children }) => <div className="transcript-code-block"><CopyButton content={codeText(children)} label="Копировать код" /><pre>{children}</pre></div>,
+      pre: ({ children }) => <div className="transcript-code-block"><CopyButton content={codeText(children)} label="Copy code" /><pre>{children}</pre></div>,
       table: ({ children }) => <div className="transcript-table-scroll"><table>{children}</table></div>,
-      img: ({ src, alt }) => <a href={src} target="_blank" rel="noreferrer noopener"><img src={src} alt={alt || 'Иллюстрация'} loading="lazy" /></a>,
+      img: ({ src, alt }) => <a href={src} target="_blank" rel="noreferrer noopener"><img src={src} alt={alt || 'Illustration'} loading="lazy" /></a>,
     }}
   >{content}</ReactMarkdown></div>;
 }
@@ -132,7 +132,7 @@ function Attachments({ botId, attachments }: { botId: string; attachments: Trans
       </a>}
       {url && attachment.mimeType.startsWith('audio/') && <audio src={url} controls preload="metadata" />}
       {url && attachment.mimeType.startsWith('video/') && <video src={url} controls preload="metadata" />}
-      {url ? <a href={url} download={attachment.name} className="transcript-file-link" aria-label={`Скачать ${attachment.name}`}>
+      {url ? <a href={url} download={attachment.name} className="transcript-file-link" aria-label={`Download ${attachment.name}`}>
         <Paperclip size={14} /><span>{attachment.name}</span><Download size={14} />
       </a> : <span className="transcript-file-link"><File size={14} />{attachment.name}</span>}
     </div>;
@@ -149,10 +149,10 @@ function Message({ message, botId }: { message: TranscriptMessage; botId: string
       <Attachments botId={botId} attachments={message.attachments} />
     </div>
     {user ? <div className={`transcript-message-meta${!delegated && message.source !== 'telegram' ? ' is-time-only' : ''}`}>
-      {delegated && <span>От бота {delegated.sender}</span>}{message.source === 'telegram' && <span>Telegram</span>}
+      {delegated && <span>From bot {delegated.sender}</span>}{message.source === 'telegram' && <span>Telegram</span>}
       <time className="transcript-message-time" dateTime={message.time}>{dateTime(message.time)}</time>
     </div>
-      : message.content && <div className="transcript-message-actions"><CopyButton content={message.content} label="Копировать ответ" /></div>}
+      : message.content && <div className="transcript-message-actions"><CopyButton content={message.content} label="Copy response" /></div>}
   </article>;
 }
 
@@ -184,7 +184,7 @@ function Payload({ label, value }: { label: string; value: unknown }) {
   </section>;
 }
 
-function RawDetails({ value, label = 'Данные действия' }: { value: unknown; label?: string }) {
+function RawDetails({ value, label = 'Action data' }: { value: unknown; label?: string }) {
   const [open, setOpen] = useState(false);
   return <details className="transcript-raw-details" onToggle={event => setOpen(event.currentTarget.open)}><summary><Code2 size={12} />{label}<ChevronDown size={12} /></summary>
     {open && <Payload label="JSON" value={value} />}
@@ -234,17 +234,17 @@ function Goal({ activity }: { activity: Activity }) {
   return <div className="transcript-goal">
     {activity.text && <Markdown content={activity.text} />}
     {(used !== undefined || budget !== undefined) && <div className="transcript-goal-budget">
-      <span>{used === undefined ? '—' : used.toLocaleString('ru')}{budget ? ` / ${budget.toLocaleString('ru')}` : ''} токенов</span>
-      {typeof activity.data.timeUsedSeconds === 'number' && <span>{Math.round(activity.data.timeUsedSeconds / 60)} мин</span>}
+      <span>{used === undefined ? '—' : used.toLocaleString('en')}{budget ? ` / ${budget.toLocaleString('en')}` : ''} tokens</span>
+      {typeof activity.data.timeUsedSeconds === 'number' && <span>{Math.round(activity.data.timeUsedSeconds / 60)} min</span>}
     </div>}
-    {used !== undefined && budget && <progress value={Math.min(used, budget)} max={budget} aria-label="Использовано токенов из бюджета цели" />}
+    {used !== undefined && budget && <progress value={Math.min(used, budget)} max={budget} aria-label="Tokens used from the goal budget" />}
   </div>;
 }
 
 const collabLabels: Record<string, string> = {
-  spawnAgent: 'Запускает сабагента', spawn_agent: 'Запускает сабагента',
-  sendInput: 'Сообщение сабагенту', send_message: 'Сообщение сабагенту',
-  wait: 'Ожидает сабагентов', closeAgent: 'Завершает сабагента', resumeAgent: 'Продолжает работу сабагента',
+  spawnAgent: 'Starting subagent', spawn_agent: 'Starting subagent',
+  sendInput: 'Message to subagent', send_message: 'Message to subagent',
+  wait: 'Waiting for subagents', closeAgent: 'Stopping subagent', resumeAgent: 'Resuming subagent',
 };
 
 function pendingRequests(turn: TranscriptTurn): UserRequest[] {
@@ -286,19 +286,19 @@ function Subagents({ activity, onPermission, onQuestion }: { activity: Activity;
     {ids.map(id => {
       const state = record(states[id]);
       return <div key={id} className="transcript-subagent"><div className="transcript-subagent-header">
-        <span title={id}><Users size={13} />{string(state.name) || string(state.agentNickname) || 'Сабагент'}</span>{string(state.status) && <Status value={string(state.status)} />}
+        <span title={id}><Users size={13} />{string(state.name) || string(state.agentNickname) || 'Subagent'}</span>{string(state.status) && <Status value={string(state.status)} />}
       </div>{string(state.message) && <Markdown content={string(state.message)} />}</div>;
     })}
     {child && <div className="transcript-subagent-thread" data-thread-id={child.id}>
-      <div className="transcript-subagent-header"><span title={child.id}><Users size={13} />{string(record(activity.data.thread).name) || string(record(activity.data.thread).agentNickname) || 'Диалог сабагента'}</span><Status value={child.status} /></div>
+      <div className="transcript-subagent-header"><span title={child.id}><Users size={13} />{string(record(activity.data.thread).name) || string(record(activity.data.thread).agentNickname) || 'Subagent conversation'}</span><Status value={child.status} /></div>
       {child.activities.map(item => <ActivityItem key={item.id} activity={item} onPermission={onPermission} onQuestion={onQuestion} />)}
       {child.responses.map(response => <section className="transcript-subagent-response" key={response.id}>
-        <Markdown content={response.content} /><CopyButton content={response.content} label="Копировать ответ сабагента" />
+        <Markdown content={response.content} /><CopyButton content={response.content} label="Copy subagent response" />
       </section>)}
       {child.requests.filter(request => request.resolved).map(request => <RequestCard key={request.id} request={request} onPermission={onPermission} onQuestion={onQuestion} />)}
       {child.notices.map((notice, index) => <p className="transcript-muted" key={index}>{notice}</p>)}
       {child.error && <p className="transcript-error">{child.error}</p>}
-      <RawJournal events={child.events} title="События этой сессии" />
+      <RawJournal events={child.events} title="Session events" />
     </div>}
   </div>;
 }
@@ -322,17 +322,17 @@ function ActivityItem({ activity, onPermission, onQuestion }: { activity: Activi
     <div className={`transcript-disclosure${open ? ' is-open' : ''}`} id={contentId} aria-hidden={!open} inert={!open}>
       <div className="transcript-disclosure-inner">{renderContent && <div className="transcript-activity-content">
       {simpleText && activity.text && <Markdown content={activity.text} />}
-      {activity.kind === 'thinking' && !activity.text && <p className="transcript-muted">Ожидаем доступное от модели содержание.</p>}
+      {activity.kind === 'thinking' && !activity.text && <p className="transcript-muted">Waiting for content from the model.</p>}
       {activity.kind === 'plan' && <Plan activity={activity} />}
       {activity.kind === 'goal' && <Goal activity={activity} />}
       {activity.kind === 'subagent' && <Subagents activity={activity} onPermission={onPermission} onQuestion={onQuestion} />}
       {activity.kind === 'search' && <SearchResults value={activity.output} />}
-      {!simpleText && activity.kind !== 'subagent' && <Payload label="Вход" value={activity.input} />}
-      {!simpleText && activity.kind !== 'subagent' && <Payload label="Результат" value={activity.output} />}
+      {!simpleText && activity.kind !== 'subagent' && <Payload label="Input" value={activity.input} />}
+      {!simpleText && activity.kind !== 'subagent' && <Payload label="Output" value={activity.output} />}
       {activity.kind === 'event' && activity.text && <Markdown content={activity.text} />}
       {Boolean(activity.data.cwd || activity.data.exitCode !== undefined || activity.data.durationMs) && <div className="transcript-tool-meta">
         {string(activity.data.cwd) && <span>{string(activity.data.cwd)}</span>}
-        {typeof activity.data.exitCode === 'number' && <span>Код выхода: {activity.data.exitCode}</span>}
+        {typeof activity.data.exitCode === 'number' && <span>Exit code: {activity.data.exitCode}</span>}
         {duration(activity.data.durationMs) && <span>{duration(activity.data.durationMs)}</span>}
       </div>}
       <RawDetails value={activity.data} />
@@ -342,25 +342,25 @@ function ActivityItem({ activity, onPermission, onQuestion }: { activity: Activi
 }
 
 function currentActivityLabel(turn: TranscriptTurn) {
-  if (pendingRequests(turn).length || turn.status === 'waiting_permission') return 'Ждёт вашего ответа';
-  if (turn.status === 'queued') return 'В очереди';
-  if (turn.status === 'retrying') return 'Повторяет запрос';
+  if (pendingRequests(turn).length || turn.status === 'waiting_permission') return 'Awaiting your reply';
+  if (turn.status === 'queued') return 'Queued';
+  if (turn.status === 'retrying') return 'Retrying';
   const activity = turn.activities.slice().reverse().find(item => isRunning(item.status)
     || Boolean(item.thread && isRunning(item.thread.status)));
   if (!activity) return turn.responses.some(message => !message.artifact && message.content)
-    ? 'Пишет ответ' : turn.status === 'starting' ? 'Начинает работу' : 'Работает';
-  if (activity.kind === 'thinking') return 'Размышляет';
-  if (activity.kind === 'search') return 'Ищет в интернете';
-  if (activity.kind === 'plan') return 'Составляет план';
-  if (activity.kind === 'goal') return 'Работает над целью';
-  if (activity.kind === 'subagent') return activity.title === 'wait' ? 'Ждёт сабагентов' : 'Работают сабагенты';
-  if (activity.kind === 'commentary') return activity.text.trim().split('\n').find(Boolean)?.replace(/^[#>*\s]+/, '').slice(0, 120) || 'Обновляет ход работы';
-  if (activity.data.type === 'contextCompaction' || /compac|сжат|сжим/i.test(activity.title)) return 'Сжимает контекст';
-  if (activity.data.type === 'fileChange') return 'Редактирует файлы';
-  if (activity.data.type === 'commandExecution' || /^(bash|exec_command|shell|terminal)$/i.test(activity.title)) return 'Выполняет команду';
-  if (/^(read|read_file|readfile)$/i.test(activity.title)) return 'Читает файл';
-  if (/^(write|edit|apply_patch|write_file)$/i.test(activity.title)) return 'Редактирует файлы';
-  return activity.title.replace(/_/g, ' ') || 'Работает';
+    ? 'Writing response' : turn.status === 'starting' ? 'Starting work' : 'Working';
+  if (activity.kind === 'thinking') return 'Thinking';
+  if (activity.kind === 'search') return 'Searching the web';
+  if (activity.kind === 'plan') return 'Planning';
+  if (activity.kind === 'goal') return 'Working on goal';
+  if (activity.kind === 'subagent') return activity.title === 'wait' ? 'Waiting for subagents' : 'Subagents working';
+  if (activity.kind === 'commentary') return activity.text.trim().split('\n').find(Boolean)?.replace(/^[#>*\s]+/, '').slice(0, 120) || 'Updating progress';
+  if (activity.data.type === 'contextCompaction' || /compac/i.test(activity.title)) return 'Compacting context';
+  if (activity.data.type === 'fileChange') return 'Editing files';
+  if (activity.data.type === 'commandExecution' || /^(bash|exec_command|shell|terminal)$/i.test(activity.title)) return 'Running command';
+  if (/^(read|read_file|readfile)$/i.test(activity.title)) return 'Reading file';
+  if (/^(write|edit|apply_patch|write_file)$/i.test(activity.title)) return 'Editing files';
+  return activity.title.replace(/_/g, ' ') || 'Working';
 }
 
 function TurnActivity({ turn, onPermission, onQuestion }: { turn: TranscriptTurn; onPermission: PermissionHandler; onQuestion?: PermissionHandler }) {
@@ -374,16 +374,16 @@ function TurnActivity({ turn, onPermission, onQuestion }: { turn: TranscriptTurn
   if (!turn.activities.length && !running && !resolvedRequests.length && !hasStats) return null;
   const serviceTitle = !turn.users.length && !turn.responses.length && turn.activities.length === 1
     && turn.activities[0].kind === 'event' ? turn.activities[0].title : '';
-  const label = running ? currentActivityLabel(turn) : serviceTitle || (isFailed(turn.status) ? 'Ошибка выполнения'
+  const label = running ? currentActivityLabel(turn) : serviceTitle || (isFailed(turn.status) ? 'Execution failed'
     : ['stopped', 'interrupted', 'cancelled', 'canceled'].includes(turn.status) ? statusLabel(turn.status)
-      : turn.activities.length ? 'Ход работы' : 'Детали ответа');
+      : turn.activities.length ? 'Activity' : 'Response details');
   return <section className={`transcript-turn-activity${running ? ' is-running' : ''}`}>
     <button className="transcript-activity-toggle" type="button" aria-expanded={open} aria-controls={contentId}
       onClick={() => setOverride({ running, open: !open })}>
       {running ? <LoaderCircle size={14} className="transcript-spin" aria-hidden="true" />
         : isFailed(turn.status) ? <CircleAlert size={14} aria-hidden="true" /> : <CheckCheck size={14} aria-hidden="true" />}
       <span className="transcript-current-activity" role={running ? 'status' : undefined} aria-live={running ? 'polite' : undefined} title={label}>{label}</span>
-      {turn.activities.length > 0 && <small className="transcript-activity-count" aria-label={`Количество действий: ${turn.activities.length}`}>{turn.activities.length}</small>}
+      {turn.activities.length > 0 && <small className="transcript-activity-count" aria-label={`Action count: ${turn.activities.length}`}>{turn.activities.length}</small>}
       <ChevronDown size={13} className={open ? 'is-open' : ''} aria-hidden="true" />
     </button>
     <div className={`transcript-disclosure${open ? ' is-open' : ''}`} id={contentId} aria-hidden={!open} inert={!open}>
@@ -393,9 +393,9 @@ function TurnActivity({ turn, onPermission, onQuestion }: { turn: TranscriptTurn
       {!running && hasStats && <div className="transcript-turn-stats">
         <span>{[turn.backend === 'pi' ? 'Pi' : turn.backend === 'codex' ? 'Codex' : turn.backend, turn.model, turn.effort,
           ['priority', 'fast'].includes(turn.serviceTier) ? 'Fast' : turn.serviceTier].filter(Boolean).join(' · ')}</span>
-        <span title="Оценка по времени генерации. Время выполнения инструментов исключено, где runtime сообщил тайминги.">{turn.tokensPerSecond !== undefined && turn.tokensPerSecond > 0 ? `≈ ${turn.tokensPerSecond.toFixed(1)}` : '—'} ток/с</span>
-        {turn.outputTokens !== undefined && turn.outputTokens > 0 && <span>{turn.outputTokens.toLocaleString('ru')} токенов</span>}
-        {duration(turn.generationMs) && <span>{duration(turn.generationMs)} генерации</span>}
+        <span title="Estimated from generation time. Tool execution time is excluded when reported by the runtime.">{turn.tokensPerSecond !== undefined && turn.tokensPerSecond > 0 ? `≈ ${turn.tokensPerSecond.toFixed(1)}` : '—'} tok/s</span>
+        {turn.outputTokens !== undefined && turn.outputTokens > 0 && <span>{turn.outputTokens.toLocaleString('en')} tokens</span>}
+        {duration(turn.generationMs) && <span>{duration(turn.generationMs)} generation</span>}
       </div>}
       <RawJournal events={turn.events} />
       </div>}</div>
@@ -417,10 +417,10 @@ function QuestionField({ question, value, onChange }: {
       <span><strong>{option.label}</strong>{option.description && <small>{option.description}</small>}</span>
     </label>)}
     {(question.allowOther || !question.options.length) && <label className="transcript-free-answer">
-      <span>{question.options.length ? 'Свой вариант' : 'Ваш ответ'}</span>
+      <span>{question.options.length ? 'Other' : 'Your answer'}</span>
       <input type={question.isSecret ? 'password' : 'text'} autoComplete="off" value={other}
         onChange={event => onChange(question.multiSelect ? [...selected, event.target.value] : [event.target.value])}
-        placeholder={question.options.length ? 'Или напишите ответ…' : 'Напишите ответ…'} />
+        placeholder={question.options.length ? 'Or write an answer…' : 'Write an answer…'} />
     </label>}
   </fieldset>;
 }
@@ -447,7 +447,7 @@ function RequestCard({ request, onPermission, onQuestion }: {
       const handler = request.questions.length && onQuestion ? onQuestion : onPermission;
       await handler(request.id, behavior, updatedInput, request.method === 'input' ? input : undefined);
       setAnswered(true); setAnswers({}); setInput('');
-    } catch (err) { setError(err instanceof Error ? err.message : 'Не удалось отправить ответ'); }
+    } catch (err) { setError(err instanceof Error ? err.message : 'Unable to send response'); }
     finally { setBusy(false); }
   }
   const canSubmit = request.questions.length
@@ -456,22 +456,22 @@ function RequestCard({ request, onPermission, onQuestion }: {
   function submit(event: FormEvent) { event.preventDefault(); void respond('allow'); }
   return <section className={`transcript-request${resolved ? ' is-resolved' : ''}`} aria-label={request.title}>
     <div className="transcript-request-header"><ShieldCheck size={17} /><strong>{request.title}</strong>
-      {resolved && <span>{request.behavior === 'deny' ? 'Отклонено' : 'Закрыто'}</span>}
+      {resolved && <span>{request.behavior === 'deny' ? 'Denied' : 'Closed'}</span>}
     </div>
-    {resolved ? <p className="transcript-muted">{request.questions.length ? request.questions.map(q => q.question).join(' · ') : 'Запрос больше не ожидает решения.'}</p>
+    {resolved ? <p className="transcript-muted">{request.questions.length ? request.questions.map(q => q.question).join(' · ') : 'This request no longer needs a decision.'}</p>
       : <form onSubmit={submit}>
         {request.questions.length ? request.questions.map(q => <QuestionField question={q} key={q.id} value={answers[q.id] || []}
           onChange={value => setAnswers(v => ({ ...v, [q.id]: value }))} />)
-          : <>{Boolean(request.input) && <Payload label="Действие" value={request.input} />}
+          : <>{Boolean(request.input) && <Payload label="Action" value={request.input} />}
             {request.method === 'input' && <input className="transcript-request-input" value={input} onChange={event => setInput(event.target.value)}
-              placeholder={request.placeholder || 'Ваш ответ'} autoComplete="off" aria-label={request.title} />}</>}
+              placeholder={request.placeholder || 'Your answer'} autoComplete="off" aria-label={request.title} />}</>}
         {error && <p className="transcript-error" role="alert">{error}</p>}
         <div className="transcript-request-actions">
           <button className="transcript-button is-primary" type="submit" disabled={busy || !canSubmit}>
             {busy ? <LoaderCircle size={14} className="transcript-spin" /> : <Check size={14} />}
-            {request.questions.length || request.method === 'input' ? 'Отправить ответ' : 'Разрешить'}
+            {request.questions.length || request.method === 'input' ? 'Send response' : 'Allow'}
           </button>
-          <button className="transcript-button" type="button" disabled={busy} onClick={() => void respond('deny')}><X size={14} />{request.questions.length ? 'Пропустить' : 'Отклонить'}</button>
+          <button className="transcript-button" type="button" disabled={busy} onClick={() => void respond('deny')}><X size={14} />{request.questions.length ? 'Skip' : 'Deny'}</button>
         </div>
       </form>}
   </section>;
@@ -483,7 +483,7 @@ function JournalItem({ event }: { event: JournalEvent }) {
   return <details className="transcript-journal-event" onToggle={e => setOpen(e.currentTarget.open)}><summary>
     <code>#{event.seq}</code><span>{event.type === 'native' ? string(data.method) : string(field(data, 'type')) || event.type}</span>
     <time dateTime={event.time}>{dateTime(event.time)}</time><ChevronDown size={12} />
-  </summary>{open && <Payload label="Событие" value={event} />}</details>;
+  </summary>{open && <Payload label="Event" value={event} />}</details>;
 }
 
 function RawJournal({ events, title }: { events: JournalEvent[]; title?: string }) {
@@ -494,13 +494,13 @@ function RawJournal({ events, title }: { events: JournalEvent[]; title?: string 
     return `${event.seq} ${event.type} ${string(data.method)} ${string(field(data, 'type'))}`.toLowerCase().includes(query.toLowerCase());
   }) : events;
   if (!events.length) return null;
-  return <details className="transcript-journal" onToggle={event => setOpen(event.currentTarget.open)}><summary><Code2 size={12} /><span>{title || 'Журнал хода'}</span>
+  return <details className="transcript-journal" onToggle={event => setOpen(event.currentTarget.open)}><summary><Code2 size={12} /><span>{title || 'Turn journal'}</span>
     <small>{events.length}</small><ChevronDown size={12} /></summary>
     {open && <div className="transcript-journal-body"><div className="transcript-journal-toolbar">
-      <label><Search size={13} /><input value={query} onChange={event => setQuery(event.target.value)} placeholder="Тип события или метод…" aria-label="Найти событие в журнале" /></label>
-      <CopyButton content={events.map(event => JSON.stringify(event)).join('\n')} label="Копировать журнал JSONL" />
+      <label><Search size={13} /><input value={query} onChange={event => setQuery(event.target.value)} placeholder="Event type or method…" aria-label="Find an event in the journal" /></label>
+      <CopyButton content={events.map(event => JSON.stringify(event)).join('\n')} label="Copy JSONL journal" />
     </div><div className="transcript-journal-events">{visible.map(event => <JournalItem key={event.seq} event={event} />)}
-      {!visible.length && <p className="transcript-muted">Таких событий нет.</p>}</div></div>}
+      {!visible.length && <p className="transcript-muted">No matching events.</p>}</div></div>}
   </details>;
 }
 
@@ -516,8 +516,8 @@ function Turn({ bot, turn, onPermission, onQuestion, onRetry }: TranscriptProps 
         <TurnActivity turn={turn} onPermission={onPermission} onQuestion={onQuestion} />
         {pendingRequests(turn).map(request => <RequestCard key={request.id} request={request} onPermission={onPermission} onQuestion={onQuestion} />)}
         {turn.responses.map(message => <Message key={message.id} message={message} botId={bot.id} />)}
-        {turn.error && <div className="transcript-turn-error" role="alert"><CircleAlert size={16} /><div><strong>Не удалось завершить работу</strong><p>{turn.error}</p>
-          {onRetry && <button type="button" className="transcript-button" onClick={() => void onRetry(turn.id)}>Обновить состояние</button>}
+        {turn.error && <div className="transcript-turn-error" role="alert"><CircleAlert size={16} /><div><strong>Unable to finish work</strong><p>{turn.error}</p>
+          {onRetry && <button type="button" className="transcript-button" onClick={() => void onRetry(turn.id)}>Refresh status</button>}
         </div></div>}
       </div>
     </div>}
@@ -528,13 +528,13 @@ export function Transcript(props: TranscriptProps) {
   const { bot, events } = props;
   const turns = useMemo(() => buildTranscript(events, bot.id), [events, bot.id]);
   const visible = turns.filter(turn => turn.users.length || turn.responses.length || turn.activities.length || turn.requests.length || turn.notices.length || turn.error || isRunning(turn.status));
-  return <div className="transcript" aria-label={`Диалог с ${bot.name}`}>
+  return <div className="transcript" aria-label={`Conversation with ${bot.name}`}>
     {!visible.length && <div className="transcript-empty"><div className="transcript-empty-avatar"><Avatar bot={bot} size={72} /></div>
-      <span className="transcript-empty-eyebrow">{bot.chief ? 'ВАШ КООРДИНАТОР' : 'ВАШ ПОСТОЯННЫЙ ПОМОЩНИК'}</span>
-      <h2>{bot.name} на связи.</h2><p>{bot.role || 'Расскажите, чего хотите достичь. Бот сохранит контекст и продолжит работу здесь.'}</p>
+      <span className="transcript-empty-eyebrow">{bot.chief ? 'YOUR COORDINATOR' : 'YOUR PERSISTENT ASSISTANT'}</span>
+      <h2>{bot.name} is ready.</h2><p>{bot.role || 'Tell me what you want to achieve. Your bot will keep the context and continue working here.'}</p>
     </div>}
     {visible.map(turn => <Turn key={turn.id} {...props} turn={turn} />)}
-    {events.length > 0 && <div className="transcript-all-events"><RawJournal events={events.filter(event => event.botId === bot.id)} title="Все события бота" /></div>}
+    {events.length > 0 && <div className="transcript-all-events"><RawJournal events={events.filter(event => event.botId === bot.id)} title="All bot events" /></div>}
     <div className="transcript-end" />
   </div>;
 }

@@ -351,11 +351,11 @@ func (entry *telegramConnection) receive(_ core.Platform, msg *core.Message) {
 		return
 	}
 	if runtime, ok := entry.manager.runtime.(interface{ Busy(string) bool }); ok && runtime.Busy(entry.botID) {
-		go entry.reply(msg.ReplyCtx, "Бот сейчас занят. Дождись ответа или останови его в Connect Bots.")
+		go entry.reply(msg.ReplyCtx, "The bot is busy. Wait for its reply or stop it in Connect Bots.")
 		return
 	}
 	if !entry.busy.CompareAndSwap(false, true) {
-		go entry.reply(msg.ReplyCtx, "Бот ещё выполняет предыдущую задачу. Дождись ответа или останови его в Connect Bots.")
+		go entry.reply(msg.ReplyCtx, "The bot is still working on the previous task. Wait for its reply or stop it in Connect Bots.")
 		return
 	}
 	// Adapter handlers must return promptly so polling can receive approvals.
@@ -366,7 +366,7 @@ func (entry *telegramConnection) runMessage(msg *core.Message, key string) {
 	defer entry.busy.Store(false)
 	request, err := entry.prepareMessage(msg)
 	if err != nil {
-		entry.failure("", msg.ReplyCtx, "Не удалось прочитать сообщение", err)
+		entry.failure("", msg.ReplyCtx, "Failed to read the message", err)
 		return
 	}
 	// Subscribe before sending: an agent can ask for permission immediately.
@@ -375,17 +375,17 @@ func (entry *telegramConnection) runMessage(msg *core.Message, key string) {
 	delivery := &telegramArtifactDelivery{events: make(map[uint64]bool), files: make(map[string]bool), captions: make(map[string]bool)}
 	stream, unsubscribe, err := entry.manager.store.Subscribe(cursor)
 	if err != nil {
-		entry.failure("", msg.ReplyCtx, "Не удалось подключить историю", err)
+		entry.failure("", msg.ReplyCtx, "Failed to connect to the conversation history", err)
 		return
 	}
 	defer func() { unsubscribe() }()
 	turnID, err := entry.manager.runtime.SendMessage(entry.ctx, entry.botID, request)
 	if err != nil {
 		if errors.Is(err, ErrConflict) {
-			entry.reply(msg.ReplyCtx, "Бот сейчас занят. Дождись ответа или останови его в Connect Bots.")
+			entry.reply(msg.ReplyCtx, "The bot is busy. Wait for its reply or stop it in Connect Bots.")
 			return
 		}
-		entry.failure("", msg.ReplyCtx, "Не удалось запустить задачу", err)
+		entry.failure("", msg.ReplyCtx, "Failed to start the task", err)
 		return
 	}
 	entry.acceptMessage(key, msg)
@@ -415,7 +415,7 @@ func (entry *telegramConnection) runMessage(msg *core.Message, key string) {
 				unsubscribe()
 				nextStream, nextUnsubscribe, subscribeErr := entry.manager.store.Subscribe(cursor)
 				if subscribeErr != nil {
-					entry.failure(turnID, msg.ReplyCtx, "Соединение с историей потеряно", subscribeErr)
+					entry.failure(turnID, msg.ReplyCtx, "Connection to the conversation history was lost", subscribeErr)
 					return
 				}
 				stream, unsubscribe = nextStream, nextUnsubscribe
@@ -434,7 +434,7 @@ func (entry *telegramConnection) runMessage(msg *core.Message, key string) {
 		case done := <-completed:
 			if done.err != nil {
 				if entry.ctx.Err() == nil {
-					entry.failure(turnID, msg.ReplyCtx, "Не удалось получить ответ", done.err)
+					entry.failure(turnID, msg.ReplyCtx, "Failed to get the reply", done.err)
 				}
 				return
 			}
@@ -444,12 +444,12 @@ func (entry *telegramConnection) runMessage(msg *core.Message, key string) {
 			entry.flushArtifacts(turnID, startedAt, msg.ReplyCtx, delivery)
 			text := strings.TrimSpace(done.result.Text)
 			if done.result.Error != "" {
-				entry.failure(turnID, msg.ReplyCtx, "Задача завершилась с ошибкой", errors.New(done.result.Error))
+				entry.failure(turnID, msg.ReplyCtx, "The task ended with an error", errors.New(done.result.Error))
 			}
 			if text != "" && !delivery.captions[text] {
 				entry.reply(msg.ReplyCtx, text)
 			} else if done.result.Status == "interrupted" {
-				entry.reply(msg.ReplyCtx, "Задача остановлена.")
+				entry.reply(msg.ReplyCtx, "The task was stopped.")
 			}
 			return
 		}
@@ -551,7 +551,7 @@ func (entry *telegramConnection) reply(replyCtx any, content string) error {
 func (entry *telegramConnection) flushArtifacts(turnID string, after uint64, replyCtx any, delivery *telegramArtifactDelivery) {
 	events, err := entry.manager.store.Events(entry.botID, after)
 	if err != nil {
-		entry.failure(turnID, replyCtx, "Не удалось получить готовые файлы", err)
+		entry.failure(turnID, replyCtx, "Failed to get output files", err)
 		return
 	}
 	for _, event := range events {
@@ -581,7 +581,7 @@ func (entry *telegramConnection) deliverArtifact(event Event, replyCtx any, deli
 	// URLs and MIME types from event data are not filesystem authority.
 	attachments, err := workspace.ResolveAttachments(entry.botID, message.Attachments)
 	if err != nil {
-		entry.failure(event.TurnID, replyCtx, "Не удалось прочитать готовые файлы", err)
+		entry.failure(event.TurnID, replyCtx, "Failed to read output files", err)
 		return
 	}
 	delivered := false
@@ -591,7 +591,7 @@ func (entry *telegramConnection) deliverArtifact(event Event, replyCtx any, deli
 			continue
 		}
 		if err := entry.sendArtifact(replyCtx, attachment); err != nil {
-			entry.failure(event.TurnID, replyCtx, "Не удалось отправить файл «"+attachment.Name+"»", err)
+			entry.failure(event.TurnID, replyCtx, "Failed to send file \""+attachment.Name+"\"", err)
 			continue
 		}
 		delivery.files[attachment.ID], delivered = true, true
@@ -679,7 +679,7 @@ func (entry *telegramConnection) permissionEvent(event Event, msg *core.Message)
 		requestID: request.RequestID, turnID: event.TurnID, session: msg.SessionKey, userID: msg.UserID,
 		replyCtx: msg.ReplyCtx, toolInput: request.ToolInputRaw, questions: request.Questions, answers: make(map[string]any),
 	}
-	content := "Нужно разрешение: " + request.ToolName
+	content := "Permission required: " + request.ToolName
 	if request.ToolInput != "" {
 		content += "\n\n" + request.ToolInput
 	} else if request.Content != "" {
@@ -691,7 +691,7 @@ func (entry *telegramConnection) permissionEvent(event Event, msg *core.Message)
 func (entry *telegramConnection) presentPermission(permission *telegramPermission, content string) {
 	var random [16]byte
 	if _, err := rand.Read(random[:]); err != nil {
-		entry.failure(permission.turnID, permission.replyCtx, "Не удалось показать запрос разрешения", err)
+		entry.failure(permission.turnID, permission.replyCtx, "Failed to show the permission request", err)
 		return
 	}
 	nonce := hex.EncodeToString(random[:])
@@ -700,12 +700,12 @@ func (entry *telegramConnection) presentPermission(permission *telegramPermissio
 		// The nonce binds this callback to a particular request and presentation.
 		return core.ButtonOption{Text: label, Data: "askq:" + nonce + ":" + action}
 	}
-	buttons := [][]core.ButtonOption{{button("Разрешить", "allow"), button("Отклонить", "deny")}}
+	buttons := [][]core.ButtonOption{{button("Allow", "allow"), button("Deny", "deny")}}
 	if len(permission.questions) > 0 {
 		question := permission.questions[permission.question]
 		content = question.Question
 		if len(permission.questions) > 1 {
-			content = fmt.Sprintf("Вопрос %d из %d\n\n%s", permission.question+1, len(permission.questions), content)
+			content = fmt.Sprintf("Question %d of %d\n\n%s", permission.question+1, len(permission.questions), content)
 		}
 		buttons = nil
 		for i, option := range question.Options {
@@ -716,11 +716,11 @@ func (entry *telegramConnection) presentPermission(permission *telegramPermissio
 				buttons = append(buttons, []core.ButtonOption{button(option.Label, strconv.Itoa(i))})
 			}
 		}
-		content += "\n\nМожно ответить текстом."
+		content += "\n\nYou can type your answer."
 		if question.MultiSelect {
-			content += " Перечисли варианты через запятую."
+			content += " Separate options with commas."
 		}
-		buttons = append(buttons, []core.ButtonOption{button("Отменить", "deny")})
+		buttons = append(buttons, []core.ButtonOption{button("Cancel", "deny")})
 	}
 	entry.mu.Lock()
 	if entry.closed.Load() {
@@ -738,7 +738,7 @@ func (entry *telegramConnection) presentPermission(permission *telegramPermissio
 	if sender, ok := entry.platform.(core.InlineButtonSender); ok {
 		err = sender.SendWithButtons(ctx, permission.replyCtx, content, buttons)
 	} else {
-		content += "\n\nОткрой Connect Bots, чтобы ответить на запрос."
+		content += "\n\nOpen Connect Bots to respond to the request."
 		err = entry.platform.Reply(ctx, permission.replyCtx, content)
 	}
 	if err != nil {
@@ -834,7 +834,7 @@ func (entry *telegramConnection) resolvePermission(permission *telegramPermissio
 	if err := entry.manager.runtime.Permission(entry.ctx, entry.botID, permission.requestID, result); err != nil {
 		// A web client may already have answered. Never turn a stale click into a
 		// new prompt or apply it to a newer request.
-		entry.failure(permission.turnID, permission.replyCtx, "Этот запрос больше не ожидает ответа", err)
+		entry.failure(permission.turnID, permission.replyCtx, "This request is no longer waiting for a response", err)
 	}
 }
 

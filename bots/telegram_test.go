@@ -410,7 +410,7 @@ func TestTelegramSurfaceRepliesBrieflyWhenItsCanonicalTurnIsBusy(t *testing.T) {
 	platform.message(telegramTestMessage("first", "Долгая задача"))
 	request := telegramTestReceive(t, runtime.requests)
 	platform.message(telegramTestMessage("second", "Ещё одна задача"))
-	if reply := telegramTestReceive(t, platform.replies); !strings.Contains(reply, "предыдущую") {
+	if reply := telegramTestReceive(t, platform.replies); !strings.Contains(reply, "previous task") {
 		t.Fatalf("busy reply was not clear: %s", reply)
 	}
 	if runtime.sends.Load() != 1 {
@@ -773,7 +773,7 @@ func TestTelegramSurfaceArtifactReplayIsIdempotentAndRejectsOtherBotsFiles(t *te
 	if len(platform.files) != 0 {
 		t.Fatal("a foreign opaque ID escaped its bot upload directory")
 	}
-	if errorReply := telegramTestReceive(t, platform.replies); !strings.Contains(errorReply, "Не удалось прочитать") {
+	if errorReply := telegramTestReceive(t, platform.replies); !strings.Contains(errorReply, "Failed to read output files") {
 		t.Fatalf("missing delivery error: %s", errorReply)
 	}
 }
@@ -816,7 +816,7 @@ func TestTelegramSurfaceReportsMediaSendFailureWithoutRetryOrCredentialLeak(t *t
 	}
 	platform.message(telegramTestMessage("publish", "Отправь отчёт"))
 	telegramTestReceive(t, runtime.requests)
-	if errorReply := telegramTestReceive(t, platform.replies); !strings.Contains(errorReply, "Не удалось отправить файл") || strings.Contains(errorReply, testTelegramToken) {
+	if errorReply := telegramTestReceive(t, platform.replies); !strings.Contains(errorReply, "Failed to send file") || strings.Contains(errorReply, testTelegramToken) {
 		t.Fatalf("unsafe media delivery error: %s", errorReply)
 	}
 	telegramTestReceive(t, platform.replies) // Normal final answer remains visible.

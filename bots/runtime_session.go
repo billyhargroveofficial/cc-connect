@@ -291,10 +291,10 @@ func (r *Runtime) ensureSession(ctx context.Context, s *botRuntime, bot Bot) (co
 	// after actual work or a successful native goal mutation has persisted it.
 	content := "Session connected."
 	if refresh {
-		content = "Настройки инструкций или навыков обновлены. Создана новая сессия Codex с переносом истории разговора."
+		content = "Instructions or skills were updated. A new Codex session was created with the conversation history carried over."
 	}
 	if lostPiSession {
-		content = "Сессия Pi ещё не была записана или её файл отсутствует. Создана новая сессия с сохранением видимой истории бота."
+		content = "The Pi session has not been saved yet, or its file is missing. A new session was created while preserving the bot's visible history."
 	}
 	if _, err := r.store.AppendEvent(bot.ID, "", "system", map[string]any{"content": content, "backend": bot.Backend, "pendingConfigSignature": configSignature, "threadId": session.CurrentSessionID(), "previousThreadId": bot.Threads[bot.Backend]}); err != nil {
 		r.readerWG.Done()
@@ -315,7 +315,7 @@ func (r *Runtime) ensureSession(ctx context.Context, s *botRuntime, bot Bot) (co
 		}
 		if err := r.restoreGoalCarry(ctx, s, session); err != nil {
 			r.logJournalError(bot.ID, "", fmt.Errorf("defer paused goal carry until materialized turn: %w", err))
-			_, journalErr := r.store.AppendEvent(bot.ID, "", "system", map[string]any{"content": "Сохранённая цель остаётся на паузе и будет перенесена после первого ответа новой сессии."})
+			_, journalErr := r.store.AppendEvent(bot.ID, "", "system", map[string]any{"content": "The saved goal remains paused and will be carried over after the new session's first response."})
 			r.logJournalError(bot.ID, "", journalErr)
 		}
 	}

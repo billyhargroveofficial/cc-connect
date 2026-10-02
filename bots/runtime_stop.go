@@ -216,7 +216,7 @@ func (r *Runtime) stopBackgroundProcesses(s *botRuntime, session core.AgentSessi
 		if t != nil {
 			turnID = t.id
 		}
-		if _, err := r.store.AppendEvent(s.id, turnID, "system", map[string]any{"content": "Фоновая команда остановлена.", "threadId": threadID, "processId": process.ProcessID, "terminated": response.Terminated}); err != nil {
+		if _, err := r.store.AppendEvent(s.id, turnID, "system", map[string]any{"content": "Background command stopped.", "threadId": threadID, "processId": process.ProcessID, "terminated": response.Terminated}); err != nil {
 			return err
 		}
 	}

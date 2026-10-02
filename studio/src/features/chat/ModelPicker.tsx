@@ -94,7 +94,7 @@ export default function ModelPicker({
   const serviceTiers = current?.serviceTiers || [];
   const selectedTier = serviceTiers.find((tier) => tier.id === bot.serviceTier);
   const autoTier = serviceTiers.find((tier) => tier.id === current?.defaultServiceTier);
-  const tierName = selectedTier?.name || bot.serviceTier || "Авто";
+  const tierName = selectedTier?.name || bot.serviceTier || "Auto";
   const showServiceTier = serviceTiers.length > 0 || (bot.backend === "codex" && !!bot.serviceTier);
   async function choose(model: Model) {
     const backend = capabilities?.backends[model.backend];
@@ -155,16 +155,16 @@ export default function ModelPicker({
         aria-expanded={open}
         aria-haspopup="dialog"
         aria-controls={open ? popoverId : undefined}
-        aria-label={`Модель: ${current?.name || bot.model || bot.backend}${confirmedEffort ? `. Уровень рассуждения: ${bot.effort}` : ""}${showServiceTier ? `. Service tier: ${tierName}` : ""}`}
+        aria-label={`Model: ${current?.name || bot.model || bot.backend}${confirmedEffort ? `. Reasoning effort: ${bot.effort}` : ""}${showServiceTier ? `. Service tier: ${tierName}` : ""}`}
         title={
           disabled
-            ? "Модель можно сменить после завершения хода"
-            : "Модель, effort и service tier"
+            ? "You can change the model after the turn finishes"
+            : "Model, effort and service tier"
         }
       >
         <Cpu size={16} />
         <span className="model-trigger-label">
-          <strong>Настройки модели</strong>
+          <strong>Model settings</strong>
           <small>
             <span className="model-current-name">{current?.name || bot.model || bot.backend}</span>
             {confirmedEffort && (
@@ -184,7 +184,7 @@ export default function ModelPicker({
             className="popover-backdrop"
             tabIndex={-1}
             onClick={close}
-            aria-label="Закрыть выбор модели"
+            aria-label="Close model picker"
           />
           <div
             className="model-popover"
@@ -193,14 +193,14 @@ export default function ModelPicker({
             id={popoverId}
             role="dialog"
             aria-modal="true"
-            aria-label="Модель, effort и service tier"
+            aria-label="Model, effort and service tier"
           >
             <header>
-              <span>Модель</span>
+              <span>Model</span>
               <button
                 className="icon-button"
                 onClick={close}
-                aria-label="Закрыть"
+                aria-label="Close"
               >
                 <X size={15} />
               </button>
@@ -210,7 +210,7 @@ export default function ModelPicker({
               <label className="model-setting">
                 <span>Effort</span>
                 <select
-                  aria-label="Уровень рассуждения"
+                  aria-label="Reasoning effort"
                   value={confirmedEffort ? bot.effort : ""}
                   onChange={(event) => void changeEffort(event.target.value)}
                   disabled={disabled || saving}
@@ -230,12 +230,12 @@ export default function ModelPicker({
                 <select
                   aria-label="Service tier"
                   value={bot.serviceTier || ""}
-                  title={selectedTier?.description || (autoTier ? `Авто: ${autoTier.name}. ${autoTier.description}` : "Выбор сервера для следующего ответа")}
+                  title={selectedTier?.description || (autoTier ? `Auto: ${autoTier.name}. ${autoTier.description}` : "Service tier for the next response")}
                   onChange={(event) => void changeServiceTier(event.target.value)}
                   disabled={disabled || saving}
                 >
-                  <option value="">Авто</option>
-                  {bot.serviceTier && !selectedTier && <option value={bot.serviceTier} disabled>{bot.serviceTier} (недоступно)</option>}
+                  <option value="">Auto</option>
+                  {bot.serviceTier && !selectedTier && <option value={bot.serviceTier} disabled>{bot.serviceTier} (unavailable)</option>}
                   {serviceTiers.map((tier) => <option key={tier.id} value={tier.id} title={tier.description}>{tier.name || tier.id}</option>)}
                 </select>
               </label>
@@ -266,7 +266,7 @@ export default function ModelPicker({
                   </div>
                   {!available?.available && (
                     <p className="model-unavailable">
-                      {available?.reason || "Недоступен в этой установке"}
+                      {available?.reason || "Unavailable in this installation"}
                     </p>
                   )}
                   {choices.map((model) => (
@@ -278,7 +278,7 @@ export default function ModelPicker({
                       onClick={() => void choose(model)}
                     >
                       <span>
-                        <strong>{model.name || model.id}{model.efforts.includes("ultra") && <Zap size={11} aria-label="Поддерживает Ultra" />}</strong>
+                        <strong>{model.name || model.id}{model.efforts.includes("ultra") && <Zap size={11} aria-label="Supports Ultra" />}</strong>
                       </span>
                       {bot.backend === model.backend &&
                         bot.model === model.id && <Check size={16} />}
@@ -287,7 +287,7 @@ export default function ModelPicker({
                 </section>
               );
             })}
-            <footer>При смене модели история диалога сохраняется.</footer>
+            <footer>Conversation history is preserved when you change models.</footer>
           </div>
         </>
       )}

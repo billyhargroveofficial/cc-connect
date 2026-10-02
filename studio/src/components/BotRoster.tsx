@@ -23,11 +23,11 @@ function lastMessageTime(events: Event[]) {
   const yesterday = new Date();
   yesterday.setDate(now.getDate() - 1);
   const label = date.toDateString() === now.toDateString()
-    ? new Intl.DateTimeFormat("ru", { hour: "2-digit", minute: "2-digit" }).format(date)
+    ? new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit" }).format(date)
     : date.toDateString() === yesterday.toDateString()
-      ? "Вчера"
-      : new Intl.DateTimeFormat("ru", { day: "2-digit", month: "2-digit" }).format(date);
-  return { label, iso: event.time, full: date.toLocaleString("ru") };
+      ? "Yesterday"
+      : new Intl.DateTimeFormat("en-GB", { day: "2-digit", month: "2-digit" }).format(date);
+  return { label, iso: event.time, full: date.toLocaleString("en-GB") };
 }
 export default function BotRoster({
   bots,
@@ -63,13 +63,13 @@ export default function BotRoster({
         <button
           className="icon-button"
           onClick={onCreate}
-          aria-label="Создать бота"
-          title="Создать бота"
+          aria-label="Create bot"
+          title="Create bot"
         >
           <Plus size={19} />
         </button>
       </header>
-      <nav aria-label="Боты" className="roster-list">
+      <nav aria-label="Bots" className="roster-list">
         {sortedBots.map((bot) => {
           const busy = isWorking(bot.status);
           const time = lastMessageTime(events[bot.id] || []);
@@ -77,7 +77,7 @@ export default function BotRoster({
             ? statusLabel(bot.status)
             : messagePreview(events[bot.id] || []) ||
               bot.role ||
-              "Начните разговор";
+              "Start a conversation";
           return (
             <button
               key={bot.id}
@@ -112,7 +112,7 @@ export default function BotRoster({
         })}
         {!sortedBots.length && (
           <div className="roster-empty">
-            Здесь появится ваша команда.
+            Your team will appear here.
           </div>
         )}
       </nav>
@@ -122,27 +122,27 @@ export default function BotRoster({
             className={`status-dot ${connection === "connected" ? "is-connected" : "is-reconnecting"}`}
           />
           {connection === "connected"
-            ? "Пространство подключено"
-            : "Восстанавливаем соединение"}
+            ? "Workspace connected"
+            : "Reconnecting"}
         </div>
         <div className="roster-footer-actions">
           <button onClick={onSettings} className="footer-settings">
             <Settings2 size={16} />
-            <span>Настройки</span>
+            <span>Settings</span>
           </button>
           <button
             className="icon-button"
             onClick={onTheme}
-            aria-label={theme === "dark" ? "Светлая тема" : "Тёмная тема"}
-            title={theme === "dark" ? "Светлая тема" : "Тёмная тема"}
+            aria-label={theme === "dark" ? "Light theme" : "Dark theme"}
+            title={theme === "dark" ? "Light theme" : "Dark theme"}
           >
             {theme === "dark" ? <Sun size={17} /> : <Moon size={17} />}
           </button>
           <button
             className="icon-button"
             onClick={onLogout}
-            aria-label="Выйти"
-            title="Выйти"
+            aria-label="Sign out"
+            title="Sign out"
           >
             <LogOut size={16} />
           </button>

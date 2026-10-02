@@ -52,7 +52,7 @@ function botIslandContent(events: Event[], botId: string) {
         seenFiles.add(key);
         files.push({
           id,
-          name: typeof attachment.name === "string" && attachment.name ? attachment.name : "Файл",
+          name: typeof attachment.name === "string" && attachment.name ? attachment.name : "File",
           mimeType: typeof attachment.mimeType === "string" ? attachment.mimeType : "",
           url,
         });
@@ -125,13 +125,13 @@ export default function BotIsland({
 
   return (
     <aside className={`bot-island-shell${open ? " is-open" : ""}`}
-      aria-label="Сведения о боте" inert={!desktop && !open}>
+      aria-label="Bot details" inert={!desktop && !open}>
       <div className="bot-island-backdrop" onClick={close} aria-hidden="true" />
       <div className="bot-island-card" ref={dialog} tabIndex={-1}
         role={overlay ? "dialog" : undefined} aria-modal={overlay || undefined}
-        aria-label={overlay ? "Сведения о боте" : undefined}>
+        aria-label={overlay ? "Bot details" : undefined}>
         <button type="button" className="icon-button bot-island-close" onClick={close}
-          aria-label="Закрыть сведения о боте"><X size={18} /></button>
+          aria-label="Close bot details"><X size={18} /></button>
         <div className="bot-island-profile">
           <Avatar bot={bot} size={52} status={working ? "working" : bot.status} />
           <div className="bot-island-identity">
@@ -145,12 +145,12 @@ export default function BotIsland({
         {bot.role && <p className="bot-island-role" title={bot.role}>{bot.role}</p>}
         <div className="bot-island-actions">
           <button type="button" className="bot-island-action" onClick={() => openAction(onSettings)}
-            aria-label="Настройки бота"><Settings2 size={16} />Настройки</button>
+            aria-label="Bot settings"><Settings2 size={16} />Settings</button>
           {supportsGoal && (
             <button type="button" className={`bot-island-action${hasGoal ? " has-goal" : ""}`}
-              onClick={() => openAction(onGoal)} aria-label="Цель бота"
-              title={hasGoal ? "Посмотреть цель бота" : "Задать цель бота"}>
-              <Target size={16} />Цель{hasGoal && <span className="bot-island-goal-dot" aria-hidden="true" />}
+              onClick={() => openAction(onGoal)} aria-label="Bot goal"
+              title={hasGoal ? "View bot goal" : "Set bot goal"}>
+              <Target size={16} />Goal{hasGoal && <span className="bot-island-goal-dot" aria-hidden="true" />}
             </button>
           )}
         </div>
@@ -164,8 +164,8 @@ export default function BotIsland({
           </div>
         )}
         {requests.length > 0 && (
-          <section className="bot-island-section" aria-label="Последние поручения">
-            <h2>Последние поручения</h2>
+          <section className="bot-island-section" aria-label="Recent tasks">
+            <h2>Recent tasks</h2>
             <ul className="bot-island-list">
               {requests.map(request => (
                 <li key={request.seq} className="bot-island-request">
@@ -177,8 +177,8 @@ export default function BotIsland({
           </section>
         )}
         {files.length > 0 && (
-          <section className="bot-island-section" aria-label="Результаты">
-            <h2>Результаты</h2>
+          <section className="bot-island-section" aria-label="Outputs">
+            <h2>Outputs</h2>
             <ul className="bot-island-list">
               {files.map(file => (
                 <li key={file.id || file.url}>

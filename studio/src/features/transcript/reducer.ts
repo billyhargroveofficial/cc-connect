@@ -260,7 +260,7 @@ function nativeRoots(events: JournalEvent[]): Map<string, string> {
 
 function attachments(value: unknown): TranscriptAttachment[] {
   return array(value).map(record).map(v => ({
-    id: string(v.id), name: string(v.name) || 'Файл', mimeType: string(v.mimeType), url: string(v.url) || undefined,
+    id: string(v.id), name: string(v.name) || 'File', mimeType: string(v.mimeType), url: string(v.url) || undefined,
   })).filter(v => Boolean(v.id || v.url));
 }
 
@@ -320,9 +320,9 @@ function itemKind(type: string): ActivityKind {
 
 function searchTitle(item: RecordValue): string {
   const action = record(item.action);
-  if (action.type === 'open_page' || action.type === 'openPage') return 'Открывает страницу';
-  if (action.type === 'find_in_page' || action.type === 'findInPage') return 'Ищет на странице';
-  return 'Поиск в интернете';
+  if (action.type === 'open_page' || action.type === 'openPage') return 'Opening page';
+  if (action.type === 'find_in_page' || action.type === 'findInPage') return 'Finding text on page';
+  return 'Web search';
 }
 
 function setCodexItem(turn: TranscriptTurn, event: JournalEvent, item: RecordValue, completed: boolean) {
@@ -342,15 +342,15 @@ function setCodexItem(turn: TranscriptTurn, event: JournalEvent, item: RecordVal
   if (completed) activity.endedAt = event.time;
   switch (type) {
     case 'agentMessage':
-      activity.title = 'Сообщение во время работы'; activity.text = string(item.text); break;
+      activity.title = 'Progress message'; activity.text = string(item.text); break;
     case 'reasoning':
-      activity.title = 'Размышления';
+      activity.title = 'Thinking';
       // Summaries and content are distinct provider-exposed fields. Preserve
       // both, but do not display identical copies supplied by an older server.
       activity.text = [...new Set([text(item.summary), text(item.content)].filter(Boolean))].join('\n\n');
       break;
     case 'commandExecution':
-      activity.title = 'Команда'; activity.input = item.command;
+      activity.title = 'Command'; activity.input = item.command;
       activity.output = item.aggregatedOutput ?? activity.output;
       activity.aliases = ['Bash', 'bash', 'shell', 'commandExecution'];
       if (typeof item.exitCode === 'number' && item.exitCode !== 0) activity.status = 'failed';
@@ -362,7 +362,7 @@ function setCodexItem(turn: TranscriptTurn, event: JournalEvent, item: RecordVal
       if (item.error) activity.status = 'failed';
       break;
     case 'dynamicToolCall':
-      activity.title = [string(item.namespace), string(item.tool)].filter(Boolean).join(' · ') || 'Инструмент';
+      activity.title = [string(item.namespace), string(item.tool)].filter(Boolean).join(' · ') || 'Tool';
       activity.input = item.arguments; activity.output = item.contentItems;
       activity.aliases = [string(item.tool)];
       if (item.success === false) activity.status = 'failed';
@@ -375,28 +375,28 @@ function setCodexItem(turn: TranscriptTurn, event: JournalEvent, item: RecordVal
       break;
     }
     case 'fileChange':
-      activity.title = 'Изменения файлов'; activity.input = item.changes; activity.aliases = ['Patch', 'apply_patch', 'fileChange'];
+      activity.title = 'File changes'; activity.input = item.changes; activity.aliases = ['Patch', 'apply_patch', 'fileChange'];
       break;
     case 'functionCallOutput':
-      activity.title = string(item.name) || 'Результат инструмента'; activity.output = item.output;
+      activity.title = string(item.name) || 'Tool result'; activity.output = item.output;
       activity.aliases = [string(item.name)];
       break;
     case 'collabAgentToolCall':
-      activity.title = string(item.tool) || 'Сабагенты'; activity.text = string(item.prompt);
+      activity.title = string(item.tool) || 'Subagents'; activity.text = string(item.prompt);
       activity.input = { prompt: item.prompt, model: item.model, reasoningEffort: item.reasoningEffort };
       activity.output = item.agentsStates; activity.aliases = [string(item.tool)];
       break;
     case 'subAgentActivity':
-      activity.title = string(item.agentPath) ? `Сабагент · ${string(item.agentPath).split('/').filter(Boolean).at(-1)}` : 'Сабагент';
+      activity.title = string(item.agentPath) ? `Subagent · ${string(item.agentPath).split('/').filter(Boolean).at(-1)}` : 'Subagent';
       activity.text = string(item.prompt) || string(item.description);
       activity.status = normalizedStatus(item.kind) || activity.status;
       break;
-    case 'plan': activity.title = 'План'; activity.text = string(item.text); break;
-    case 'contextCompaction': activity.title = 'Сжатие контекста'; break;
-    case 'imageView': activity.title = 'Просмотр изображения'; activity.text = string(item.path); break;
-    case 'imageGeneration': activity.title = 'Создание изображения'; break;
-    case 'sleep': activity.title = 'Ожидание'; break;
-    default: activity.title = type || 'Событие'; activity.text = string(item.text);
+    case 'plan': activity.title = 'Plan'; activity.text = string(item.text); break;
+    case 'contextCompaction': activity.title = 'Context compaction'; break;
+    case 'imageView': activity.title = 'Viewing image'; activity.text = string(item.path); break;
+    case 'imageGeneration': activity.title = 'Generating image'; break;
+    case 'sleep': activity.title = 'Waiting'; break;
+    default: activity.title = type || 'Event'; activity.text = string(item.text);
   }
 }
 
@@ -423,7 +423,7 @@ function codexNative(turn: TranscriptTurn, event: JournalEvent, data: RecordValu
   }
   if (method === 'item/reasoning/summaryTextDelta' || method === 'item/reasoning/textDelta') {
     const activity = addActivity(turn, event, `codex-${string(params.itemId) || event.seq}`, 'thinking');
-    activity.title = 'Размышления';
+    activity.title = 'Thinking';
     const key = method.includes('summaryText') ? '_summaryParts' : '_contentParts';
     const index = finiteNumber(params.summaryIndex ?? params.contentIndex) ?? 0;
     const parts = array(activity.data[key]);
@@ -435,26 +435,26 @@ function codexNative(turn: TranscriptTurn, event: JournalEvent, data: RecordValu
   if (method === 'item/commandExecution/outputDelta' || method === 'item/fileChange/outputDelta') {
     const activity = addActivity(turn, event, `codex-${string(params.itemId) || event.seq}`, 'tool');
     activity.callId = string(params.itemId) || activity.callId;
-    activity.title ||= method.includes('commandExecution') ? 'Команда' : 'Изменения файлов';
+    activity.title ||= method.includes('commandExecution') ? 'Command' : 'File changes';
     activity.output = string(activity.output) + string(params.delta); return;
   }
   if (method === 'item/plan/delta') {
     const activity = addActivity(turn, event, `codex-${string(params.itemId) || event.seq}`, 'plan');
-    activity.title = 'План'; activity.text += string(params.delta); return;
+    activity.title = 'Plan'; activity.text += string(params.delta); return;
   }
   if (method === 'turn/plan/updated') {
     const activity = addActivity(turn, event, 'codex-plan', 'plan');
-    activity.title = 'План'; activity.data = params; activity.text = string(params.explanation);
+    activity.title = 'Plan'; activity.data = params; activity.text = string(params.explanation);
     activity.status = 'completed'; return;
   }
   if (method === 'thread/goal/updated') {
     const activity = addActivity(turn, event, 'codex-goal', 'goal');
-    activity.title = 'Цель'; activity.data = record(params.goal); activity.text = string(activity.data.objective);
+    activity.title = 'Goal'; activity.data = record(params.goal); activity.text = string(activity.data.objective);
     activity.status = normalizedStatus(activity.data.status) || 'active'; return;
   }
   if (method === 'thread/goal/cleared') {
     const activity = addActivity(turn, event, 'codex-goal', 'goal');
-    activity.title = 'Цель снята'; activity.status = 'completed'; activity.data = params; return;
+    activity.title = 'Goal cleared'; activity.status = 'completed'; activity.data = params; return;
   }
   if (method === 'turn/started') {
     turn.status = normalizedStatus(record(params.turn).status) || 'running'; return;
@@ -468,7 +468,7 @@ function codexNative(turn: TranscriptTurn, event: JournalEvent, data: RecordValu
     if (data.requestId === undefined) return;
     const id = JSON.stringify(data.requestId);
     addRequest(turn, {
-      id, title: method === 'item/tool/requestUserInput' ? 'Нужен ваш ответ' : 'Нужно разрешение',
+      id, title: method === 'item/tool/requestUserInput' ? 'Your response needed' : 'Approval required',
       input: params.command ?? params.reason ?? params, questions: array(params.questions).map(question),
       method: 'codex', placeholder: '', resolved: false, seq: event.seq,
     });
@@ -495,7 +495,7 @@ function scopedCodexNative(turn: TranscriptTurn, event: JournalEvent, data: Reco
   const activity = addActivity(turn, event, `codex-thread-${threadId}`, 'subagent');
   const thread = { ...record(activity.data.thread), ...record(params.thread) };
   const name = string(thread.name) || string(thread.agentNickname);
-  activity.title = owningThreadId ? name ? `Сабагент · ${name}` : 'Сабагент' : 'Сессия агента';
+  activity.title = owningThreadId ? name ? `Subagent · ${name}` : 'Subagent' : 'Agent session';
   activity.data = {
     ...activity.data, threadId, rootThreadId: owningThreadId || null,
     ...(Object.keys(thread).length ? { thread } : {}),
@@ -523,7 +523,7 @@ function piBlock(turn: TranscriptTurn, event: JournalEvent, messageId: string, i
     }
     case 'thinking': {
       const activity = addActivity(turn, event, id, 'thinking');
-      activity.title = 'Размышления'; activity.text = string(block.thinking);
+      activity.title = 'Thinking'; activity.text = string(block.thinking);
       activity.status = complete ? 'completed' : 'running';
       // Retain signatures in the raw journal, not the visual reasoning block.
       activity.data = { type: 'thinking', redacted: block.redacted === true }; break;
@@ -531,7 +531,7 @@ function piBlock(turn: TranscriptTurn, event: JournalEvent, messageId: string, i
     case 'toolCall': {
       const activity = addActivity(turn, event, `pi-tool-${string(block.id) || id}`, 'tool');
       activity.callId = string(block.id) || undefined;
-      activity.title = string(block.name) || 'Инструмент'; activity.aliases = [activity.title];
+      activity.title = string(block.name) || 'Tool'; activity.aliases = [activity.title];
       activity.input = block.arguments; activity.data = { ...activity.data, ...block }; break;
     }
   }
@@ -542,7 +542,7 @@ function piMessage(turn: TranscriptTurn, event: JournalEvent, params: RecordValu
   if (msg.role === 'toolResult') {
     const activity = addActivity(turn, event, `pi-tool-${string(msg.toolCallId) || event.seq}`, 'tool');
     activity.callId = string(msg.toolCallId) || activity.callId;
-    activity.title ||= string(msg.toolName) || 'Инструмент'; activity.aliases = [activity.title];
+    activity.title ||= string(msg.toolName) || 'Tool'; activity.aliases = [activity.title];
     activity.output = msg.content; activity.status = msg.isError === true ? 'failed' : 'completed';
     activity.data = { ...activity.data, ...msg }; activity.endedAt = event.time; return;
   }
@@ -570,7 +570,7 @@ function piNative(turn: TranscriptTurn, event: JournalEvent, data: RecordValue, 
         else turn.responses.push({ id, role: 'assistant', content: string(update.delta), attachments: [], time: event.time });
       } else if (update.type === 'thinking_delta') {
         const activity = addActivity(turn, event, id, 'thinking');
-        activity.title = 'Размышления'; activity.text += string(update.delta);
+        activity.title = 'Thinking'; activity.text += string(update.delta);
       } else if (update.type === 'text_end') {
         piBlock(turn, event, state.activeMessage, index, { type: 'text', text: update.content }, true);
       } else if (update.type === 'thinking_end') {
@@ -586,7 +586,7 @@ function piNative(turn: TranscriptTurn, event: JournalEvent, data: RecordValue, 
     case 'tool_execution_end': {
       const activity = addActivity(turn, event, `pi-tool-${string(params.toolCallId) || event.seq}`, 'tool');
       activity.callId = string(params.toolCallId) || undefined;
-      activity.title = string(params.toolName) || 'Инструмент'; activity.aliases = [activity.title];
+      activity.title = string(params.toolName) || 'Tool'; activity.aliases = [activity.title];
       activity.input = params.args ?? activity.input;
       activity.data = { ...activity.data, ...params };
       if (method === 'tool_execution_update') activity.output = params.partialResult;
@@ -600,7 +600,7 @@ function piNative(turn: TranscriptTurn, event: JournalEvent, data: RecordValue, 
       const requestMethod = string(params.method);
       if (['input', 'select', 'confirm'].includes(requestMethod)) {
         addRequest(turn, {
-          id: `pi_ext_${string(params.id)}`, title: string(params.title) || 'Нужен ваш ответ',
+          id: `pi_ext_${string(params.id)}`, title: string(params.title) || 'Your response needed',
           input: params.message, method: requestMethod, placeholder: string(params.placeholder),
           questions: requestMethod === 'select' ? [question({ question: params.title, options: params.options }, 0)] : [],
           resolved: false, seq: event.seq,
@@ -623,14 +623,14 @@ function piNative(turn: TranscriptTurn, event: JournalEvent, data: RecordValue, 
       const id = previous && isRunning(previous.status) ? previous.id : `pi-compaction-${event.seq}`;
       state.activeCompaction = id;
       const activity = addActivity(turn, event, id, 'event');
-      activity.title = 'Сжатие контекста'; activity.status = 'running'; activity.data = params;
+      activity.title = 'Context compaction'; activity.status = 'running'; activity.data = params;
       if (!event.turnId) turn.status = 'running';
       break;
     }
     case 'compaction_end':
     case 'auto_compaction_end': {
       const activity = addActivity(turn, event, state.activeCompaction || `pi-compaction-${event.seq}`, 'event');
-      activity.title = 'Сжатие контекста'; activity.status = string(params.errorMessage) ? 'failed' : params.aborted === true ? 'interrupted' : 'completed';
+      activity.title = 'Context compaction'; activity.status = string(params.errorMessage) ? 'failed' : params.aborted === true ? 'interrupted' : 'completed';
       activity.data = { ...activity.data, ...params }; activity.endedAt = event.time;
       if (!event.turnId) turn.status = activity.status;
       state.activeCompaction = undefined; break;
@@ -666,7 +666,7 @@ function normalizedAgent(turn: TranscriptTurn, event: JournalEvent, data: Record
   switch (type) {
     case 'thinking': {
       const activity = addActivity(turn, event, `fallback-thinking-${event.seq}`, 'thinking');
-      activity.native = false; activity.title = 'Размышления'; activity.text = content; activity.status = 'completed'; break;
+      activity.native = false; activity.title = 'Thinking'; activity.text = content; activity.status = 'completed'; break;
     }
     case 'tool_use': {
       const input = field(data, 'toolInputRaw') ?? field(data, 'toolInput');
@@ -681,7 +681,7 @@ function normalizedAgent(turn: TranscriptTurn, event: JournalEvent, data: Record
       }
       const activity = addActivity(turn, event, callId ? `fallback-call-${callId}` : `fallback-tool-${event.seq}`, 'tool');
       activity.callId = callId || undefined;
-      activity.native = false; activity.title = name || 'Инструмент'; activity.aliases = [name];
+      activity.native = false; activity.title = name || 'Tool'; activity.aliases = [name];
       activity.input = input; activity.data = data;
       const pending = state.pending.get(origin) || [];
       if (!pending.includes(activity.id)) pending.push(activity.id);
@@ -708,7 +708,7 @@ function normalizedAgent(turn: TranscriptTurn, event: JournalEvent, data: Record
       const activity = match
         ?? addActivity(turn, event, callId ? `fallback-call-${callId}` : `fallback-tool-${event.seq}`, 'tool');
       activity.callId ||= callId || undefined;
-      activity.native = false; activity.title ||= name || 'Инструмент'; activity.aliases = [activity.title];
+      activity.native = false; activity.title ||= name || 'Tool'; activity.aliases = [activity.title];
       activity.input ??= field(data, 'toolInput'); activity.output = field(data, 'toolResult') || content;
       activity.status = field(data, 'toolSuccess') === false ? 'failed' : normalizedStatus(field(data, 'toolStatus')) || 'completed';
       activity.data = { ...activity.data, ...data }; activity.endedAt = event.time; break;
@@ -718,7 +718,7 @@ function normalizedAgent(turn: TranscriptTurn, event: JournalEvent, data: Record
       const questions = array(rawInput.questions ?? field(data, 'questions')).map(question);
       addRequest(turn, {
         id: string(field(data, 'requestID', 'RequestID')) || string(data.requestId),
-        title: string(rawInput.title) || (questions.length ? 'Нужен ваш ответ' : 'Нужно разрешение'),
+        title: string(rawInput.title) || (questions.length ? 'Your response needed' : 'Approval required'),
         input: rawInput.command ?? rawInput.message ?? field(data, 'toolInput'),
         questions, method: string(rawInput.method) || name, placeholder: string(rawInput.placeholder),
         resolved: false, seq: event.seq,
@@ -727,7 +727,7 @@ function normalizedAgent(turn: TranscriptTurn, event: JournalEvent, data: Record
     }
     case 'error': {
       const err = field(data, 'error');
-      turn.error = string(err) || string(record(err).message) || content || 'Не удалось завершить работу'; break;
+      turn.error = string(err) || string(record(err).message) || content || 'Unable to finish work'; break;
     }
     case 'result':
       if (field(data, 'done') === true && !terminal(turn.status)) turn.status = 'completed';
@@ -852,7 +852,7 @@ export function buildTranscript(events: JournalEvent[], botId?: string): Transcr
       case 'message':
         if (data.role === 'user' && data.source === 'goal_context') {
           const activity = addActivity(turn, event, `goal-context-${event.seq}`, 'event');
-          activity.title = 'Контекст для цели'; activity.status = 'completed'; activity.endedAt = event.time;
+          activity.title = 'Goal context'; activity.status = 'completed'; activity.endedAt = event.time;
           activity.input = { ...data }; activity.data = { ...data };
         }
         else if (data.role === 'user') turn.users.push(message(event, data));
@@ -880,30 +880,30 @@ export function buildTranscript(events: JournalEvent[], botId?: string): Transcr
         const result = record(data.result);
         const value = 'goal' in data ? data.goal : 'goal' in result ? result.goal : data;
         const activity = addActivity(turn, event, 'codex-goal', 'goal');
-        activity.title = value === null || data.method === 'clear' ? 'Цель снята' : 'Цель'; activity.data = record(value);
+        activity.title = value === null || data.method === 'clear' ? 'Goal cleared' : 'Goal'; activity.data = record(value);
         activity.text = string(activity.data.objective); activity.status = normalizedStatus(activity.data.status) || 'active';
         if (value === null || data.method === 'clear') activity.status = 'completed';
         break;
       }
       case 'goal_action': {
         const activity = addActivity(turn, event, `goal-action-${event.seq}`, 'event');
-        activity.title = 'Управление целью'; activity.status = 'completed'; activity.data = data;
+        activity.title = 'Goal management'; activity.status = 'completed'; activity.data = data;
         break;
       }
       case 'compact_action': {
         const activity = addActivity(turn, event, `compact-action-${string(data.requestId) || event.seq}`, 'event');
-        activity.title = 'Сжатие контекста';
+        activity.title = 'Context compaction';
         activity.status = data.status === 'started' ? 'starting' : normalizedStatus(data.status) || 'starting';
         activity.data = { ...activity.data, ...data }; activity.text = string(data.error);
         turn.backend = string(data.backend) || turn.backend;
         turn.status = activity.status;
-        if (isFailed(activity.status)) turn.error = string(data.error) || 'Не удалось сжать контекст';
+        if (isFailed(activity.status)) turn.error = string(data.error) || 'Unable to compact context';
         if (terminal(activity.status)) activity.endedAt = event.time;
         break;
       }
       case 'handoff': {
         const activity = addActivity(turn, event, `handoff-${event.seq}`, 'event');
-        activity.title = 'Контекст передан'; activity.status = 'completed'; activity.endedAt = event.time;
+        activity.title = 'Context transferred'; activity.status = 'completed'; activity.endedAt = event.time;
         const from = string(data.from), to = string(data.to);
         activity.text = from && to ? `${from} → ${to}` : '';
         // History belongs in the expanded receipt, never the visible summary.

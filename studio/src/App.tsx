@@ -142,7 +142,7 @@ export default function App() {
           fallback={
             <div className="chat-loading">
               <LoaderCircle size={21} className="spin" />
-              <span>Открываем разговор…</span>
+              <span>Opening conversation…</span>
             </div>
           }
         >
@@ -171,23 +171,23 @@ export default function App() {
               {!workspace.loaded ? (
                 <>
                   <LoaderCircle className="spin" size={28} />
-                  <p>Открываем пространство…</p>
+                  <p>Opening workspace…</p>
                 </>
               ) : (
                 <>
                   <Avatar avatar="lavender" size={80} />
-                  <span className="eyebrow">НАЧНИТЕ С ОДНОГО ПОМОЩНИКА</span>
-                  <h1>Соберите свою команду.</h1>
+                  <span className="eyebrow">START WITH ONE ASSISTANT</span>
+                  <h1>Build your team.</h1>
                   <p>
-                    Дайте боту имя, роль и первое поручение. Он сохранит
-                    контекст и продолжит работу, когда вы закроете страницу.
+                    Give your bot a name, a role, and its first task. It keeps
+                    its context and continues working after you close the page.
                   </p>
                   <button
                     className="primary-button"
                     onClick={() => setCreating(true)}
                   >
                     <Plus size={17} />
-                    Создать бота
+                    Create bot
                   </button>
                 </>
               )}
@@ -201,7 +201,7 @@ export default function App() {
           <button
             className="icon-button"
             onClick={() => workspace.setError("")}
-            aria-label="Закрыть уведомление"
+            aria-label="Dismiss notification"
           >
             <X size={16} />
           </button>

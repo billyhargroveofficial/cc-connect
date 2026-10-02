@@ -65,9 +65,9 @@ export function goalFromSnapshot(
   threadId: string,
 ): Goal | null {
   if (!Number.isSafeInteger(snapshot.cursor) || snapshot.cursor < 0)
-    throw new Error("Сервер не сообщил позицию цели в журнале.");
+    throw new Error("The server did not report the goal position in the journal.");
   if (!("goal" in snapshot))
-    throw new Error("Сервер не сообщил текущее состояние цели.");
+    throw new Error("The server did not report the current goal state.");
   const newer = currentGoalUpdate(events, threadId, snapshot.cursor);
   return newer ? newer.goal : snapshot.goal?.threadId === threadId ? snapshot.goal : null;
 }

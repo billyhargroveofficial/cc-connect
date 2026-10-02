@@ -45,8 +45,8 @@ export async function request<T>(
   } catch {
     throw new ApiError(
       response.ok
-        ? "Сервер вернул неожиданный ответ."
-        : "Не удалось подключиться к серверу.",
+        ? "The server returned an unexpected response."
+        : "Could not connect to the server.",
       response.status,
     );
   }
@@ -55,8 +55,8 @@ export async function request<T>(
       data && typeof data === "object" && "error" in data
         ? String(data.error)
         : response.status >= 500
-          ? "Сервер временно недоступен. Попробуйте подключиться снова."
-          : "Не удалось выполнить запрос.";
+          ? "The server is temporarily unavailable. Please try reconnecting."
+          : "The request could not be completed.";
     throw new ApiError(error, response.status);
   }
   return data as T;
@@ -120,7 +120,7 @@ export const api = {
       `${botPath(id)}/goal`, "DELETE",
     );
     if (typeof result?.cleared !== "boolean")
-      throw new ApiError("Сервер вернул неожиданный ответ при снятии цели.", 502);
+      throw new ApiError("The server returned an unexpected response when clearing the goal.", 502);
     return { goal: null, cursor: result.cursor };
   },
   instructions: (id?: string) =>
@@ -166,5 +166,5 @@ export function fileURL(botId: string, attachment: Attachment) {
   );
 }
 export function errorMessage(error: unknown) {
-  return error instanceof Error ? error.message : "Что-то пошло не так.";
+  return error instanceof Error ? error.message : "Something went wrong.";
 }

@@ -31,7 +31,7 @@ export function useBotContext(bot: Bot, events: Event[]) {
         if (context.compacting) timer = setTimeout(() => void load(), 1500);
       } catch (cause) {
         if (controller.signal.aborted) return;
-        setError(cause instanceof Error ? cause.message : "Не удалось прочитать контекст.");
+        setError(cause instanceof Error ? cause.message : "Could not read context.");
         if (compacting) timer = setTimeout(() => void load(), 3000);
       }
     }

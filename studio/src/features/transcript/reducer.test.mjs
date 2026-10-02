@@ -242,7 +242,7 @@ test('Codex child responses, tool output and completion stay in its card while t
   assert.equal(running.status, 'inProgress', 'child completion cannot complete the parent');
   assert.equal(running.responses.length, 0, 'child response is never attributed to the parent');
   const childCard = running.activities.find(v => v.thread?.id === 'child-thread');
-  assert.equal(childCard.title, 'Сабагент · Researcher');
+  assert.equal(childCard.title, 'Subagent · Researcher');
   assert.equal(childCard.thread.status, 'completed');
   assert.equal(childCard.thread.responses[0].content, 'Intermediate child result');
   assert.equal(childCard.thread.activities[0].output, childOutput);
@@ -285,7 +285,7 @@ test('Codex scoped history without root metadata or turn/started never guesses a
   assert.equal(turn.status, 'running');
   assert.equal(turn.responses.length, 0);
   assert.equal(turn.activities.length, 2);
-  assert.equal(turn.activities[0].title, 'Сессия агента');
+  assert.equal(turn.activities[0].title, 'Agent session');
   assert.equal(turn.activities[0].thread.responses[0].content, 'A');
   assert.equal(turn.activities[1].thread.responses[0].content, 'B');
 });
@@ -318,7 +318,7 @@ test('long handoff context stays in completed collapsible activity instead of hi
   assert.equal(active.activities.length, 1);
   const receipt = active.activities[0];
   assert.equal(receipt.kind, 'event');
-  assert.equal(receipt.title, 'Контекст передан');
+  assert.equal(receipt.title, 'Context transferred');
   assert.equal(receipt.status, 'completed');
   assert.equal(isRunning(receipt.status), false, 'completed activity must default collapsed in the transcript');
   assert.equal(receipt.text, 'codex → pi', 'compact summary must never contain the history');
@@ -360,7 +360,7 @@ test('goal_context source collapses internal context while preserving identical 
   assert.equal(active.activities.length, 1);
   const receipt = active.activities[0];
   assert.equal(receipt.kind, 'event');
-  assert.equal(receipt.title, 'Контекст для цели');
+  assert.equal(receipt.title, 'Goal context');
   assert.equal(receipt.status, 'completed');
   assert.equal(isRunning(receipt.status), false);
   assert.deepEqual(receipt.input, internal.data, 'the expanded input must retain the complete content and metadata');

@@ -7,12 +7,12 @@ import type { Bot, Capabilities } from '../../lib/types'
 import './settings.css'
 
 export const avatarColors = [
-  { id: 'lavender', color: '#b9a0ed', name: 'Лавандовый' },
-  { id: 'mint', color: '#9acbb3', name: 'Мятный' },
-  { id: 'peach', color: '#dfaf8e', name: 'Персиковый' },
-  { id: 'blue', color: '#94b7df', name: 'Голубой' },
-  { id: 'rose', color: '#d89aae', name: 'Розовый' },
-  { id: 'amber', color: '#d8be7c', name: 'Золотой' },
+  { id: 'lavender', color: '#b9a0ed', name: 'Lavender' },
+  { id: 'mint', color: '#9acbb3', name: 'Mint' },
+  { id: 'peach', color: '#dfaf8e', name: 'Peach' },
+  { id: 'blue', color: '#94b7df', name: 'Blue' },
+  { id: 'rose', color: '#d89aae', name: 'Rose' },
+  { id: 'amber', color: '#d8be7c', name: 'Amber' },
 ]
 
 export interface BotDraft {
@@ -55,7 +55,7 @@ export function botPayload(draft: BotDraft): Partial<Bot> {
 }
 
 export function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : 'Не удалось выполнить действие. Попробуйте ещё раз.'
+  return error instanceof Error ? error.message : 'Could not complete the action. Please try again.'
 }
 
 export function ModalShell({ title, subtitle, onClose, children, footer, drawer = false }: {
@@ -99,7 +99,7 @@ export function ModalShell({ title, subtitle, onClose, children, footer, drawer 
         ref={panel} tabIndex={-1} role="dialog" aria-modal="true" aria-label={title}>
         <header className="cb-settings-header">
           <div><h2>{title}</h2>{subtitle && <p>{subtitle}</p>}</div>
-          <button type="button" className="cb-settings-icon-button" onClick={onClose} aria-label="Закрыть настройки"><X size={20} /></button>
+          <button type="button" className="cb-settings-icon-button" onClick={onClose} aria-label={`Close ${title}`}><X size={20} /></button>
         </header>
         {children}
         {footer && <footer className="cb-settings-footer">{footer}</footer>}
@@ -114,7 +114,7 @@ export function Notice({ error, success }: { error?: string; success?: string })
     role={error ? 'alert' : 'status'}>{error || success}</div>
 }
 
-export function SaveButton({ busy, children = 'Сохранить', disabled = false }: {
+export function SaveButton({ busy, children = 'Save', disabled = false }: {
   busy: boolean; children?: ReactNode; disabled?: boolean;
 }) {
   return <button type="submit" className="cb-settings-button cb-settings-button--primary" disabled={busy || disabled}>
@@ -128,7 +128,7 @@ export function BotFields({ value, onChange, capabilities, running = false }: {
 }) {
   const update = <K extends keyof BotDraft>(key: K, next: BotDraft[K]) => onChange({ ...value, [key]: next })
   return <>
-    <div className="cb-settings-avatar-palette" role="group" aria-label="Цвет аватара">
+    <div className="cb-settings-avatar-palette" role="group" aria-label="Avatar color">
       {avatarColors.map((avatar) => <button key={avatar.id} type="button" title={avatar.name}
         aria-label={avatar.name} aria-pressed={value.avatar === avatar.id}
         className={`cb-settings-avatar-option ${value.avatar === avatar.id ? 'is-selected' : ''}`}
@@ -136,40 +136,40 @@ export function BotFields({ value, onChange, capabilities, running = false }: {
         <span className="cb-settings-avatar-eyes"><i /><i /></span>
       </button>)}
     </div>
-    <label className="cb-settings-field">Имя
-      <input value={value.name} onChange={(event) => update('name', event.target.value)} required maxLength={80} placeholder="Как зовут бота?" autoComplete="off" />
+    <label className="cb-settings-field">Name
+      <input value={value.name} onChange={(event) => update('name', event.target.value)} required maxLength={80} placeholder="What is your bot's name?" autoComplete="off" />
     </label>
-    <label className="cb-settings-field">Роль
+    <label className="cb-settings-field">Role
       <textarea value={value.role} onChange={(event) => update('role', event.target.value)} rows={3}
-        maxLength={4000} placeholder="В чём он помогает и за какой результат отвечает" />
+        maxLength={4000} placeholder="What it helps with and the results it is responsible for" />
     </label>
     <label className="cb-settings-toggle-row">
-      <span><strong>Главный бот</strong><small>Координирует остальных и остаётся первым в списке.</small></span>
+      <span><strong>Lead bot</strong><small>Coordinates the other bots and stays first in the list.</small></span>
       <input type="checkbox" className="cb-settings-switch" checked={value.chief} onChange={(event) => update('chief', event.target.checked)} />
     </label>
     <section className="cb-settings-section">
-      <h3>Модель по умолчанию</h3>
+      <h3>Default model</h3>
       <RuntimeFields backend={value.backend} model={value.model} effort={value.effort}
         capabilities={capabilities} disabled={running}
         onChange={(next) => onChange({ ...value, ...next })} />
-      {running && <p className="cb-settings-hint">Модель можно изменить после завершения текущего ответа.</p>}
+      {running && <p className="cb-settings-hint">You can change the model after the current response finishes.</p>}
     </section>
     <section className="cb-settings-section">
       <label className="cb-settings-toggle-row">
-        <span><strong>Telegram</strong><small>Общий разговор в приложении и личном Telegram-боте.</small></span>
+        <span><strong>Telegram</strong><small>One conversation shared by the app and your Telegram bot.</small></span>
         <input type="checkbox" className="cb-settings-switch" checked={value.telegramEnabled}
           onChange={(event) => update('telegramEnabled', event.target.checked)} />
       </label>
       {value.telegramEnabled && <div className="cb-settings-nested-fields">
-        <label className="cb-settings-field">Переменная окружения с токеном
+        <label className="cb-settings-field">Token environment variable
           <input value={value.telegramTokenEnv} onChange={(event) => update('telegramTokenEnv', event.target.value)}
             placeholder="TELEGRAM_BOT_TOKEN" required pattern="[A-Za-z_][A-Za-z0-9_]*" autoComplete="off" spellCheck={false} />
-          <small>Токен BotFather должен быть задан в окружении сервера. Здесь хранится только имя переменной.</small>
+          <small>Set the BotFather token in the server environment. Only the variable name is stored here.</small>
         </label>
-        <label className="cb-settings-field">Разрешённые ID пользователей
+        <label className="cb-settings-field">Allowed user IDs
           <input value={value.telegramAllowedUserIds} onChange={(event) => update('telegramAllowedUserIds', event.target.value)}
             placeholder="123456789" required pattern="[0-9 ,;\s]+" inputMode="numeric" autoComplete="off" />
-          <small>Числовые Telegram ID через запятую. Бот отвечает только этим пользователям.</small>
+          <small>Comma-separated numeric Telegram IDs. The bot only responds to these users.</small>
         </label>
       </div>}
     </section>
@@ -189,7 +189,7 @@ export function RuntimeFields({ backend, model, effort, capabilities, disabled =
   }
   return <>
     <div className="cb-settings-runtime-fields">
-      <label className="cb-settings-field">Исполнитель
+      <label className="cb-settings-field">Harness
         <select value={backend} disabled={disabled} onChange={(event) => {
           const next = event.target.value
           selectModel(next, capabilities?.models.find((entry) => entry.backend === next)?.id ?? '')
@@ -197,37 +197,37 @@ export function RuntimeFields({ backend, model, effort, capabilities, disabled =
           <option value="codex">Codex</option><option value="pi">Pi · DeepSeek</option>
         </select>
       </label>
-      <label className="cb-settings-field">Модель
+      <label className="cb-settings-field">Model
         <select value={model} disabled={disabled || models.length === 0} onChange={(event) => selectModel(backend, event.target.value)}>
-          {!models.some((entry) => entry.id === model) && <option value={model}>{model || (capabilities ? 'Нет доступных моделей' : 'Загружаем модели…')}</option>}
+          {!models.some((entry) => entry.id === model) && <option value={model}>{model || (capabilities ? 'No models available' : 'Loading models…')}</option>}
           {models.map((entry) => <option key={entry.id} value={entry.id}>{entry.name || entry.id}</option>)}
         </select>
       </label>
     </div>
-    {efforts.length > 0 && <label className="cb-settings-field">Уровень рассуждения
+    {efforts.length > 0 && <label className="cb-settings-field">Reasoning effort
       <select value={effort} disabled={disabled} onChange={(event) => onChange({ backend, model, effort: event.target.value })}>
-        {!efforts.includes(effort) && <option value={effort} disabled>{effort ? `${effort} · не подтверждён` : 'Выберите уровень'}</option>}
+        {!efforts.includes(effort) && <option value={effort} disabled>{effort ? `${effort} · unconfirmed` : 'Select effort'}</option>}
         {efforts.map((entry) => <option key={entry} value={entry}>{entry === 'ultra' ? 'Ultra' : entry}</option>)}
       </select>
     </label>}
-    {availability?.available === false && <p className="cb-settings-hint">{availability.reason || 'Исполнитель пока не подключён.'}</p>}
+    {availability?.available === false && <p className="cb-settings-hint">{availability.reason || 'This harness is not connected yet.'}</p>}
   </>
 }
 
-export function MarkdownEditor({ content, onChange, readOnly = false, label = 'Содержимое', placeholder }: {
+export function MarkdownEditor({ content, onChange, readOnly = false, label = 'Content', placeholder }: {
   content: string; onChange: (content: string) => void; readOnly?: boolean; label?: string; placeholder?: string;
 }) {
   const [preview, setPreview] = useState(false)
   return <div className="cb-settings-editor">
     <div className="cb-settings-editor-toolbar">
       <span>{label}</span>
-      <div className="cb-settings-segment" aria-label="Режим редактора">
-        <button type="button" onClick={() => setPreview(false)} aria-pressed={!preview}>{readOnly ? 'Текст' : 'Редактор'}</button>
-        <button type="button" onClick={() => setPreview(true)} aria-pressed={preview}>Просмотр</button>
+      <div className="cb-settings-segment" aria-label="Editor mode">
+        <button type="button" onClick={() => setPreview(false)} aria-pressed={!preview}>{readOnly ? 'Source' : 'Editor'}</button>
+        <button type="button" onClick={() => setPreview(true)} aria-pressed={preview}>Preview</button>
       </div>
     </div>
     {preview
-      ? <div className="cb-settings-markdown"><ReactMarkdown remarkPlugins={[remarkGfm]}>{content || '*Пока пусто*'}</ReactMarkdown></div>
+      ? <div className="cb-settings-markdown"><ReactMarkdown remarkPlugins={[remarkGfm]}>{content || '*Nothing here yet*'}</ReactMarkdown></div>
       : <textarea aria-label={label} value={content} onChange={(event) => onChange(event.target.value)} readOnly={readOnly}
         placeholder={placeholder} rows={18} spellCheck={false} className="cb-settings-source" />}
   </div>

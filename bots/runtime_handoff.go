@@ -38,7 +38,7 @@ func (r *Runtime) ensureGoalHandoff(ctx context.Context, botID string) error {
 	if turnID == "" {
 		workCtx, cancel := context.WithTimeout(r.ctx, 30*time.Second)
 		defer cancel()
-		turnID, err = r.sendMessage(ctx, workCtx, botID, MessageRequest{Source: "goal_context", Text: "Восстанови предоставленный контекст разговора перед возобновлением цели. Цель остаётся на паузе. Не используй инструменты, не делегируй, не меняй файлы или цель и не выполняй её работу. Ответь только кратким подтверждением, что контекст принят; сервис затем явно возобновит цель."})
+		turnID, err = r.sendMessage(ctx, workCtx, botID, MessageRequest{Source: "goal_context", Text: "Restore the provided conversation context before resuming the goal. The goal remains paused. Do not use tools, delegate, modify files or the goal, or perform any goal work. Reply only with a brief acknowledgment that the context has been received; the service will then explicitly resume the goal."})
 		if err != nil {
 			return fmt.Errorf("restore context before resuming goal: %w", err)
 		}

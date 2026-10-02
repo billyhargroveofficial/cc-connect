@@ -92,7 +92,7 @@ export default function ChatRoom({
         <button
           className="icon-button chat-corner-control chat-corner-back"
           onClick={onBack}
-          aria-label="К списку ботов"
+          aria-label="Back to bots"
         >
           <ArrowLeft size={21} />
         </button>
@@ -100,7 +100,7 @@ export default function ChatRoom({
           ref={detailsTrigger}
           className="icon-button chat-corner-control chat-corner-details"
           onClick={() => setDetailsOpen(true)}
-          aria-label="Сведения о боте"
+          aria-label="Bot details"
           aria-expanded={detailsOpen}
           aria-haspopup="dialog"
         >
@@ -124,18 +124,18 @@ export default function ChatRoom({
         {loading && !events.length ? (
           <div className="chat-loading">
             <LoaderCircle size={23} className="spin" />
-            <span>Открываем разговор…</span>
+            <span>Opening conversation…</span>
           </div>
         ) : !events.length ? (
           <div className="chat-empty">
             <Avatar bot={bot} size={76} />
             <span className="eyebrow">
-              {bot.chief ? "ВАШ КООРДИНАТОР" : "ПОСТОЯННЫЙ ПОМОЩНИК"}
+              {bot.chief ? "YOUR COORDINATOR" : "YOUR PERSISTENT ASSISTANT"}
             </span>
-            <h1>На связи, {bot.name}.</h1>
+            <h1>{bot.name} is here.</h1>
             <p>
               {bot.role ||
-                "Дайте первое поручение. Контекст и результаты останутся в этом разговоре."}
+                "Give your first task. Context and results stay in this conversation."}
             </p>
           </div>
         ) : (
@@ -152,7 +152,7 @@ export default function ChatRoom({
         {pending && (
           <div className="accepted-message" aria-live="polite">
             <LoaderCircle size={14} className="spin" />
-            Начинает работу…
+            Starting work…
           </div>
         )}
       </div>
@@ -169,7 +169,7 @@ export default function ChatRoom({
             setShowScroll(false);
           }}
         >
-          <ArrowDown size={14} />К новым событиям
+          <ArrowDown size={14} />Jump to latest
         </button>
       )}
       <Composer

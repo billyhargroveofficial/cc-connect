@@ -125,7 +125,7 @@ func OpenStore(root string) (*Store, error) {
 		return nil, err
 	}
 	if fresh {
-		if _, err := s.CreateBot(Bot{Name: "Руководитель", Role: "Координируй остальных ботов. Делегируй конкретные задачи и сообщай владельцу проверенные результаты.", Chief: true, Avatar: "coordinator"}); err != nil {
+		if _, err := s.CreateBot(Bot{Name: "Coordinator", Role: "Coordinate the other bots. Delegate specific tasks and report verified results to the owner.", Chief: true, Avatar: "coordinator"}); err != nil {
 			journal.Close()
 			return nil, err
 		}

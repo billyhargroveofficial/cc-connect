@@ -9,11 +9,11 @@ export default function (pi: ExtensionAPI) {
   if (!origin || !token || !botId) return;
 
   const tools = [
-    { name: "bots_list", label: "Боты", description: "List your persistent Connect Bots and their current state.", parameters: Type.Object({}) },
-    { name: "bots_status", label: "Состояние бота", description: "Read a bot's state and most recent result.", parameters: Type.Object({ botId: Type.String() }) },
-    { name: "bots_send", label: "Поручить боту", description: "Ask another persistent bot to do bounded work and wait for its result. Do not recursively delegate back to a busy caller.", parameters: Type.Object({ botId: Type.String(), message: Type.String() }) },
-	{ name: "bots_publish_files", label: "Отправить файлы", description: "Send prepared files, pictures, documents or archives from your own workspace as downloadable conversation attachments. Original files are preserved.", parameters: Type.Object({ paths: Type.Array(Type.String(), { minItems: 1, maxItems: 10 }), caption: Type.Optional(Type.String()) }) },
-    { name: "bots_create", label: "Создать бота", description: "Create a persistent specialist. Only the chief may use this tool.", parameters: Type.Object({ name: Type.String(), role: Type.String(), backend: Type.Optional(Type.String()), model: Type.Optional(Type.String()) }) },
+    { name: "bots_list", label: "Bots", description: "List your persistent Connect Bots and their current state.", parameters: Type.Object({}) },
+    { name: "bots_status", label: "Bot status", description: "Read a bot's state and most recent result.", parameters: Type.Object({ botId: Type.String() }) },
+    { name: "bots_send", label: "Delegate to bot", description: "Ask another persistent bot to do bounded work and wait for its result. Do not recursively delegate back to a busy caller.", parameters: Type.Object({ botId: Type.String(), message: Type.String() }) },
+    { name: "bots_publish_files", label: "Send files", description: "Send prepared files, pictures, documents or archives from your own workspace as downloadable conversation attachments. Original files are preserved.", parameters: Type.Object({ paths: Type.Array(Type.String(), { minItems: 1, maxItems: 10 }), caption: Type.Optional(Type.String()) }) },
+    { name: "bots_create", label: "Create bot", description: "Create a persistent specialist. Only the chief may use this tool.", parameters: Type.Object({ name: Type.String(), role: Type.String(), backend: Type.Optional(Type.String()), model: Type.Optional(Type.String()) }) },
   ];
 
   for (const tool of tools) {

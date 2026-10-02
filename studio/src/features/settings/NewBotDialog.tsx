@@ -29,14 +29,14 @@ export function NewBotDialog({ capabilities, onClose, onCreated }: NewBotDialogP
     } catch (cause) { setError(errorMessage(cause)) }
     finally { setBusy(false) }
   }
-  return <ModalShell title="Новый бот" subtitle="Своя роль, память и рабочая папка." onClose={onClose}>
+  return <ModalShell title="New bot" subtitle="Its own role, memory, and workspace." onClose={onClose}>
     <form onSubmit={submit} className="cb-settings-form cb-settings-create-form">
       <div className="cb-settings-scroll"><BotFields value={draft} onChange={setDraft} capabilities={capabilities} />
         <Notice error={error} />
       </div>
       <footer className="cb-settings-footer">
-        <span className="cb-settings-hint">Инструкции и навыки можно настроить после создания.</span>
-        <SaveButton busy={busy} disabled={!draft.name.trim()}>Создать бота</SaveButton>
+        <span className="cb-settings-hint">You can configure instructions and skills after creating the bot.</span>
+        <SaveButton busy={busy} disabled={!draft.name.trim()}>Create bot</SaveButton>
       </footer>
     </form>
   </ModalShell>

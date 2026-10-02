@@ -23,12 +23,12 @@ export default function ContextControl({ state, busy, onError }: {
   useDialogFocus(open, dialog, close);
   const format = (value: number | undefined) => value === undefined
     ? "—"
-    : Math.round(value).toLocaleString("ru");
+    : Math.round(value).toLocaleString("en-US");
   const title = [
-    context?.estimated ? "Оценка заполнения контекста" : "",
-    used === undefined ? "Провайдер ещё не сообщил размер контекста" : `${Math.round(used).toLocaleString("ru")} токенов в контексте`,
-    contextWindow === undefined ? "" : `Окно: ${Math.round(contextWindow).toLocaleString("ru")} токенов`,
-    remaining === undefined ? "" : `Осталось: ${Math.round(remaining).toLocaleString("ru")} токенов`,
+    context?.estimated ? "Estimated context usage" : "",
+    used === undefined ? "The provider has not reported context usage yet" : `${Math.round(used).toLocaleString("en-US")} tokens in context`,
+    contextWindow === undefined ? "" : `Window: ${Math.round(contextWindow).toLocaleString("en-US")} tokens`,
+    remaining === undefined ? "" : `Remaining: ${Math.round(remaining).toLocaleString("en-US")} tokens`,
     error,
   ].filter(Boolean).join("\n");
   return <div className={`context-control ${compacting || requesting ? "is-compacting" : ""}`}>
@@ -36,7 +36,7 @@ export default function ContextControl({ state, busy, onError }: {
       ref={trigger}
       className="context-trigger"
       title={title}
-      aria-label={compacting ? "Сжимается контекст" : requesting ? "Отправляем запрос на сжатие" : percent === undefined ? "Размер контекста неизвестен. Открыть контекст" : `Использовано ${percent.toFixed(1)}% контекста. Открыть контекст`}
+      aria-label={compacting ? "Compacting context" : requesting ? "Requesting compaction" : percent === undefined ? "Context usage is unknown. Open context" : `${percent.toFixed(1)}% of context used. Open context`}
       aria-expanded={open}
       aria-haspopup="dialog"
       aria-controls={open ? popoverId : undefined}
@@ -46,30 +46,30 @@ export default function ContextControl({ state, busy, onError }: {
       <span>{compacting || requesting ? "…" : percent === undefined ? "—" : `${context?.estimated ? "≈ " : ""}${Math.round(percent)}%`}</span>
     </button>
     {open && <>
-      <button className="popover-backdrop" tabIndex={-1} onClick={close} aria-label="Закрыть контекст" />
-      <div className="context-popover" ref={dialog} tabIndex={-1} id={popoverId} role="dialog" aria-modal="true" aria-label="Контекст диалога">
+      <button className="popover-backdrop" tabIndex={-1} onClick={close} aria-label="Close context" />
+      <div className="context-popover" ref={dialog} tabIndex={-1} id={popoverId} role="dialog" aria-modal="true" aria-label="Conversation context">
         <header>
-          <span>Контекст</span>
-          <button className="icon-button" onClick={close} aria-label="Закрыть контекст"><X size={15} /></button>
+          <span>Context</span>
+          <button className="icon-button" onClick={close} aria-label="Close context"><X size={15} /></button>
         </header>
         <dl>
-          <div><dt>Использовано</dt><dd>{format(used)}</dd></div>
-          <div><dt>Размер окна</dt><dd>{format(contextWindow)}</dd></div>
-          <div><dt>Осталось</dt><dd>{format(remaining)}</dd></div>
+          <div><dt>Used</dt><dd>{format(used)}</dd></div>
+          <div><dt>Window size</dt><dd>{format(contextWindow)}</dd></div>
+          <div><dt>Remaining</dt><dd>{format(remaining)}</dd></div>
         </dl>
-        {(used === undefined || context?.estimated) && <p>{used === undefined ? error || "Провайдер ещё не сообщил размер контекста." : "Размер контекста оценён провайдером."}</p>}
+        {(used === undefined || context?.estimated) && <p>{used === undefined ? error || "The provider has not reported context usage yet." : "Context usage is estimated by the provider."}</p>}
         <button
           className="compact-button"
           disabled={!context || busy || compacting || requesting}
-          title={compacting ? "Провайдер сжимает контекст" : requesting ? "Отправляем запрос на сжатие" : busy ? "Сжать контекст можно после ответа бота" : !context ? error || "Читаем состояние контекста" : "Сжать контекст"}
-          aria-label={compacting ? "Сжимается контекст" : "Сжать контекст"}
+          title={compacting ? "The provider is compacting context" : requesting ? "Requesting compaction" : busy ? "You can compact context after the bot responds" : !context ? error || "Loading context status" : "Compact context"}
+          aria-label={compacting ? "Compacting context" : "Compact context"}
           onClick={() => {
             close();
             void compact().catch(cause => onError(errorMessage(cause)));
           }}
         >
           {compacting || requesting ? <LoaderCircle size={14} className="spin" /> : <Shrink size={14} />}
-          <span>{compacting ? "Сжимаем контекст…" : requesting ? "Отправляем запрос…" : "Сжать контекст"}</span>
+          <span>{compacting ? "Compacting context…" : requesting ? "Sending request…" : "Compact context"}</span>
         </button>
       </div>
     </>}

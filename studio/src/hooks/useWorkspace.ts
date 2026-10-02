@@ -126,7 +126,7 @@ export function useWorkspace(selectedId = "") {
       check: api.session,
       expired: () => {
         if (alive) {
-          setError("Сессия завершилась. Войдите снова — черновики сохранены.");
+          setError("Your session has expired. Sign in again. Your drafts are saved.");
           setPhase("login");
         }
       },
@@ -148,7 +148,7 @@ export function useWorkspace(selectedId = "") {
           dispatch({ type: "event", event });
         }
       } catch {
-        setError("Не удалось прочитать событие сервера.");
+        setError("Could not read the server event.");
       }
     });
     return () => {

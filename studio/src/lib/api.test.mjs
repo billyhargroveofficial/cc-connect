@@ -21,7 +21,7 @@ test('an invalid clear response cannot silently erase a pinned goal', async () =
   const original = globalThis.fetch;
   globalThis.fetch = async () => new Response(JSON.stringify({ cursor: 19 }), { status: 200 });
   try {
-    await assert.rejects(api.clearGoal('bot'), /неожиданный ответ/);
+    await assert.rejects(api.clearGoal('bot'), /unexpected response/);
   } finally {
     globalThis.fetch = original;
   }

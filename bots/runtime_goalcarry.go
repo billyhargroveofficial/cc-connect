@@ -119,7 +119,7 @@ func (r *Runtime) restoreGoalCarry(ctx context.Context, s *botRuntime, session c
 	s.mu.Lock()
 	s.pendingGoal, s.pendingGoalSource = nil, ""
 	s.mu.Unlock()
-	_, err = r.store.AppendEvent(s.id, "", "system", map[string]any{"content": "Цель перенесена в новую сессию и поставлена на паузу. Проверьте её и возобновите явно; оставшийся бюджет сохранён."})
+	_, err = r.store.AppendEvent(s.id, "", "system", map[string]any{"content": "The goal was moved to a new session and paused. Review it and resume it explicitly; the remaining budget has been preserved."})
 	return err
 }
 
@@ -136,7 +136,7 @@ func (r *Runtime) recordExhaustedGoal(s *botRuntime, source string, fields map[s
 	s.pendingGoal, s.pendingGoalSource = nil, ""
 	s.goalCarrySuppressed = true
 	s.mu.Unlock()
-	_, err := r.store.AppendEvent(s.id, "", "system", map[string]any{"content": "Исходный бюджет цели исчерпан. Цель сохранена в журнале; для продолжения задайте новый бюджет явно."})
+	_, err := r.store.AppendEvent(s.id, "", "system", map[string]any{"content": "The goal's original budget is exhausted. The goal is saved in the journal; set a new budget explicitly to continue."})
 	return err
 }
 

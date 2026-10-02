@@ -60,24 +60,24 @@ export function isWorking(status: string) {
 }
 export function statusLabel(status: string) {
   const labels: Record<string, string> = {
-    idle: "Готов к работе",
-    working: "Работает",
-    running: "Работает",
-    thinking: "Думает",
-    starting: "Начинает",
-    stopping: "Останавливается",
-    waiting: "Ждёт ответа",
-    blocked: "Нужна помощь",
-    busy: "Работает",
-    in_progress: "Работает",
-    interrupted: "Прервано",
-    failed: "Ошибка",
-    error: "Ошибка",
-    done: "Готово",
-    completed: "Готово",
-    archived: "В архиве",
+    idle: "Ready",
+    working: "Working",
+    running: "Working",
+    thinking: "Thinking",
+    starting: "Starting",
+    stopping: "Stopping",
+    waiting: "Waiting for a response",
+    blocked: "Needs attention",
+    busy: "Working",
+    in_progress: "Working",
+    interrupted: "Interrupted",
+    failed: "Failed",
+    error: "Error",
+    done: "Done",
+    completed: "Done",
+    archived: "Archived",
   };
-  return labels[status] || status || "Готов к работе";
+  return labels[status] || status || "Ready";
 }
 
 function compareUpdatedAt(left: string, right: string): number {
@@ -107,14 +107,14 @@ export function mergeBots(current: Bot[], incoming: Bot[]): Bot[] {
   return [...result.values()];
 }
 export function telegramLabel(binding: Bot["telegram"]): string {
-  if (!binding?.enabled) return "Telegram отключён";
+  if (!binding?.enabled) return "Telegram disabled";
   const labels: Record<string, string> = {
-    connected: "Подключён к Telegram",
-    connecting: "Telegram подключается",
-    error: "Ошибка подключения Telegram",
-    disabled: "Telegram отключён",
+    connected: "Connected to Telegram",
+    connecting: "Connecting to Telegram",
+    error: "Telegram connection error",
+    disabled: "Telegram disabled",
   };
-  return labels[binding.status || ""] || "Telegram включён";
+  return labels[binding.status || ""] || "Telegram enabled";
 }
 export function telegramTitle(binding: Bot["telegram"]): string {
   return binding?.status === "error" && binding.error

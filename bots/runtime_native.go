@@ -64,7 +64,7 @@ func (r *Runtime) nativeWriter() {
 						return nil
 					})
 					r.logJournalError(item.botID, item.turnID, err)
-					_, err = r.store.AppendEvent(item.botID, item.turnID, "system", map[string]any{"content": "Бот продолжает работу в своей постоянной сессии.", "source": "native"})
+					_, err = r.store.AppendEvent(item.botID, item.turnID, "system", map[string]any{"content": "The bot is continuing work in its persistent session.", "source": "native"})
 					r.logJournalError(item.botID, item.turnID, err)
 					_, err = r.store.AppendEvent(item.botID, item.turnID, "turn", turnPayload(item.begin.bot, "running", TurnResult{}))
 					r.logJournalError(item.botID, item.turnID, err)

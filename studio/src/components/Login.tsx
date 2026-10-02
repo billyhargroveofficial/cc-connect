@@ -37,7 +37,7 @@ export default function Login({
         <Brand />
         <span className="welcome-local">
           <span className="status-dot" />
-          На вашей машине
+          On your machine
         </span>
       </header>
       <div className="welcome-layout">
@@ -47,35 +47,35 @@ export default function Login({
             <Avatar avatar="mint" size={44} />
             <Avatar avatar="peach" size={42} />
           </div>
-          <span className="eyebrow">ВАША КОМАНДА. ВАШЕ ПРОСТРАНСТВО.</span>
+          <span className="eyebrow">YOUR TEAM. YOUR WORKSPACE.</span>
           <h1>
-            Дайте направление.
+            Give them direction.
             <br />
-            <span>Боты сделают остальное.</span>
+            <span>Bots take it from there.</span>
           </h1>
           <p>
-            Постоянные помощники с памятью и своими задачами.
-            <br className="desktop-break" /> Вместе работают, делятся
-            результатами и всегда на связи.
+            Persistent assistants with memory and tasks of their own.
+            <br className="desktop-break" /> They work together, share
+            results, and stay connected.
           </p>
           <div className="welcome-footnote">
-            Codex & Pi <span>·</span> На сервере или вашем компьютере
+            Codex & Pi <span>·</span> On your server or computer
           </div>
         </section>
         <form className="login-card" onSubmit={submit}>
           <div className="login-key">
             <KeyRound size={20} />
           </div>
-          <h2>Откройте пространство</h2>
-          <p>Введите ключ доступа этой установки.</p>
-          <label htmlFor="access-token">Ключ доступа</label>
+          <h2>Open your workspace</h2>
+          <p>Enter the access key for this installation.</p>
+          <label htmlFor="access-token">Access key</label>
           <input
             id="access-token"
             value={token}
             onChange={(e) => setToken(e.target.value)}
             type="password"
             autoComplete="current-password"
-            placeholder="Вставьте ключ"
+            placeholder="Paste your key"
             disabled={checking || busy}
           />
           <button
@@ -87,7 +87,7 @@ export default function Login({
               <LoaderCircle size={17} className="spin" />
             ) : (
               <>
-                Войти <ArrowRight size={17} />
+                Sign in <ArrowRight size={17} />
               </>
             )}
           </button>
@@ -97,16 +97,16 @@ export default function Login({
               {error && !localError && (
                 <button type="button" className="text-button" onClick={onRetry}>
                   <RefreshCw size={13} />
-                  Повторить
+                  Retry
                 </button>
               )}
             </div>
           )}
-          <small>Ваши боты и файлы остаются на вашей машине.</small>
+          <small>Your bots and files stay on your machine.</small>
         </form>
       </div>
       <footer>
-        Connect Bots <span>Постоянные боты. Понятная работа.</span>
+        Connect Bots <span>Persistent bots. Clear workflows.</span>
       </footer>
     </main>
   );

@@ -9,6 +9,7 @@ import { useDialogFocus } from "./ModelPicker";
 import "./bot-island.css";
 
 const desktopQuery = "(min-width: 1100px)";
+const avatarPriorityStatuses = new Set(["blocked", "waiting", "interrupted", "failed", "error"]);
 
 function attachmentURL(value: unknown): string | undefined {
   if (typeof value !== "string" || !value) return undefined;
@@ -86,6 +87,9 @@ export default function BotIsland({
   const dialog = useRef<HTMLDivElement>(null);
   const overlay = open && !desktop;
   const { requests, files } = useMemo(() => botIslandContent(events, bot.id), [events, bot.id]);
+  const avatarStatus = avatarPriorityStatuses.has(bot.status)
+    ? bot.status
+    : working ? "working" : bot.status;
 
   useEffect(() => {
     const media = window.matchMedia(desktopQuery);
@@ -133,7 +137,7 @@ export default function BotIsland({
         <button type="button" className="icon-button bot-island-close" onClick={close}
           aria-label="Close bot details"><X size={18} /></button>
         <div className="bot-island-profile">
-          <Avatar bot={bot} size={52} status={working ? "working" : bot.status} />
+          <Avatar bot={bot} size={52} status={avatarStatus} />
           <div className="bot-island-identity">
             <strong>{bot.name}</strong>
             <span className={`bot-island-status${working ? " is-working" : ""}`}>

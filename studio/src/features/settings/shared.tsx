@@ -4,16 +4,11 @@ import { LoaderCircle, X } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import type { Bot, Capabilities } from '../../lib/types'
+import { avatarStyles } from '../../lib/avatars'
+import Avatar from '../../components/Avatar'
 import './settings.css'
 
-export const avatarColors = [
-  { id: 'lavender', color: '#b9a0ed', name: 'Lavender' },
-  { id: 'mint', color: '#9acbb3', name: 'Mint' },
-  { id: 'peach', color: '#dfaf8e', name: 'Peach' },
-  { id: 'blue', color: '#94b7df', name: 'Blue' },
-  { id: 'rose', color: '#d89aae', name: 'Rose' },
-  { id: 'amber', color: '#d8be7c', name: 'Amber' },
-]
+export const avatarColors = avatarStyles
 
 export interface BotDraft {
   name: string
@@ -128,12 +123,12 @@ export function BotFields({ value, onChange, capabilities, running = false }: {
 }) {
   const update = <K extends keyof BotDraft>(key: K, next: BotDraft[K]) => onChange({ ...value, [key]: next })
   return <>
-    <div className="cb-settings-avatar-palette" role="group" aria-label="Avatar color">
+    <div className="cb-settings-avatar-palette" role="group" aria-label="Avatar style">
       {avatarColors.map((avatar) => <button key={avatar.id} type="button" title={avatar.name}
         aria-label={avatar.name} aria-pressed={value.avatar === avatar.id}
         className={`cb-settings-avatar-option ${value.avatar === avatar.id ? 'is-selected' : ''}`}
-        onClick={() => update('avatar', avatar.id)} style={{ background: avatar.color }}>
-        <span className="cb-settings-avatar-eyes"><i /><i /></span>
+        onClick={() => update('avatar', avatar.id)}>
+        <Avatar avatar={avatar.id} identity={`avatar-style-${avatar.id}`} size={40} />
       </button>)}
     </div>
     <label className="cb-settings-field">Name

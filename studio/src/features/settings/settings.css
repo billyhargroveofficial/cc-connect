@@ -87,12 +87,11 @@
 .cb-settings-field input:disabled, .cb-settings-field select:disabled { opacity: .5; }
 .cb-settings-field small, .cb-settings-hint { display: block; margin: 0; font-size: 12px; font-weight: 400; line-height: 1.65; color: var(--settings-muted); }
 .cb-settings-hint { margin: 8px 0 14px; }
-.cb-settings-avatar-palette { display: flex; gap: 12px; margin: 0 0 26px; padding: 4px; }
-.cb-settings-avatar-option { position: relative; width: 44px; height: 44px; border: 0; border-radius: 14px; flex-shrink: 0; cursor: pointer; outline: 2px solid transparent; outline-offset: 4px; transition: transform .12s, outline-color .12s; }
-.cb-settings-avatar-option:hover { transform: translateY(-2px); }
-.cb-settings-avatar-option.is-selected { outline-color: var(--settings-accent); }
-.cb-settings-avatar-eyes { display: flex; justify-content: center; align-items: center; gap: 7px; position: absolute; inset: 0; }
-.cb-settings-avatar-eyes i { width: 4px; height: 8px; background: #28212a; border-radius: 999px; }
+.cb-settings-avatar-palette { display: flex; gap: 11px; margin: 0 0 26px; padding: 5px; }
+.cb-settings-avatar-option { position: relative; display: grid; place-items: center; width: 46px; height: 46px; padding: 0; border: 0; border-radius: 14px; flex-shrink: 0; background: transparent; cursor: pointer; outline: 2px solid transparent; outline-offset: 3px; transition: transform .14s cubic-bezier(.2,.8,.2,1), outline-color .14s, background .14s; }
+.cb-settings-avatar-option:hover { transform: translateY(-2px); background: color-mix(in srgb, var(--settings-raised) 72%, transparent); }
+.cb-settings-avatar-option.is-selected { outline-color: var(--settings-accent); background: color-mix(in srgb, var(--settings-accent) 8%, transparent); }
+.cb-settings-avatar-option .bot-avatar { --avatar-status-surface: var(--settings-surface); pointer-events: none; }
 .cb-settings-toggle-row { display: flex; align-items: center; justify-content: space-between; gap: 22px; min-height: 44px; cursor: pointer; }
 .cb-settings-toggle-row strong { display: block; font-size: 13px; font-weight: 550; }
 .cb-settings-toggle-row small { display: block; margin-top: 5px; font-size: 12px; font-weight: 400; line-height: 1.65; color: var(--settings-muted); }
@@ -184,7 +183,7 @@
   .cb-settings-footer { gap: 14px; padding: 16px 20px max(16px, env(safe-area-inset-bottom)); }
   .cb-settings-field input, .cb-settings-field textarea, .cb-settings-field select, .cb-settings-source, .cb-settings-search input { font-size: 16px; }
   .cb-settings-source { font-size: 16px; line-height: 1.65; }
-  .cb-settings-avatar-palette { gap: 10px; flex-wrap: wrap; }
+  .cb-settings-avatar-palette { gap: 8px; flex-wrap: wrap; }
   .cb-settings-runtime-fields { grid-template-columns: 1fr; gap: 0; }
   .cb-settings-footer > .cb-settings-hint { font-size: 11px; }
   .cb-settings-skill-toolbar { gap: 8px; }

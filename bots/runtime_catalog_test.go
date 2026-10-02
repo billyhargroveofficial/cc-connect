@@ -7,9 +7,155 @@ import (
 	"path/filepath"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/chenhg5/cc-connect/core"
 )
+
+func TestRuntimeCapabilitiesDoesNotWaitForActiveBotLifecycle(t *testing.T) {
+	for _, selected := range []bool{false, true} {
+		name := "workspace"
+		if selected {
+			name = "selected_bot"
+		}
+		t.Run(name, func(t *testing.T) {
+			store, runtime, factory, bot := setupRuntime(t)
+			completeRuntimePrompt(t, runtime, factory, bot.ID, "start the conversation", "ready")
+			turnID, err := runtime.SendMessage(context.Background(), bot.ID, MessageRequest{Text: "keep working"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			sent := nextRuntimeSend(t, factory)
+			state, err := runtime.state(bot.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			sent.session.mu.Lock()
+			beforeRPCs := len(sent.session.rpcCalls)
+			sent.session.goal = map[string]any{"objective": "Keep the active goal", "status": "active"}
+			sent.session.mu.Unlock()
+			before, err := store.GetBot(bot.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			state.lifecycle.Lock()
+			type response struct {
+				capabilities Capabilities
+				err          error
+			}
+			result := make(chan response, 1)
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			go func() {
+				var caps Capabilities
+				var err error
+				if selected {
+					caps, err = runtime.CapabilitiesForBot(ctx, bot.ID)
+				} else {
+					caps, err = runtime.Capabilities(ctx)
+				}
+				result <- response{caps, err}
+			}()
+			var received response
+			select {
+			case received = <-result:
+			case <-ctx.Done():
+				t.Error("model discovery waited for the active bot's lifecycle lock")
+				state.lifecycle.Unlock()
+				received = <-result
+				state.lifecycle.Lock()
+			}
+			state.lifecycle.Unlock()
+			if received.err != nil || !received.capabilities.Backends["codex"].Available || !received.capabilities.Backends["codex"].Goals {
+				t.Errorf("active bot catalog unavailable: %+v, %v", received.capabilities, received.err)
+			}
+			state.mu.Lock()
+			unchanged := state.session == sent.session && state.current != nil && state.current.id == turnID
+			state.mu.Unlock()
+			if !unchanged || !sent.session.Alive() {
+				t.Fatal("catalog discovery detached or replaced the active bot session")
+			}
+			sent.session.mu.Lock()
+			if len(sent.session.rpcCalls) != beforeRPCs || sent.session.goal["status"] != "active" {
+				t.Error("catalog discovery issued control RPCs on the active bot thread")
+			}
+			sent.session.mu.Unlock()
+			after, err := store.GetBot(bot.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if after.Threads["codex"] != before.Threads["codex"] {
+				t.Error("catalog discovery changed the bot's durable thread")
+			}
+			sent.session.complete("finished normally")
+			if result := waitRuntimeTurn(t, runtime, bot.ID, turnID); result.Status != "completed" {
+				t.Fatalf("catalog interrupted the active turn: %+v", result)
+			}
+		})
+	}
+}
+
+func TestRuntimeCapabilitiesSelectedCodexKeepsGoalsWhileUnrelatedPiIsWorking(t *testing.T) {
+	store, runtime, factory, codex := setupRuntime(t)
+	pi, err := store.CreateBot(Bot{Name: "Pi specialist", Role: "Keep working", Backend: "pi", Model: "deepseek/deepseek-flash", Effort: "high"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	turnID, err := runtime.SendMessage(context.Background(), pi.ID, MessageRequest{Text: "keep working"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sent := nextRuntimeSend(t, factory)
+	state, err := runtime.state(pi.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state.lifecycle.Lock()
+	type response struct {
+		capabilities Capabilities
+		err          error
+	}
+	result := make(chan response, 1)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	go func() {
+		caps, err := runtime.CapabilitiesForBot(ctx, codex.ID)
+		result <- response{caps, err}
+	}()
+	var received response
+	select {
+	case received = <-result:
+		state.lifecycle.Unlock()
+	case <-ctx.Done():
+		state.lifecycle.Unlock()
+		received = <-result
+		t.Error("selected Codex discovery waited for an unrelated Pi bot")
+	}
+	if received.err != nil || !received.capabilities.Backends["codex"].Available || !received.capabilities.Backends["codex"].Goals || !received.capabilities.Backends["pi"].Available {
+		t.Errorf("unrelated Pi work hid Codex goals or models: %+v, %v", received.capabilities, received.err)
+	}
+	factory.mu.Lock()
+	var discovery *runtimeFakeAgent
+	for _, agent := range factory.created {
+		if agent.backend == "pi" && agent.opts["work_dir"] == filepath.Join(store.Root(), "catalog", "pi") {
+			discovery = agent
+		}
+	}
+	factory.mu.Unlock()
+	if discovery == nil || discovery.opts["model"] != pi.Model || discovery.opts["thinking"] != pi.Effort || discovery.resume != "" {
+		t.Error("isolated Pi discovery lost the selected model or resumed its conversation")
+	}
+	runtime.mu.Lock()
+	createdBotSession := runtime.states[codex.ID] != nil
+	runtime.mu.Unlock()
+	if createdBotSession {
+		t.Error("model discovery installed a persistent session for the idle Codex bot")
+	}
+	sent.session.complete("finished normally")
+	if result := waitRuntimeTurn(t, runtime, pi.ID, turnID); result.Status != "completed" {
+		t.Fatalf("catalog interrupted unrelated Pi work: %+v", result)
+	}
+}
 
 func TestRuntimeTemporaryCodexCatalogRequiresExplicitProductConnection(t *testing.T) {
 	for _, endpoint := range []string{"", "managed://", "unix://", "unix:///dedicated-catalog/app-server.sock", "ws://127.0.0.1:9831"} {

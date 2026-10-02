@@ -53,13 +53,7 @@ func (r *Runtime) capabilities(ctx context.Context, botID string) (Capabilities,
 			queryCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 			defer cancel()
 			item := discovery{backend: backend}
-			var lease catalogLease
-			var err error
-			if selected != nil && selected.Backend == backend {
-				lease, err = r.botCatalogSession(queryCtx, *selected)
-			} else {
-				lease, err = r.catalogSession(queryCtx, backend)
-			}
+			lease, err := r.catalogSession(queryCtx, backend, selected)
 			if err == nil {
 				if backend == "codex" {
 					item.models, err = codexCatalog(queryCtx, lease.rpc)
@@ -208,7 +202,10 @@ type catalogLease struct {
 	release func()
 }
 
-func (r *Runtime) catalogSession(ctx context.Context, backend string) (catalogLease, error) {
+func (r *Runtime) catalogSession(ctx context.Context, backend string, selected *Bot) (catalogLease, error) {
+	if selected != nil && selected.Backend == backend {
+		return r.temporaryCatalogSessionForBot(ctx, backend, selected)
+	}
 	var chosen *Bot
 	for _, bot := range r.store.ListBots() {
 		if bot.Backend != backend || bot.Status == "archived" {
@@ -222,10 +219,7 @@ func (r *Runtime) catalogSession(ctx context.Context, backend string) (catalogLe
 			break
 		}
 	}
-	if chosen != nil {
-		return r.botCatalogSession(ctx, *chosen)
-	}
-	return r.temporaryCatalogSession(ctx, backend)
+	return r.temporaryCatalogSessionForBot(ctx, backend, chosen)
 }
 
 func (r *Runtime) botCatalogSession(ctx context.Context, bot Bot) (catalogLease, error) {
@@ -286,6 +280,17 @@ func (r *Runtime) botCatalogSession(ctx context.Context, bot Bot) (catalogLease,
 }
 
 func (r *Runtime) temporaryCatalogSession(ctx context.Context, backend string) (catalogLease, error) {
+	return r.temporaryCatalogSessionForBot(ctx, backend, nil)
+}
+
+// Model discovery is independent of bot lifecycle and never resumes an owned
+// conversation. An active turn, compaction or adapter handoff must not hold up
+// the picker or cause a timed-out catalog RPC to close the bot's connection.
+// Pi's model-specific thinking levels still use the selected bot's model.
+func (r *Runtime) temporaryCatalogSessionForBot(ctx context.Context, backend string, bot *Bot) (catalogLease, error) {
+	if err := ctx.Err(); err != nil {
+		return catalogLease{}, err
+	}
 	workDir := filepath.Join(r.store.Root(), "catalog", backend)
 	if err := os.MkdirAll(workDir, 0700); err != nil {
 		return catalogLease{}, err
@@ -299,6 +304,9 @@ func (r *Runtime) temporaryCatalogSession(ctx context.Context, backend string) (
 		}
 	} else {
 		opts["rpc"] = true
+		if bot != nil {
+			opts["model"], opts["thinking"] = bot.Model, bot.Effort
+		}
 		args, err := runtimeArgs(opts["cli_args"])
 		if err != nil {
 			return catalogLease{}, err

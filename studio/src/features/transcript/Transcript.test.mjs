@@ -5,10 +5,10 @@ import { runInNewContext } from 'node:vm';
 import ts from 'typescript';
 import * as reducer from './reducer.ts';
 import { motionTestModule } from '../../lib/motion-stub.mjs';
-import { accountURL, setApiAccount } from '../../lib/api.ts';
+import { accountURL, setApiAccount, setApiNode } from '../../lib/api.ts';
 
 const source = ts.transpileModule(
-  `${readFileSync(new URL('./Transcript.tsx', import.meta.url), 'utf8')}\nexport { ActivityItem, TurnActivity, TurnStats, ResponseDetails, Turn, Attachments, Message, RawDetails, JournalItem, RawJournal, RequestCard, Goal };`,
+  `${readFileSync(new URL('./Transcript.tsx', import.meta.url), 'utf8')}\nexport { ActivityItem, TurnActivity, TurnHistory, TurnStats, ResponseDetails, Turn, Attachments, Message, ProgressMessage, RawDetails, JournalItem, RawJournal, RequestCard, Goal };`,
   { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX } },
 ).outputText;
 
@@ -25,6 +25,7 @@ function disclosure(component, initialProps, motionOverrides = {}) {
   const element = (type, props) => ({ type, props });
   const modules = {
     react: {
+      memo: component => component,
       useState: state,
       useId: () => state(`disclosure-${cursor}`)[0],
       useMemo: callback => callback(),
@@ -44,7 +45,7 @@ function disclosure(component, initialProps, motionOverrides = {}) {
     '../../components/Avatar': {}, '../../lib/events': { botMessagePresentation: () => null },
     '../../lib/api': { accountURL },
     '../../lib/motion': { ...motionTestModule(), ...motionOverrides },
-    './reducer': reducer, './transcript.css': {},
+    './reducer': reducer, './transcript.css': {}, 'katex/dist/katex.min.css': {},
   };
   const exports = {};
   runInNewContext(source, {
@@ -169,28 +170,36 @@ test('image and file attachments share compact card sections and retain accessib
   }
 });
 
-test('native attachment media, downloads, and markdown artifact links retain their account binding', () => {
+test('native attachment media, downloads, and markdown artifact links retain their account and node binding', () => {
   setApiAccount('account-a');
   try {
-    const view = disclosure('Attachments', {
-      botId: 'bot-a',
-      attachments: [
-        { id: 'image', name: 'image.png', mimeType: 'image/png' },
-        { id: 'audio', name: 'audio.wav', mimeType: 'audio/wav' },
-        { id: 'video', name: 'video.mp4', mimeType: 'video/mp4' },
-      ],
-    });
-    for (const node of view.findAll(node => node.type === 'a' || ['img', 'audio', 'video'].includes(node.type))) {
-      const url = node.props.href || node.props.src;
-      if (url) assert.match(url, /\?expectedAccount=account-a$/);
+    for (const nodeId of ['local', 'mac-a']) {
+      setApiNode(nodeId);
+      const view = disclosure('Attachments', {
+        botId: 'bot-a',
+        attachments: [
+          { id: 'image', name: 'image.png', mimeType: 'image/png' },
+          { id: 'audio', name: 'audio.wav', mimeType: 'audio/wav' },
+          { id: 'video', name: 'video.mp4', mimeType: 'video/mp4' },
+        ],
+      });
+      for (const node of view.findAll(node => node.type === 'a' || ['img', 'audio', 'video'].includes(node.type))) {
+        const url = node.props.href || node.props.src;
+        if (url) {
+          const parsed = new URL(url, 'http://connect-bots.local');
+          assert.equal(parsed.searchParams.get('expectedAccount'), 'account-a');
+          assert.equal(parsed.searchParams.get('node'), nodeId);
+        }
+      }
+      const markdown = disclosure('Markdown', { content: '' }).find(node => node.props?.components)?.props.components;
+      const local = '/api/studio/bots/bot-a/files/image';
+      const bound = `${local}?expectedAccount=account-a&node=${nodeId}`;
+      assert.equal(markdown.a({ href: local, children: 'Open' }).props.href, bound);
+      const image = markdown.img({ src: local, alt: 'Figure' });
+      assert.equal(image.props.href, bound);
+      assert.equal(image.props.children.props.src, bound);
+      assert.equal(markdown.a({ href: 'https://example.com', children: 'Reference' }).props.href, 'https://example.com');
     }
-    const markdown = disclosure('Markdown', { content: '' }).find(node => node.props?.components)?.props.components;
-    const local = '/api/studio/bots/bot-a/files/image';
-    assert.equal(markdown.a({ href: local, children: 'Open' }).props.href, `${local}?expectedAccount=account-a`);
-    const image = markdown.img({ src: local, alt: 'Figure' });
-    assert.equal(image.props.href, `${local}?expectedAccount=account-a`);
-    assert.equal(image.props.children.props.src, `${local}?expectedAccount=account-a`);
-    assert.equal(markdown.a({ href: 'https://example.com', children: 'Reference' }).props.href, 'https://example.com');
   } finally { setApiAccount(null); }
 });
 
@@ -252,6 +261,18 @@ test('completed tool history retains the Activity disclosure, resolved requests,
   assert.ok(stats.find(node => node.type === 'span' && node.props.children?.[0] === '1,234'));
   assert.ok(stats.find(node => node.type === 'span' && node.props.children?.[0] === '2.5 s'));
   assert.equal(view.find(node => node.type?.name === 'RawJournal').props.events, events);
+});
+
+test('resolved approvals remain between the tools they originally separated in an expanded batch', () => {
+  const turn = {
+    id: 'turn-1', status: 'completed', users: [], responses: [], events: [], notices: [],
+    activities: [{ ...activity, id: 'first', seq: 1 }, { ...activity, id: 'last', seq: 3 }],
+    requests: [{ id: 'approval', seq: 2, title: 'Allow command', method: 'permission', questions: [], resolved: true }],
+  };
+  const view = disclosure('TurnActivity', { turn, batch: true, onPermission() {} });
+  view.toggle();
+  assert.deepEqual(view.findAll(node => ['ActivityItem', 'RequestCard'].includes(node.type?.name))
+    .map(node => node.props.activity?.id || node.props.request?.id), ['first', 'approval', 'last']);
 });
 
 test('running activity retains its live status while response metadata stays deferred', () => {
@@ -362,7 +383,7 @@ test('assistant response actions retain Copy and place optional details beside i
   assert.equal(attachmentOnly.find(node => node.type?.name === 'CopyButton'), undefined);
 });
 
-test('only the last response of a completed metadata-only turn receives compact details', () => {
+test('only the last response receives compact details even when its turn contains tool history', () => {
   const messages = [
     { id: 'response-1', role: 'assistant', content: 'First', attachments: [], time: '2026-10-02T12:00:00Z' },
     { id: 'response-2', role: 'assistant', content: 'Final', attachments: [], time: '2026-10-02T12:00:01Z' },
@@ -377,22 +398,269 @@ test('only the last response of a completed metadata-only turn receives compact 
   assert.equal(responses()[0].props.details, undefined);
   assert.equal(responses()[1].props.details?.type.name, 'ResponseDetails');
   assert.equal(responses()[1].props.details.props.turn, turn);
-  const activityView = disclosure('TurnActivity', view.find(node => node.type?.name === 'TurnActivity').props);
-  assert.equal(activityView.find(node => node.props?.className?.startsWith('transcript-turn-activity')), undefined,
+  assert.equal(view.find(node => node.type?.name === 'TurnActivity'), undefined,
     'a completed response without actions does not retain a standalone details row');
 
   for (const changes of [
     { activities: [{ ...activity, status: 'completed' }] },
     { requests: [{ id: 'request-1', title: 'Allow command', method: 'permission', questions: [], resolved: true }] },
-    { status: 'running' },
     { status: 'failed' },
     { status: 'stopped' },
   ]) {
     const nextTurn = { ...turn, ...changes };
     view.update({ turn: nextTurn });
-    assert.ok(responses().every(message => !message.props.details), 'running work and real history keep their Activity disclosure');
-    assert.equal(view.find(node => node.type?.name === 'TurnActivity').props.turn, nextTurn);
+    assert.equal(responses()[0].props.details, undefined);
+    assert.equal(responses()[1].props.details.props.turn, nextTurn, 'the final response owns the full journal and stats');
+    if (changes.activities || changes.requests) {
+      const history = view.find(node => node.type?.name === 'TurnHistory');
+      assert.ok(history, 'real actions fold into one compact history before the final answer');
+      const archived = disclosure('TurnHistory', history.props);
+      archived.toggle();
+      assert.equal(archived.find(node => node.type?.name === 'TurnActivity').props.batch, true);
+    }
   }
+  view.update({ turn: { ...turn, status: 'running' } });
+  assert.ok(responses().every(message => !message.props.details), 'live responses do not repeat completion metadata');
+});
+
+test('completed progress and tool batches fold into one lazy disclosure before the final answer and reopen in start order', () => {
+  const turn = {
+    id: 'turn-1', status: 'running', backend: 'codex', model: 'gpt-test', effort: 'max', serviceTier: '',
+    time: '2026-10-02T12:00:00Z', users: [], requests: [], notices: [], events: [{ seq: 1, time: '2026-10-02T12:01:05Z' }],
+    activities: [
+      { ...activity, id: 'a', seq: 1, status: 'completed', output: 'first payload' },
+      { ...activity, id: 'p', seq: 2, kind: 'commentary', title: 'Progress message', text: 'I found the cause.', status: 'completed' },
+      { ...activity, id: 'b', seq: 3, status: 'completed', output: 'second payload' },
+    ],
+    responses: [],
+  };
+  const view = disclosure('Turn', { bot: { id: 'bot-1' }, turn, onPermission() {} });
+  const content = () => view.findAll(node => ['TurnHistory', 'TurnActivity', 'ProgressMessage', 'Message'].includes(node.type?.name));
+  assert.deepEqual(content().map(node => node.type.name), ['TurnActivity', 'ProgressMessage', 'TurnActivity']);
+  assert.equal(content()[1].props.activity.text, 'I found the cause.');
+  assert.equal(content()[1].props.active, true);
+  const withAnswer = { ...turn, responses: [{ id: 'answer', role: 'assistant', seq: 4, content: 'Fixed.', attachments: [], time: '' }] };
+  view.update({ turn: withAnswer });
+  assert.deepEqual(content().map(node => node.type.name), ['TurnActivity', 'ProgressMessage', 'TurnActivity', 'Message'],
+    'a live Pi text segment may precede more tools, so it cannot prematurely hide progress');
+  const finished = { ...withAnswer, status: 'completed' };
+  view.update({ turn: finished });
+  assert.deepEqual(content().map(node => node.type.name), ['TurnHistory', 'Message']);
+  assert.equal(content()[1].props.details.props.turn, finished);
+  const history = disclosure('TurnHistory', content()[0].props);
+  const toggle = () => history.find(node => node.type === 'button' && node.props['aria-controls']);
+  assert.equal(toggle().props['aria-expanded'], false);
+  assert.equal(toggle().props['aria-label'], 'Worked for 1m 5s: 2 actions · 1 update');
+  assert.equal(toggle().props['aria-controls'], history.panel().props.id);
+  assert.equal(history.panel().props.inert, true);
+  assert.equal(history.find(node => node.props?.className === 'transcript-history-content'), undefined, 'archived Markdown and tool payloads stay unmounted');
+  history.toggle();
+  assert.equal(history.panel().props['aria-hidden'], false);
+  assert.equal(history.panel().props.inert, false);
+  assert.equal(history.find(node => node.props?.className === 'transcript-history-content').props['aria-label'], 'Previous activity');
+  const archived = history.findAll(node => ['TurnActivity', 'ProgressMessage'].includes(node.type?.name));
+  assert.deepEqual(archived.map(node => node.type.name), ['TurnActivity', 'ProgressMessage', 'TurnActivity']);
+  assert.equal(archived[1].props.activity, turn.activities[1]);
+  assert.equal(archived[1].props.active, false);
+  for (const [index, id] of [[0, 'a'], [2, 'b']]) {
+    const group = disclosure('TurnActivity', archived[index].props);
+    assert.equal(group.find(node => node.type === 'button' && node.props['aria-controls']).props['aria-expanded'], false);
+    assert.equal(group.panel().props.inert, true);
+    assert.equal(group.find(node => node.type?.name === 'ActivityItem'), undefined, 'collapsed tool data stays lazy');
+    group.toggle();
+    assert.equal(group.find(node => node.type?.name === 'ActivityItem').props.activity.id, id);
+    assert.equal(group.find(node => node.type?.name === 'TurnStats'), undefined, 'stats are kept beside the final response');
+    assert.equal(group.find(node => node.type?.name === 'RawJournal'), undefined, 'the full journal is kept beside the final response');
+  }
+  history.toggle();
+  assert.equal(history.panel().props['aria-hidden'], true);
+  assert.equal(history.panel().props.inert, true, 'closing history immediately leaves the keyboard order');
+  assert.ok(history.find(node => node.type?.name === 'ProgressMessage'), 'retain the content only for the exit animation');
+  history.finishExit();
+  assert.equal(history.find(node => node.type?.name === 'ProgressMessage'), undefined);
+  history.toggle();
+  assert.equal(history.find(node => node.type?.name === 'ProgressMessage').props.activity.text, 'I found the cause.');
+});
+
+test('service narration and action batches leave the keyboard order as their automatic folding exit starts', () => {
+  const turn = { id: 'turn-1', status: 'running', users: [], responses: [], requests: [], activities: [activity], events: [], notices: [] };
+  const motion = { useIsPresent: () => false };
+  for (const [component, props, className] of [
+    ['ProgressMessage', { activity: { ...activity, kind: 'commentary', text: '[Source](https://example.com)' }, active: false }, 'transcript-progress-message'],
+    ['TurnActivity', { turn, onPermission() {} }, 'transcript-turn-activity is-running'],
+  ]) {
+    const view = disclosure(component, props, motion);
+    const root = view.find(node => node.props?.className === className);
+    assert.equal(root.props.inert, true, `${component} cannot retain keyboard focus in its exiting subtree`);
+    assert.equal(root.props['aria-hidden'], true);
+  }
+});
+
+test('empty live turns leave the sole Working strip to the composer while terminal status stays inspectable', () => {
+  const turn = { id: 'turn-1', status: 'running', users: [], responses: [], requests: [], activities: [], events: [], notices: [] };
+  const view = disclosure('Turn', { bot: { id: 'bot-1' }, turn, onPermission() {} });
+  assert.equal(view.find(node => node.type?.name === 'TurnActivity'), undefined, 'live turns do not repeat Working above the composer');
+  for (const status of ['starting', 'queued', 'waiting_permission']) {
+    view.update({ turn: { ...turn, status } });
+    assert.equal(view.find(node => node.type?.name === 'TurnActivity'), undefined);
+  }
+  for (const status of ['failed', 'stopped', 'interrupted']) {
+    view.update({ turn: { ...turn, status } });
+    assert.equal(view.find(node => node.type?.name === 'TurnActivity').props.turn.status, status);
+  }
+});
+
+test('progress-only and notice-only completed turns keep a compact local stats and journal action', () => {
+  const turn = {
+    id: 'turn-1', status: 'completed', backend: 'codex', model: 'gpt-test', effort: 'max', serviceTier: '',
+    users: [], requests: [], responses: [], notices: [], events: [{ seq: 1 }],
+    activities: [{ ...activity, id: 'progress', seq: 1, kind: 'commentary', text: 'Work is done.', status: 'completed' }],
+  };
+  const view = disclosure('Turn', { bot: { id: 'bot-1' }, turn, onPermission() {} });
+  const progress = view.find(node => node.type?.name === 'ProgressMessage');
+  assert.equal(progress.props.details?.type.name, 'ResponseDetails');
+  assert.equal(progress.props.details.props.turn, turn);
+  assert.equal(view.find(node => node.type?.name === 'TurnActivity'), undefined, 'narration does not create an extra service row');
+  const line = disclosure('ProgressMessage', progress.props);
+  assert.ok(line.find(node => node.props?.className === 'transcript-message-actions'));
+  const details = disclosure('ResponseDetails', progress.props.details.props);
+  details.toggle();
+  assert.equal(details.find(node => node.type?.name === 'TurnStats').props.turn, turn);
+  assert.equal(details.find(node => node.type?.name === 'RawJournal').props.events, turn.events);
+
+  const noticeTurn = { ...turn, activities: [], notices: ['Session resumed.'] };
+  view.update({ turn: noticeTurn });
+  assert.equal(view.find(node => node.type?.name === 'ResponseDetails').props.turn, noticeTurn,
+    'service notices retain their own journal even without an answer or action batch');
+  assert.equal(view.find(node => node.type?.name === 'TurnActivity'), undefined);
+});
+
+test('response details prefer the last ordinary answer while artifact-only turns remain inspectable', () => {
+  const answer = { id: 'answer', role: 'assistant', seq: 2, content: 'Created.', attachments: [], time: '' };
+  const artifact = { id: 'files', role: 'assistant', seq: 3, content: 'Files', artifact: true, time: '',
+    attachments: [{ id: 'file', name: 'result.txt', mimeType: 'text/plain' }] };
+  const turn = {
+    id: 'turn-1', status: 'completed', backend: 'codex', model: 'gpt-test', effort: 'max', serviceTier: '',
+    users: [], requests: [], activities: [], responses: [answer, artifact], notices: [], events: [{ seq: 1 }],
+  };
+  const view = disclosure('Turn', { bot: { id: 'bot-1' }, turn, onPermission() {} });
+  const messages = () => view.findAll(node => node.type?.name === 'Message');
+  assert.equal(messages().find(node => node.props.message.id === 'answer').props.details?.type.name, 'ResponseDetails');
+  assert.equal(messages().find(node => node.props.message.id === 'files').props.details, undefined);
+  view.update({ turn: { ...turn, responses: [artifact] } });
+  assert.equal(messages()[0].props.details?.type.name, 'ResponseDetails');
+});
+
+test('conversation omits the global All bot events row while local turn details stay available', () => {
+  const events = [{ seq: 1, botId: 'bot-1', turnId: 'turn-1', type: 'message', time: '',
+    data: { role: 'assistant', content: 'Done.' } },
+  { seq: 2, botId: 'bot-1', turnId: 'turn-1', type: 'turn', time: '', data: { status: 'completed' } }];
+  const view = disclosure('Transcript', { bot: { id: 'bot-1', name: 'Assistant' }, events, onPermission() {} });
+  assert.equal(view.find(node => node.props?.title === 'All bot events'), undefined);
+  const turn = view.find(node => node.type?.name === 'Turn');
+  const local = disclosure('Turn', turn.props);
+  assert.equal(local.find(node => node.type?.name === 'Message').props.details?.type.name, 'ResponseDetails');
+});
+
+test('long histories mount the latest turns first and hydrate older turns in bounded batches', () => {
+  const events = [];
+  for (let index = 0; index < 50; index++) {
+    const turnId = `turn-${index}`;
+    events.push({ seq: index * 2 + 1, botId: 'bot-1', turnId, type: 'message', time: '',
+      data: { role: 'assistant', content: `Answer ${index}` } });
+    events.push({ seq: index * 2 + 2, botId: 'bot-1', turnId, type: 'turn', time: '', data: { status: 'completed' } });
+  }
+  const view = disclosure('Transcript', { bot: { id: 'bot-1', name: 'Assistant' }, events, onPermission() {} });
+  const mounted = () => view.findAll(node => node.type?.name === 'Turn').length;
+  assert.equal(mounted(), 12);
+  view.finishExit();
+  assert.equal(mounted(), 24);
+  view.finishExit(); assert.equal(mounted(), 36);
+  view.finishExit(); assert.equal(mounted(), 48);
+  view.finishExit();
+  assert.equal(mounted(), 50);
+});
+
+test('expanded action batches use an unruled list without a separator gutter', () => {
+  const css = readFileSync(new URL('./transcript.css', import.meta.url), 'utf8');
+  const rules = [...css.matchAll(/\.transcript-activity-list\{([^}]*)\}/g)].map(match => match[1]);
+  assert.ok(rules.length);
+  assert.ok(rules.every(rule => !/border(?:-left)?:/.test(rule)));
+  assert.match(rules[0], /margin:2px 0 2px 0/);
+  assert.match(rules[0], /padding:0 0 2px 0/);
+});
+
+test('only the latest inline progress uses lightweight streaming text while waiting requests remain actionable', () => {
+  const progress = seq => ({ ...activity, id: `progress-${seq}`, seq, kind: 'commentary', text: `Progress ${seq}`, status: 'completed' });
+  const request = { id: 'request', seq: 4, title: 'Approval required', method: 'permission', questions: [], resolved: false };
+  const childRequest = { ...request, id: 'child-request' };
+  const turn = {
+    id: 'turn-1', status: 'running', backend: 'codex', model: '', effort: '', serviceTier: '',
+    users: [], responses: [], requests: [], notices: [], events: [],
+    activities: [progress(1), { ...activity, id: 'tool', seq: 2 }, progress(3)],
+  };
+  const view = disclosure('Turn', { bot: { id: 'bot-1' }, turn, onPermission() {} });
+  const progressLines = () => view.findAll(node => node.type?.name === 'ProgressMessage');
+  assert.deepEqual(progressLines().map(node => node.props.active), [false, true]);
+  const line = disclosure('ProgressMessage', progressLines()[1].props);
+  assert.equal(line.find(node => node.props?.['data-progress-id'] === 'progress-3').props.className, 'transcript-progress-message is-active');
+  assert.equal(line.find(node => node.type?.name === 'StreamingText').props.content, 'Progress 3');
+
+  view.update({ turn: { ...turn, requests: [request], activities: [...turn.activities,
+    { ...activity, id: 'child', kind: 'subagent', seq: 5, thread: { ...turn, id: 'child', activities: [], requests: [childRequest] } }],
+  } });
+  assert.deepEqual(progressLines().map(node => node.props.active), [false, false], 'waiting on the owner settles streaming narration');
+  assert.deepEqual(view.findAll(node => node.type?.name === 'RequestCard').map(node => node.props.request.id), ['request', 'child-request'],
+    'both parent and nested pending requests stay outside closed batches');
+
+  view.update({ turn: { ...turn, status: 'completed' } });
+  assert.ok(progressLines().every(node => !node.props.active));
+  line.update({ active: false });
+  assert.equal(line.find(node => node.props?.['data-progress-id'] === 'progress-3').props.className, 'transcript-progress-message');
+  assert.equal(line.find(node => node.type?.name === 'Markdown').props.content, 'Progress 3');
+});
+
+test('inline progress stays plain while service controls retain reduced motion and mobile touch targets', () => {
+  const css = readFileSync(new URL('./transcript.css', import.meta.url), 'utf8');
+  assert.doesNotMatch(css, /progress-shimmer|background-clip:text|color:transparent/,
+    'the composer owns the sole Working shimmer; progress text does not animate');
+  assert.match(css, /\.transcript-progress-message\{[^{}]*color:var\(--text/);
+  const reduced = css.slice(css.indexOf('@media(prefers-reduced-motion:reduce)'));
+  assert.match(reduced, /\.transcript-spin\{animation:none\}/);
+  assert.match(reduced, /\.transcript-history-toggle[^{}]*\{transition:none\}/);
+  const mobile = css.slice(css.indexOf('@media(max-width:700px)'));
+  assert.match(mobile, /\.transcript-turn-activity\.is-batch \.transcript-activity-toggle\{min-height:44px\}/);
+});
+
+test('plain progress text stays readable in both themes', () => {
+  const themes = readFileSync(new URL('../../styles.css', import.meta.url), 'utf8');
+  const [darkTheme, lightTheme] = themes.split(':root[data-theme="light"]');
+  const variable = (theme, name) => theme.match(new RegExp(`${name}:\\s*(#[\\da-f]{3,6})\\b`, 'i'))[1];
+  const luminance = color => {
+    const hex = color.slice(1);
+    const channels = (hex.length === 3 ? [...hex].map(value => value.repeat(2)).join('') : hex).match(/../g)
+      .map(value => parseInt(value, 16) / 255)
+      .map(value => value <= .04045 ? value / 12.92 : ((value + .055) / 1.055) ** 2.4);
+    return channels[0] * .2126 + channels[1] * .7152 + channels[2] * .0722;
+  };
+  const contrast = (foreground, background) => {
+    const values = [luminance(foreground), luminance(background)].sort((a, b) => b - a);
+    return (values[0] + .05) / (values[1] + .05);
+  };
+  assert.ok(contrast(variable(darkTheme, '--text'), variable(darkTheme, '--bg')) >= 4.5, 'dark progress retains text contrast');
+  assert.ok(contrast(variable(lightTheme, '--text'), variable(lightTheme, '--bg')) >= 4.5, 'light progress retains text contrast');
+});
+
+test('transcript surfaces omit visible border rules while preserving focus outlines and semantic separators', () => {
+  const css = readFileSync(new URL('./transcript.css', import.meta.url), 'utf8');
+  assert.doesNotMatch(css, /(?:^|[;{])border(?:-(?:top|right|bottom|left))?:\s*(?!0(?:px)?(?:\b|;))[^;}]+/,
+    'cards, payloads, requests, tables and journals use surfaces instead of visible borders');
+  for (const selector of ['transcript-history-toggle', 'transcript-question-option', 'transcript-free-answer input', 'transcript-button', 'transcript-journal-toolbar input']) {
+    assert.match(css, new RegExp(`\\.${selector.replaceAll('.', '\\.')}:focus-(?:visible|within)[^{}]*\\{outline:2px`),
+      `${selector} keeps a visible keyboard focus indicator`);
+  }
+  assert.match(css, /\.transcript-markdown hr\{border:0;height:0;margin:/, 'Markdown separators retain their semantic DOM and spacing');
+  assert.match(css, /\.transcript-markdown tbody tr:nth-child\(2n\)\{background:/, 'borderless tables retain alternating row surfaces');
 });
 
 test('disclosure motion measures open content and collapses immediately for reduced motion', () => {

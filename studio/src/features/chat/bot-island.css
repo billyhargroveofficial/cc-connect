@@ -23,10 +23,10 @@
   overflow-y: auto;
   overflow-x: hidden;
   overscroll-behavior: contain;
-  border: 1px solid var(--border);
+  border: 0;
   border-radius: 21px;
   background: var(--surface-raised);
-  box-shadow: 0 3px 20px #00000012;
+  box-shadow: var(--shadow-soft);
   transition: box-shadow 220ms ease;
 }
 
@@ -39,7 +39,7 @@
   height: 100%;
   padding: 0;
   overflow: hidden;
-  box-shadow: 0 12px 44px #00000024;
+  box-shadow: var(--shadow-popover);
 }
 
 .bot-island-overview {
@@ -258,7 +258,7 @@
     display: block;
     position: absolute;
     inset: 0;
-    background: #00000030;
+    background: var(--scrim);
     touch-action: none;
   }
 
@@ -267,7 +267,7 @@
     width: 100%;
     max-width: 320px;
     max-height: 100%;
-    box-shadow: 0 6px 28px #00000020;
+    box-shadow: var(--shadow-popover);
   }
 
   .bot-island-shell.is-open.is-settings .bot-island-card {

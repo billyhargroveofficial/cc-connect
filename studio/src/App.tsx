@@ -1,12 +1,15 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, lazy, Suspense } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState, lazy, Suspense } from "react";
 import { Plus, X, LoaderCircle } from "lucide-react";
 import { useWorkspace } from "./hooks/useWorkspace";
-import type { Bot } from "./lib/types";
-import { errorMessage } from "./lib/api";
+import type { Bot, Capabilities } from "./lib/types";
+import { api, errorMessage, nodeBinaryURL } from "./lib/api";
+import { catalogBotKey } from "./lib/hostCatalog";
 import Login from "./components/Login";
 import Avatar from "./components/Avatar";
 import BotRoster from "./components/BotRoster";
 import { useTheme } from "./hooks/useTheme";
+import { useBotEvents, useRosterEvents } from "./hooks/useEventJournal";
+import type { EventJournal } from "./lib/eventJournal";
 import {
   AnimatePresence,
   controlMotion,
@@ -19,14 +22,18 @@ import {
 const ChatRoom = lazy(() => import("./features/chat/ChatRoom"));
 const SettingsDrawer = lazy(() =>
   import("./features/settings/SettingsDrawer").then((module) => ({
-    default: module.SettingsDrawer,
+    default: memo(module.SettingsDrawer),
   })),
 );
 const NewBotDialog = lazy(() =>
   import("./features/settings/NewBotDialog").then((module) => ({
-    default: module.NewBotDialog,
+    default: memo(module.NewBotDialog),
   })),
 );
+// Creation catalogs must stay stable while the active workspace streams tokens.
+const loadNodeCapabilities = (nodeId: string, signal: AbortSignal): Promise<Capabilities> =>
+  api.capabilities(undefined, signal, nodeId);
+const createNodeBot = (fields: Partial<Bot>, nodeId: string) => api.createBot(fields, nodeId);
 function currentBot() {
   const match = location.hash.match(/^#\/bots\/([^/]+)$/);
   try {
@@ -91,11 +98,54 @@ function WorkspaceToast({
   );
 }
 
+const RosterRegion = memo(function RosterRegion({
+  journal,
+  ...props
+}: {
+  journal: EventJournal;
+} & Omit<React.ComponentProps<typeof BotRoster>, "events">) {
+  const events = useRosterEvents(journal);
+  return <BotRoster {...props} events={events} />;
+});
+
+const ConversationPane = memo(function ConversationPane({
+  journal,
+  loadHistory,
+  onError,
+  ...props
+}: {
+  journal: EventJournal;
+  loadHistory: (id: string, force?: boolean) => Promise<void>;
+  onError: (message: string) => void;
+} & Omit<React.ComponentProps<typeof ChatRoom>, "events" | "messages" | "loading" | "onHistory" | "onError">) {
+  const events = useBotEvents(journal, props.bot.id);
+  const messages = journal.messagesFor(props.bot.id);
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    let alive = true;
+    setLoading(true);
+    loadHistory(props.bot.id).catch(error => {
+      if (alive) onError(errorMessage(error));
+    }).finally(() => {
+      if (alive) setLoading(false);
+    });
+    return () => { alive = false; };
+  }, [props.bot.id, props.node?.id, props.draftScope, journal, loadHistory, onError]);
+  const reload = useCallback(() => {
+    void loadHistory(props.bot.id, true).catch(error => onError(errorMessage(error)));
+  }, [props.bot.id, props.node?.id, props.draftScope, loadHistory, onError]);
+  return (
+    <FadingSurface className="workspace-conversation">
+      <ChatRoom {...props} events={events} messages={messages} loading={loading} onError={onError} onHistory={reload} />
+    </FadingSurface>
+  );
+});
+
 export default function App() {
   const workspace = useWorkspace();
   const { preference: theme, setPreference: setTheme } = useTheme();
   const previousAccount = useRef<string | null>(null);
-  const [route, setRoute] = useState<{ key: string; botId: string } | null>(null);
+  const [route, setRoute] = useState<{ key: string; nodeId: string; botId: string } | null>(null);
   const accountKey = workspace.user ? `${workspace.user.id}:${workspace.accountVersion}` : "";
   useLayoutEffect(() => {
     const clearHash = () => {
@@ -110,19 +160,26 @@ export default function App() {
     try { storedAccount = sessionStorage.getItem("connect-bots:route-account"); } catch { /* Storage may be disabled. */ }
     const reuseRoute = !previousAccount.current && (!storedAccount || storedAccount === workspace.user.id);
     const botId = reuseRoute ? currentBot() : "";
-    if (!reuseRoute) clearHash();
     previousAccount.current = workspace.user.id;
     try { sessionStorage.setItem("connect-bots:route-account", workspace.user.id); } catch { /* The route still resets within this page. */ }
-    setRoute({ key: accountKey, botId });
-  }, [workspace.phase, workspace.user?.id, accountKey]);
+    setRoute((current) => {
+      if (current?.key === accountKey && current.nodeId === workspace.activeNodeId) return current;
+      // Keep the route already chosen by a roster click when the host changes.
+      // Effect replays for this same workspace must not clear its active chat.
+      if (current?.key === accountKey || !reuseRoute) clearHash();
+      return { key: accountKey, nodeId: workspace.activeNodeId, botId: current?.key === accountKey ? "" : botId };
+    });
+  }, [workspace.phase, workspace.user?.id, workspace.activeNodeId, accountKey]);
+  const routeChanged = useCallback((nodeId: string, botId: string) => setRoute({ key: accountKey, nodeId, botId }), [accountKey]);
   const ready = workspace.phase === "ready" && route?.key === accountKey;
   return (
-    <AnimatePresence mode="wait" initial={false}>
+    <AnimatePresence presenceAffectsLayout={false} mode="wait" initial={false}>
       {ready ? (
         <AccountWorkspace
-          key={accountKey}
+          key={`${accountKey}:${workspace.activeNodeId}:${workspace.workspaceVersion}`}
           workspace={workspace}
-          initialBot={route.botId}
+          initialBot={route.nodeId === workspace.activeNodeId ? route.botId : ""}
+          onRouteChange={routeChanged}
           theme={theme}
           setTheme={setTheme}
         />
@@ -146,11 +203,13 @@ export default function App() {
 function AccountWorkspace({
   workspace,
   initialBot,
+  onRouteChange,
   theme,
   setTheme,
 }: {
   workspace: ReturnType<typeof useWorkspace>;
   initialBot: string;
+  onRouteChange: (nodeId: string, botId: string) => void;
   theme: ReturnType<typeof useTheme>["preference"];
   setTheme: ReturnType<typeof useTheme>["setPreference"];
 }) {
@@ -162,9 +221,8 @@ function AccountWorkspace({
   }, []);
   const [selectedId, setSelectedId] = useState(initialBot);
   const [mobileChat, setMobileChat] = useState(!!initialBot);
-  const [globalSettings, setGlobalSettings] = useState(false);
+  const [globalSettings, setGlobalSettings] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
-  const [historyLoading, setHistoryLoading] = useState(false);
   const [mobileViewport, setMobileViewport] = useState(
     () => window.matchMedia("(max-width: 700px)").matches,
   );
@@ -200,66 +258,96 @@ function AccountWorkspace({
     }
   }, [workspace.bots, workspace.loaded, selectedId]);
   useEffect(() => {
-    if (!bot) return;
-    let alive = true;
-    setHistoryLoading(true);
-    workspace
-      .loadHistory(bot.id)
-      .catch((error) => {
-        if (alive) workspace.setError(errorMessage(error));
-      })
-      .finally(() => {
-        if (alive) setHistoryLoading(false);
-      });
-    return () => {
-      alive = false;
-    };
-  }, [bot?.id, workspace.loadHistory, workspace.setError]);
-  useEffect(() => {
     function keyboard(event: KeyboardEvent) {
       if (event.key === "Escape") {
-        setGlobalSettings(false);
+        setGlobalSettings(null);
         setCreating(false);
       }
     }
     window.addEventListener("keydown", keyboard);
     return () => window.removeEventListener("keydown", keyboard);
   }, []);
-  const select = useCallback((id: string) => {
+  const select = useCallback((id: string, nodeId = workspace.activeNodeId) => {
     if (!active.current) return;
+    if (nodeId !== workspace.activeNodeId) {
+      if (nodeId !== "local" && !workspace.nodes.some(node => node.id === nodeId)) return;
+      setCreating(false);
+      setGlobalSettings(null);
+      onRouteChange(nodeId, id);
+      location.hash = `/bots/${encodeURIComponent(id)}`;
+      workspace.selectNode(nodeId);
+      return;
+    }
     setSelectedId(id);
     setMobileChat(true);
+    onRouteChange(workspace.activeNodeId, id);
     location.hash = `/bots/${encodeURIComponent(id)}`;
-  }, []);
-  const closeSettings = useCallback(() => setGlobalSettings(false), []);
+  }, [onRouteChange, workspace.activeNodeId, workspace.nodes, workspace.selectNode]);
+  const switchNode = useCallback((id: string) => {
+    if (!active.current || id === workspace.activeNodeId) return;
+    setSelectedId("");
+    setMobileChat(false);
+    setCreating(false);
+    setGlobalSettings(null);
+    onRouteChange(id, "");
+    if (location.hash) history.replaceState(null, "", location.pathname + location.search);
+    workspace.selectNode(id);
+  }, [onRouteChange, workspace.activeNodeId, workspace.selectNode]);
+  const closeSettings = useCallback(() => setGlobalSettings(null), []);
   const closeCreate = useCallback(() => setCreating(false), []);
-  function created(bot: Bot) {
+  const openCreate = useCallback(() => setCreating(true), []);
+  const openSettings = useCallback(() => setGlobalSettings("instructions"), []);
+  const signOut = useCallback(() => {
+    void workspace.logout().catch(error => workspace.setError(errorMessage(error)));
+  }, [workspace.logout, workspace.setError]);
+  const backToBots = useCallback(() => {
     if (!active.current) return;
+    setMobileChat(false);
+    location.hash = "";
+  }, []);
+  const created = useCallback((bot: Bot, nodeId = workspace.activeNodeId) => {
+    if (!active.current) return;
+    if (nodeId !== workspace.activeNodeId) {
+      setCreating(false);
+      onRouteChange(nodeId, bot.id);
+      location.hash = `/bots/${encodeURIComponent(bot.id)}`;
+      workspace.selectNode(nodeId);
+      return;
+    }
     workspace.updateBot(bot);
     select(bot.id);
     setCreating(false);
-  }
+  }, [workspace.activeNodeId, workspace.selectNode, workspace.updateBot, onRouteChange, select]);
+  const createEnrollment = useCallback(async (name: string) => {
+    const enrollment = await api.createNodeEnrollment(name);
+    await workspace.refreshNodes();
+    return enrollment;
+  }, [workspace.refreshNodes]);
+  const removeNode = useCallback(async (id: string) => {
+    await api.removeNode(id);
+    if (workspace.activeNodeId === id) switchNode("local");
+    await workspace.refreshNodes();
+  }, [workspace.activeNodeId, switchNode, workspace.refreshNodes]);
   return (
         <FadingSurface
           className={`workspace ${mobileChat ? "is-chat" : ""}`}
         >
-          <BotRoster
+          <RosterRegion
+            journal={workspace.eventJournal}
             mobileHidden={mobileViewport && mobileChat}
-            bots={workspace.bots}
-            events={workspace.events}
-            selectedId={selectedId}
+            bots={workspace.catalogBots}
+            selectedKey={catalogBotKey(workspace.activeNodeId, selectedId)}
             onSelect={select}
-            onCreate={() => setCreating(true)}
-            onSettings={() => setGlobalSettings(true)}
+            onCreate={openCreate}
+            onSettings={openSettings}
             onTheme={setTheme}
             theme={theme}
-            onLogout={() =>
-              void workspace
-                .logout()
-                .catch((error) => workspace.setError(errorMessage(error)))
-            }
+            onLogout={signOut}
             connection={workspace.connection}
             user={workspace.user}
+            activeNode={workspace.activeNode}
+            hostFilters={workspace.hostFilters}
+            onFilterChange={workspace.setHostFilter}
           />
           <m.main
             className="workspace-content"
@@ -282,36 +370,23 @@ function AccountWorkspace({
                 </m.div>
               }
             >
-              <AnimatePresence initial={false} mode="wait">
+              <AnimatePresence presenceAffectsLayout={false} initial={false} mode="wait">
                 {bot ? (
-                  <FadingSurface
-                    key={bot.id}
-                    className="workspace-conversation"
-                  >
-                    <ChatRoom
-                      draftScope={workspace.user?.id || ""}
+                  <ConversationPane
+                    key={JSON.stringify([workspace.user?.id || "", workspace.activeNodeId, bot.id])}
+                    journal={workspace.eventJournal}
+                    loadHistory={workspace.loadHistory}
+                      draftScope={`${workspace.user?.id || ""}:${workspace.activeNodeId}`}
                       bot={bot}
-                      events={workspace.events[bot.id] || []}
+                      node={workspace.activeNode}
+                      offline={!workspace.activeNode.online}
                       capabilities={workspace.capabilities}
-                      loading={historyLoading}
-                      suspended={globalSettings || creating || (mobileViewport && !mobileChat)}
-                      onBack={() => {
-                        if (!active.current) return;
-                        setMobileChat(false);
-                        location.hash = "";
-                      }}
+                      suspended={Boolean(globalSettings) || creating || (mobileViewport && !mobileChat)}
+                      onBack={backToBots}
                       onBotChange={workspace.updateBot}
                       onArchive={workspace.archiveBot}
                       onError={workspace.setError}
-                      onHistory={() =>
-                        void workspace
-                          .loadHistory(bot.id)
-                          .catch((error) =>
-                            workspace.setError(errorMessage(error)),
-                          )
-                      }
-                    />
-                  </FadingSurface>
+                  />
                 ) : (
                   <FadingSurface
                     key="empty-workspace"
@@ -323,10 +398,19 @@ function AccountWorkspace({
                       initial="hidden"
                       animate="visible"
                     >
-                      {!workspace.loaded ? (
+                      {!workspace.loaded && workspace.activeNode.online ? (
                         <>
                           <LoaderCircle className="spin" size={28} />
                           <p>Opening workspace…</p>
+                        </>
+                      ) : !workspace.loaded ? (
+                        <>
+                          <Avatar avatar="slate" size={80} />
+                          <span className="eyebrow">HOST OFFLINE</span>
+                          <h1>{workspace.activeNode.name} is disconnected.</h1>
+                          <p>Start Connect Bots Node on that computer, then this workspace will reconnect automatically.</p>
+                          <m.button className="primary-button" data-motion-control {...controlMotion}
+                            onClick={() => setGlobalSettings("hosts")}>Manage hosts</m.button>
                         </>
                       ) : (
                         <>
@@ -357,7 +441,7 @@ function AccountWorkspace({
               </AnimatePresence>
             </Suspense>
           </m.main>
-          <AnimatePresence initial={false}>
+          <AnimatePresence presenceAffectsLayout={false} initial={false}>
             {workspace.error && (
               <div key="workspace-toast" className="global-toast-position">
                 <WorkspaceToast
@@ -367,17 +451,25 @@ function AccountWorkspace({
               </div>
             )}
           </AnimatePresence>
-          <AnimatePresence>
-            {globalSettings && (
+          <AnimatePresence presenceAffectsLayout={false}>
+            {globalSettings !== null && (
               <Suspense key="global-settings" fallback={null}>
                 <SettingsDrawer
                   bot={null}
                   bots={workspace.allBots}
                   global
+                  initialTab={globalSettings}
                   capabilities={workspace.capabilities}
                   onClose={closeSettings}
                   onBotChange={workspace.updateBot}
                   onArchive={workspace.archiveBot}
+                  nodes={workspace.nodes}
+                  activeNode={workspace.activeNode}
+                  onSelectNode={switchNode}
+                  onCreateNodeEnrollment={createEnrollment}
+                  onRemoveNode={removeNode}
+                  onRefreshNodes={workspace.refreshNodes}
+                  nodeBinaryURL={nodeBinaryURL}
                 />
               </Suspense>
             )}
@@ -385,6 +477,10 @@ function AccountWorkspace({
               <Suspense key="new-bot" fallback={null}>
                 <NewBotDialog
                   capabilities={workspace.capabilities}
+                  nodes={workspace.nodes}
+                  activeNode={workspace.activeNode}
+                  loadCapabilities={loadNodeCapabilities}
+                  createBot={createNodeBot}
                   onClose={closeCreate}
                   onCreated={created}
                 />

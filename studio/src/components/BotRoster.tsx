@@ -1,7 +1,10 @@
+import { memo, useMemo } from "react";
 import { Plus, Settings2, LogOut, Crown, Send } from "lucide-react";
-import type { Bot, Event } from "../lib/types";
+import type { CatalogBot, Event, NodeInfo } from "../lib/types";
 import type { StudioUser } from "../lib/api";
 import type { ThemePreference } from "../lib/theme";
+import { hostCategory, hostLabel } from "../lib/hostCatalog";
+import type { HostCategory, HostFilters } from "../lib/hostCatalog";
 import {
   isWorking,
   messagePreview,
@@ -22,13 +25,14 @@ import {
   rowMotion,
   useIsPresent,
 } from "../lib/motion";
+const emptyEvents: Event[] = [];
 function lastMessageTime(events: Event[]) {
-  const event = [...events]
-    .reverse()
-    .find(
-      (event) =>
-        event.type === "message" && event.data.source !== "goal_context",
-    );
+  let event: Event | undefined;
+  for (let index = events.length - 1; index >= 0; index--) {
+    if (events[index].type === "message" && events[index].data.source !== "goal_context") {
+      event = events[index]; break;
+    }
+  }
   if (!event) return null;
   const date = new Date(event.time),
     now = new Date();
@@ -51,18 +55,19 @@ function lastMessageTime(events: Event[]) {
 }
 
 function RosterRow({
-  bot,
+  entry,
   events,
   selected,
   layoutDependency,
   onSelect,
 }: {
-  bot: Bot;
+  entry: CatalogBot;
   events: Event[];
   selected: boolean;
   layoutDependency: string;
-  onSelect: (id: string) => void;
+  onSelect: (id: string, nodeId: string) => void;
 }) {
+  const { bot, node } = entry;
   const present = useIsPresent();
   const busy = isWorking(bot.status);
   const time = lastMessageTime(events);
@@ -81,7 +86,7 @@ function RosterRow({
       transition={{ ...motionSpring.control, layout: motionSpring.layout }}
       whileTap={{ scale: 0.985 }}
       className={`bot-row ${selected ? "is-selected" : ""}`}
-      onClick={() => onSelect(bot.id)}
+      onClick={() => onSelect(bot.id, node.id)}
       aria-current={selected ? "page" : undefined}
       disabled={!present}
       aria-hidden={!present || undefined}
@@ -98,6 +103,11 @@ function RosterRow({
       <span className="bot-row-copy">
         <span className="bot-row-title">
           <span className="bot-row-name">{bot.name}</span>
+          <span className={`bot-row-device${node.online ? "" : " is-offline"}`}
+            title={`${node.name}${node.hostname ? ` · ${node.hostname}` : ""}${node.online ? "" : " · Offline"}`}>
+            {!node.online && <span className="status-dot is-offline" aria-label="Offline" />}
+            {hostLabel(node)}
+          </span>
           {bot.chief && <Crown size={12} className="chief-icon" />}
           {bot.telegram?.enabled && (
             <span title={telegramTitle(bot.telegram)}>
@@ -128,10 +138,13 @@ function RosterRow({
   );
 }
 
-export default function BotRoster({
+const MemoRosterRow = memo(RosterRow, (a, b) => a.entry.bot === b.entry.bot && a.entry.node === b.entry.node
+  && a.events === b.events && a.selected === b.selected && a.layoutDependency === b.layoutDependency && a.onSelect === b.onSelect);
+
+function BotRoster({
   bots,
   events,
-  selectedId,
+  selectedKey,
   onSelect,
   onCreate,
   onSettings,
@@ -140,12 +153,15 @@ export default function BotRoster({
   onLogout,
   connection,
   user,
+  activeNode,
+  hostFilters,
+  onFilterChange,
   mobileHidden = false,
 }: {
-  bots: Bot[];
+  bots: CatalogBot[];
   events: Record<string, Event[]>;
-  selectedId: string;
-  onSelect: (id: string) => void;
+  selectedKey: string;
+  onSelect: (id: string, nodeId: string) => void;
   onCreate: () => void;
   onSettings: () => void;
   onTheme: (theme: ThemePreference) => void;
@@ -153,14 +169,17 @@ export default function BotRoster({
   onLogout: () => void;
   connection: string;
   user?: StudioUser | null;
+  activeNode?: NodeInfo;
+  hostFilters: HostFilters;
+  onFilterChange: (category: HostCategory, enabled: boolean) => void;
   mobileHidden?: boolean;
 }) {
-  const sortedBots = [...bots].sort(
+  const sortedBots = useMemo(() => bots.filter(entry => hostFilters[hostCategory(entry.node)]).sort(
     (a, b) =>
-      Number(b.chief) - Number(a.chief) ||
-      a.createdAt.localeCompare(b.createdAt),
-  );
-  const layoutDependency = JSON.stringify([sortedBots.map((bot) => bot.id), selectedId]);
+      Number(b.bot.chief) - Number(a.bot.chief) ||
+      a.bot.createdAt.localeCompare(b.bot.createdAt) || a.key.localeCompare(b.key),
+  ), [bots, hostFilters]);
+  const layoutDependency = JSON.stringify([sortedBots.map(entry => entry.key), selectedKey]);
   return (
     <m.aside
       id="bot-roster"
@@ -173,13 +192,13 @@ export default function BotRoster({
     >
       <LayoutGroup id="bot-roster">
         <m.nav aria-label="Bots" className="roster-list" layoutScroll>
-          <AnimatePresence initial={false}>
-            {sortedBots.map((bot) => (
-              <RosterRow
-                key={bot.id}
-                bot={bot}
-                events={events[bot.id] || []}
-                selected={selectedId === bot.id}
+          <AnimatePresence initial={false} presenceAffectsLayout={false}>
+            {sortedBots.map(entry => (
+              <MemoRosterRow
+                key={entry.key}
+                entry={entry}
+                events={entry.node.id === activeNode?.id ? events[entry.bot.id] || emptyEvents : emptyEvents}
+                selected={selectedKey === entry.key}
                 layoutDependency={layoutDependency}
                 onSelect={onSelect}
               />
@@ -193,27 +212,34 @@ export default function BotRoster({
                 animate="visible"
                 exit="exit"
               >
-                Your team will appear here.
+                {bots.length ? "No bots on the selected devices." : "Your team will appear here."}
               </m.div>
             )}
           </AnimatePresence>
         </m.nav>
       </LayoutGroup>
       <footer className="roster-footer">
-        <div className="roster-connection" title={`${user ? `Signed in as @${user.username} · ` : ""}${connection === "connected" ? "Workspace connected" : "Reconnecting"}`}>
+        <div className="roster-host-filters" role="group" aria-label="Filter devices">
+          {(["server", "mac"] as const).map(category => <label key={category}>
+            <input type="checkbox" checked={hostFilters[category]}
+              onChange={event => onFilterChange(category, event.target.checked)} />
+            <span>{category === "server" ? "Server" : "Mac"}</span>
+          </label>)}
+        </div>
+        <div className="roster-connection" title={`${user ? `Signed in as @${user.username} · ` : ""}${activeNode ? `${activeNode.name} · ` : ""}${activeNode?.online === false ? "Offline" : connection === "connected" ? "Workspace connected" : "Reconnecting"}`}>
           <span
-            className={`status-dot ${connection === "connected" ? "is-connected" : "is-reconnecting"}`}
+            className={`status-dot ${activeNode?.online === false ? "is-offline" : connection === "connected" ? "is-connected" : "is-reconnecting"}`}
           />
           <AnimatePresence initial={false} mode="wait">
             <m.span
-              key={`${user?.id || ""}:${connection === "connected" ? "connected" : "reconnecting"}`}
+              key={`${user?.id || ""}:${activeNode?.online === false ? "offline" : connection === "connected" ? "connected" : "reconnecting"}`}
               className="roster-connection-copy"
               variants={fade}
               initial="hidden"
               animate="visible"
               exit="exit"
             >
-              {user ? `@${user.username} · ${connection === "connected" ? "Connected" : "Reconnecting"}` : connection === "connected" ? "Workspace connected" : "Reconnecting"}
+              {user ? `@${user.username} · ${activeNode?.online === false ? "Offline" : connection === "connected" ? "Connected" : "Reconnecting"}` : activeNode?.online === false ? "Host offline" : connection === "connected" ? "Workspace connected" : "Reconnecting"}
             </m.span>
           </AnimatePresence>
         </div>
@@ -257,3 +283,5 @@ export default function BotRoster({
     </m.aside>
   );
 }
+
+export default memo(BotRoster);

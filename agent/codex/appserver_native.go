@@ -351,7 +351,10 @@ func (s *appServerSession) requestWithContext(ctx context.Context, method string
 	select {
 	case resp := <-ch:
 		if resp.Error != nil {
-			return fmt.Errorf("%s", strings.TrimSpace(resp.Error.Message))
+			if resp.Error.cause != nil {
+				return resp.Error.cause
+			}
+			return &core.RPCRejectionError{Message: strings.TrimSpace(resp.Error.Message)}
 		}
 		if out != nil {
 			if err := json.Unmarshal(resp.Result, out); err != nil {

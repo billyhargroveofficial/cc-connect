@@ -4,6 +4,7 @@ import test from 'node:test';
 import { runInNewContext } from 'node:vm';
 import ts from 'typescript';
 import { motionTestModule } from '../../lib/motion-stub.mjs';
+import { effortLabel } from '../../lib/chatStatus.ts';
 
 const source = ts.transpileModule(readFileSync(new URL('./ModelPicker.tsx', import.meta.url), 'utf8'), {
   compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX },
@@ -44,6 +45,7 @@ function picker({ model = {}, bot = {}, disabled = false } = {}) {
     'react/jsx-runtime': { jsx: element, jsxs: element, Fragment: 'fragment' },
     'lucide-react': new Proxy({}, { get: (_, name) => name }),
     '../../lib/motion': motion,
+    '../../lib/chatStatus': { effortLabel },
     '../../lib/api': { api: { updateBot: async (_, patch) => {
       requests.push(patch);
       return { ...props.bot, ...patch };
@@ -77,11 +79,55 @@ function picker({ model = {}, bot = {}, disabled = false } = {}) {
       await settled();
     },
     choose: async name => {
+      const switcher = find(node => node.props?.className === 'model-select-current');
+      if (switcher) switcher.props.onClick();
       find(node => node.props?.className === 'model-choice' && node.props.children[0].props.children.props.children[0] === name).props.onClick();
       await settled();
     },
   };
 }
+
+test('compact picker exposes model, effort and tier directly, then opens a discrete effort slider', () => {
+  const view = picker({ bot: { serviceTier: 'fast' } });
+  const trigger = view.find(node => node.props?.className === 'model-trigger');
+  assert.match(trigger.props['aria-label'], /Model: Current/);
+  assert.match(trigger.props['aria-label'], /Reasoning effort: Max/);
+  assert.match(trigger.props['aria-label'], /Service tier: Fast/);
+  view.open();
+  const slider = view.find(node => node.type === 'input' && node.props.type === 'range');
+  assert.equal(slider.props['aria-label'], 'Reasoning effort');
+  assert.equal(slider.props.step, 1);
+  assert.equal(slider.props.max, 2);
+  assert.equal(slider.props['aria-valuetext'], 'Max');
+  assert.equal(view.find(node => node.type === 'select' && node.props['aria-label'] === 'Reasoning effort'), undefined);
+});
+
+test('range pointer-up plus blur commits one effort change while model list retains supported tiers', async () => {
+  const view = picker({ bot: { serviceTier: 'fast' } });
+  view.open();
+  let slider = view.find(node => node.type === 'input' && node.props.type === 'range');
+  slider.props.onChange({ target: { value: '2' } });
+  slider = view.find(node => node.type === 'input' && node.props.type === 'range');
+  assert.equal(slider.props['aria-valuetext'], 'Ultra');
+  slider.props.onPointerUp({ currentTarget: { value: '2' } });
+  slider.props.onBlur({ currentTarget: { value: '2' } });
+  await settled();
+  assert.equal(view.requests.length, 1);
+  assert.deepEqual(JSON.parse(JSON.stringify(view.requests[0])), { effort: 'ultra' });
+  assert.equal(view.props.bot.serviceTier, 'fast');
+});
+
+test('keyboard range commits advertised efforts and rejects values outside the discrete catalog', async () => {
+  const view = picker();
+  view.open();
+  const slider = view.find(node => node.type === 'input' && node.props.type === 'range');
+  slider.props.onKeyUp({ key: 'Home', currentTarget: { value: '0' } });
+  await settled();
+  assert.equal(view.requests[0].effort, 'low');
+  view.find(node => node.type === 'input' && node.props.type === 'range').props.onPointerUp({ currentTarget: { value: '99' } });
+  await settled();
+  assert.equal(view.requests.length, 1);
+});
 
 test('exiting popovers immediately become inert and lose modal semantics', () => {
   const view = picker();

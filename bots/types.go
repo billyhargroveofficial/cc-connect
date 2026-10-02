@@ -55,7 +55,30 @@ type Attachment struct {
 type MessageRequest struct {
 	Text        string       `json:"text"`
 	Attachments []Attachment `json:"attachments,omitempty"`
+	Mode        string       `json:"mode,omitempty"`
 	Source      string       `json:"-"`
+}
+
+// QueuedMessage is a durable owner message awaiting its own turn. Attachment
+// paths never cross the HTTP boundary; the workspace resolves IDs at dispatch.
+type QueuedMessage struct {
+	ID          string       `json:"id"`
+	Text        string       `json:"text"`
+	Attachments []Attachment `json:"attachments,omitempty"`
+	Source      string       `json:"source"`
+	CreatedAt   time.Time    `json:"createdAt"`
+	Status      string       `json:"status"`
+}
+
+type MessageReceipt struct {
+	TurnID  string `json:"turnId"`
+	Status  string `json:"status"`
+	QueueID string `json:"queueId,omitempty"`
+}
+
+type MessageQueue struct {
+	Messages []QueuedMessage `json:"messages"`
+	Paused   bool            `json:"paused"`
 }
 
 type Model struct {

@@ -29,6 +29,15 @@ type AgentRPCSession interface {
 	RPC(ctx context.Context, method string, params any, result any) error
 }
 
+// RPCRejectionError represents an explicit negative provider acknowledgement.
+// Transport errors, timeouts, cancellation and malformed replies must never
+// use this type: delivery may already have happened in those cases.
+type RPCRejectionError struct {
+	Message string
+}
+
+func (e *RPCRejectionError) Error() string { return e.Message }
+
 type DynamicToolCall struct {
 	ThreadID  string          `json:"threadId"`
 	TurnID    string          `json:"turnId"`

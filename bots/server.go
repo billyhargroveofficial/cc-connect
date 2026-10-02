@@ -124,6 +124,10 @@ func (s *Server) buildAPIHandler() http.Handler {
 	api.HandleFunc("GET /api/studio/bots/{id}/events", s.botEvents)
 	api.HandleFunc("GET /api/studio/events", s.streamEvents)
 	api.HandleFunc("POST /api/studio/bots/{id}/messages", s.sendMessage)
+	api.HandleFunc("GET /api/studio/bots/{id}/queue", s.messageQueue)
+	api.HandleFunc("POST /api/studio/bots/{id}/queue/resume", s.resumeMessageQueue)
+	api.HandleFunc("DELETE /api/studio/bots/{id}/queue/{messageId}", s.cancelQueuedMessage)
+	api.HandleFunc("POST /api/studio/bots/{id}/queue/{messageId}/steer", s.steerQueuedMessage)
 	api.HandleFunc("POST /api/studio/bots/{id}/stop", s.stopBot)
 	api.HandleFunc("POST /api/studio/bots/{id}/permission", s.permission)
 	api.HandleFunc("GET /api/studio/capabilities", s.capabilities)
@@ -312,12 +316,12 @@ func (s *Server) sendMessage(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	turnID, err := s.runtime.SendMessage(r.Context(), r.PathValue("id"), input)
+	receipt, err := s.runtime.SubmitMessage(r.Context(), r.PathValue("id"), input)
 	if err != nil {
 		writeError(w, statusForError(err), err)
 		return
 	}
-	writeJSON(w, http.StatusAccepted, map[string]string{"turnId": turnID})
+	writeJSON(w, http.StatusAccepted, receipt)
 }
 
 func (s *Server) stopBot(w http.ResponseWriter, r *http.Request) {

@@ -80,6 +80,8 @@ type Runtime struct {
 }
 
 type botRuntime struct {
+	queue               []*runtimeQueuedMessage
+	queuePaused         bool
 	compacting          bool
 	compactionCancel    context.CancelFunc
 	compactionTurnID    string
@@ -235,6 +237,7 @@ func (r *Runtime) state(id string) (*botRuntime, error) {
 		break
 	}
 	r.states[id] = s
+	r.restoreMessageQueue(s, events)
 	return s, nil
 }
 
@@ -253,31 +256,14 @@ func (r *Runtime) Busy(id string) bool {
 // SendMessage accepts a turn independently of the HTTP request lifetime. A
 // disconnected client can replay the journal or WaitTurn without resending it.
 func (r *Runtime) SendMessage(ctx context.Context, id string, request MessageRequest) (string, error) {
-	return r.sendMessage(ctx, r.ctx, id, request)
+	receipt, err := r.SubmitMessage(ctx, id, request)
+	return receipt.TurnID, err
 }
 
 func (r *Runtime) sendMessage(ctx, workCtx context.Context, id string, request MessageRequest) (string, error) {
-	if err := ctx.Err(); err != nil {
+	request, err := r.prepareMessage(ctx, id, request)
+	if err != nil {
 		return "", err
-	}
-	if strings.TrimSpace(request.Text) == "" && len(request.Attachments) == 0 {
-		return "", fmt.Errorf("%w: message is empty", ErrInvalid)
-	}
-	if len(request.Text) > 1<<20 {
-		return "", fmt.Errorf("%w: message exceeds 1 MiB", ErrInvalid)
-	}
-	if len(request.Attachments) > 16 {
-		return "", fmt.Errorf("%w: too many attachments", ErrInvalid)
-	}
-	if len(request.Attachments) > 0 {
-		if r.cfg.ResolveAttachments == nil {
-			return "", fmt.Errorf("%w: attachment resolver is unavailable", ErrInvalid)
-		}
-		var err error
-		request.Attachments, err = r.cfg.ResolveAttachments(id, request.Attachments)
-		if err != nil {
-			return "", fmt.Errorf("resolve attachments: %w", err)
-		}
 	}
 	s, err := r.state(id)
 	if err != nil {
@@ -285,10 +271,42 @@ func (r *Runtime) sendMessage(ctx, workCtx context.Context, id string, request M
 	}
 	s.lifecycle.Lock()
 	defer s.lifecycle.Unlock()
-	turnID, err := randomID("turn_")
-	if err != nil {
-		return "", err
+	return r.startMessageLocked(s, workCtx, request, nil)
+}
+
+func (r *Runtime) prepareMessage(ctx context.Context, id string, request MessageRequest) (MessageRequest, error) {
+	if err := ctx.Err(); err != nil {
+		return MessageRequest{}, err
 	}
+	if strings.TrimSpace(request.Text) == "" && len(request.Attachments) == 0 {
+		return MessageRequest{}, fmt.Errorf("%w: message is empty", ErrInvalid)
+	}
+	if len(request.Text) > 1<<20 {
+		return MessageRequest{}, fmt.Errorf("%w: message exceeds 1 MiB", ErrInvalid)
+	}
+	if len(request.Attachments) > 16 {
+		return MessageRequest{}, fmt.Errorf("%w: too many attachments", ErrInvalid)
+	}
+	if len(request.Attachments) > 0 {
+		if r.cfg.ResolveAttachments == nil {
+			return MessageRequest{}, fmt.Errorf("%w: attachment resolver is unavailable", ErrInvalid)
+		}
+		var err error
+		request.Attachments, err = r.cfg.ResolveAttachments(id, request.Attachments)
+		if err != nil {
+			return MessageRequest{}, fmt.Errorf("resolve attachments: %w", err)
+		}
+	}
+	if request.Source == "" {
+		request.Source = "web"
+	}
+	return request, nil
+}
+
+// startMessageLocked accepts only an idle bot. Delegation deliberately retains
+// this busy error: an active caller must not wait on its own queued dependency.
+func (r *Runtime) startMessageLocked(s *botRuntime, workCtx context.Context, request MessageRequest, t *runtimeTurn) (string, error) {
+	id := s.id
 	bot, err := r.store.GetBot(id)
 	if err != nil {
 		return "", err
@@ -296,12 +314,20 @@ func (r *Runtime) sendMessage(ctx, workCtx context.Context, id string, request M
 	if bot.Status == "archived" {
 		return "", fmt.Errorf("%w: bot is archived", ErrConflict)
 	}
-	turnCtx, cancel := context.WithCancel(workCtx)
-	t := &runtimeTurn{id: turnID, botID: id, bot: bot, source: request.Source, ctx: turnCtx, cancel: cancel, done: make(chan struct{}), settled: make(chan struct{})}
+	if t == nil {
+		turnID, err := randomID("turn_")
+		if err != nil {
+			return "", err
+		}
+		turnCtx, cancel := context.WithCancel(workCtx)
+		t = &runtimeTurn{id: turnID, botID: id, ctx: turnCtx, cancel: cancel, done: make(chan struct{}), settled: make(chan struct{})}
+	}
+	t.bot, t.source = bot, request.Source
+	turnID := t.id
 	s.mu.Lock()
 	if s.current != nil || s.compacting {
 		s.mu.Unlock()
-		cancel()
+		t.cancel()
 		return "", ErrBusy
 	}
 	s.current = t
@@ -314,22 +340,14 @@ func (r *Runtime) sendMessage(ctx, workCtx context.Context, id string, request M
 		s.mu.Lock()
 		s.current = nil
 		s.mu.Unlock()
-		cancel()
+		t.cancel()
 		return "", os.ErrClosed
 	}
 	r.wg.Add(1)
 	r.turns[turnID] = t
 	r.mu.Unlock()
-	if request.Source == "" {
-		request.Source = "web"
-	}
-	publicAttachments := make([]Attachment, len(request.Attachments))
-	copy(publicAttachments, request.Attachments)
-	for i := range publicAttachments {
-		publicAttachments[i].Path = ""
-	}
 	if _, err = r.store.AppendEvent(id, turnID, "message", map[string]any{
-		"role": "user", "content": request.Text, "attachments": publicAttachments, "source": request.Source,
+		"role": "user", "content": request.Text, "attachments": publicMessageAttachments(request.Attachments), "source": request.Source,
 	}); err == nil {
 		_, err = r.store.UpdateBot(id, func(bot *Bot) error { bot.Status = "running"; return nil })
 	}
@@ -369,7 +387,15 @@ func (r *Runtime) persistedTurn(botID, turnID string) (TurnResult, error) {
 		return TurnResult{}, err
 	}
 	result := TurnResult{}
+	queueTerminal := false
 	for _, event := range events {
+		if event.Type == "queue" {
+			var message struct{ ID, Status, Error string }
+			if json.Unmarshal(event.Data, &message) == nil && message.ID == turnID {
+				result.Status, result.Error = message.Status, message.Error
+				queueTerminal = message.Status == "cancelled" || message.Status == "steered" || message.Status == "failed" || message.Status == "uncertain"
+			}
+		}
 		if event.TurnID != turnID {
 			continue
 		}
@@ -380,6 +406,7 @@ func (r *Runtime) persistedTurn(botID, turnID string) (TurnResult, error) {
 				result.Text = message.Content
 			}
 		case "turn":
+			queueTerminal = false
 			text := result.Text
 			if json.Unmarshal(event.Data, &result) == nil {
 				result.Text = text
@@ -389,7 +416,7 @@ func (r *Runtime) persistedTurn(botID, turnID string) (TurnResult, error) {
 	if result.Status == "" {
 		return TurnResult{}, ErrNotFound
 	}
-	if !terminalStatus(result.Status) {
+	if !terminalStatus(result.Status) && !queueTerminal {
 		return TurnResult{}, fmt.Errorf("%w: turn has not completed", ErrConflict)
 	}
 	return result, nil
@@ -403,10 +430,16 @@ func (r *Runtime) Stop(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
+	s.lifecycle.Lock()
+	if err := r.setQueuePaused(s, true, "owner_stop", ""); err != nil {
+		s.lifecycle.Unlock()
+		return err
+	}
 	s.mu.Lock()
 	t := s.current
 	compacting := s.compacting
 	s.mu.Unlock()
+	s.lifecycle.Unlock()
 	if err := r.cancelPendingGoal(id, "owner_stop"); err != nil {
 		return err
 	}
@@ -590,10 +623,15 @@ func (r *Runtime) Close() error {
 		// app-server. Other clients and the shared daemon keep running.
 		for _, s := range states {
 			s.lifecycle.Lock()
+			r.closeErr = errors.Join(r.closeErr, r.setQueuePaused(s, true, "server_shutdown", ""))
 			s.mu.Lock()
 			session, agent, t := s.session, s.agent, s.current
 			compacting := s.compacting
+			queued := append([]*runtimeQueuedMessage{}, s.queue...)
 			s.mu.Unlock()
+			for _, entry := range queued {
+				r.finishQueuedTurn(entry.turn, "queued", "")
+			}
 			if compacting {
 				r.closeErr = errors.Join(r.closeErr, r.stopCompactionLocked(context.Background(), s))
 			} else {

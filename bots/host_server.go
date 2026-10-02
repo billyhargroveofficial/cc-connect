@@ -23,11 +23,12 @@ import (
 )
 
 const ExpectedAccountHeader = "X-Connect-Bots-Account"
+const ExpectedNodeHeader = "X-Connect-Bots-Node"
 
 var errHostAccountChanged = errors.New("account session changed; sign in again")
 
-// HostServerConfig describes host-wide account authentication. Tenant selection
-// comes only from a server-side account session, never from request parameters.
+// HostServerConfig describes host-wide account authentication. Account ownership
+// comes only from a server-side session; a requested node must belong to it.
 type HostServerConfig struct {
 	Root                 string
 	StaticDir            string
@@ -38,6 +39,10 @@ type HostServerConfig struct {
 	LegacyToken          string
 	ResolveTenant        func(context.Context, Account) (*Server, error)
 	ResolveInternalToken func(string) (*Server, bool)
+	Nodes                *NodeHub
+	PublicURL            string
+	NodeBinaryDir        string
+	Version              string
 }
 
 type hostUser struct {
@@ -79,6 +84,13 @@ type HostServer struct {
 func NewHostServer(config HostServerConfig) (*HostServer, error) {
 	if config.Root == "" || config.ResolveTenant == nil {
 		return nil, fmt.Errorf("host requires a data root and tenant resolver")
+	}
+	if config.PublicURL != "" {
+		var err error
+		config.PublicURL, err = ValidateNodePublicURL(config.PublicURL, true)
+		if err != nil {
+			return nil, err
+		}
 	}
 	accounts, err := OpenAccountStore(config.Root)
 	if err != nil {
@@ -205,13 +217,14 @@ func (h *HostServer) buildHandler() http.Handler {
 	mux.HandleFunc("POST /api/studio/login", h.login)
 	mux.HandleFunc("POST /api/studio/register", h.register)
 	mux.HandleFunc("POST /api/studio/logout", h.logout)
+	h.addNodeRoutes(mux)
 	mux.HandleFunc("/api/studio/internal/tools", h.internalTool)
 	mux.Handle("/api/studio/", h.requireAccount(http.HandlerFunc(h.dispatchTenant)))
 	mux.Handle("/", newStaticHandler(ServerConfig{StaticDir: h.config.StaticDir, StaticFS: h.config.StaticFS}))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("Referrer-Policy", "same-origin")
-		if strings.HasPrefix(r.URL.Path, "/api/studio") {
+		if strings.HasPrefix(r.URL.Path, "/api/studio") || strings.HasPrefix(r.URL.Path, "/api/nodes") {
 			w.Header().Set("Cache-Control", "no-store")
 		}
 		mux.ServeHTTP(w, r)
@@ -462,7 +475,7 @@ func (h *HostServer) beginRequest(r *http.Request) (Account, context.Context, fu
 		h.requests[digest] = make(map[*hostRequest]struct{})
 	}
 	h.requests[digest][request] = struct{}{}
-	if r.URL.Path == "/api/studio/events" {
+	if isHostEventStream(r) {
 		go h.revalidateStream(ctx, cancel, token, h.sessionRecheckInterval)
 	}
 	release := func() {
@@ -534,6 +547,19 @@ func (h *HostServer) dispatchTenant(w http.ResponseWriter, r *http.Request) {
 	account, ok := r.Context().Value(hostAccountKey{}).(Account)
 	if !ok {
 		writeError(w, http.StatusUnauthorized, fmt.Errorf("account login required"))
+		return
+	}
+	nodeID, valid := expectedNode(r)
+	if !valid {
+		writeJSON(w, http.StatusConflict, map[string]string{"code": "node_changed", "error": "workspace host changed; select the host again"})
+		return
+	}
+	if nodeID != LocalNodeID {
+		if h.config.Nodes == nil {
+			writeError(w, http.StatusNotFound, fmt.Errorf("host not found"))
+			return
+		}
+		h.config.Nodes.Proxy(account, nodeID, w, r)
 		return
 	}
 	tenant, err := h.tenant(r.Context(), account)

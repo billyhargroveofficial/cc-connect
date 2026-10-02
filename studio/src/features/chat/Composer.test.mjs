@@ -34,7 +34,7 @@ function composer({ draftScope = 'user-a', botId = 'bot', storage = new Map(), g
   };
   const element = (type, props) => ({ type, props });
   const modules = {
-    react: {
+    react: { memo: component => component, useMemo: factory => factory(),
       useState: state,
       useRef: initial => state(() => ({ current: initial }))[0],
       useId: () => state('composer-test')[0],
@@ -63,7 +63,6 @@ function composer({ draftScope = 'user-a', botId = 'bot', storage = new Map(), g
     },
     '../../lib/motion': { ...motionTestModule(), useIsPresent: () => present },
     './ModelPicker': { default: 'ModelPicker', PresenceSurface: 'div', useDialogFocus: active => traps.push(active) },
-    './ContextControl': { default: 'ContextControl' },
     './minimal-composer.css': {},
   };
   const exports = {};
@@ -87,7 +86,7 @@ function composer({ draftScope = 'user-a', botId = 'bot', storage = new Map(), g
     },
   }, { filename: 'Composer.tsx' });
   const props = {
-    bot: { id: botId, name: 'Bot' }, draftScope, capabilities: getUserMedia ? { voice: true } : null, busy: false,
+    bot: { id: botId, name: 'Bot' }, draftScope, capabilities: { voice: true }, busy: false,
     context: { compacting: false, requesting: false },
     onSend: (text, attachments) => {
       const request = { text, attachments, ...deferred() };
@@ -115,32 +114,59 @@ function composer({ draftScope = 'user-a', botId = 'bot', storage = new Map(), g
   }
   const find = match => all(match)[0];
   return {
-    requests, errors, recordings,
+    requests, errors, recordings, uploadedFiles: uploads,
     unmount: () => { for (const effect of effects) effect?.cleanup?.(); },
     changeScope: scope => { props.draftScope = scope; render(); },
     exit: () => { present = false; render(); },
     microphone: () => find(node => node.props?.['aria-label'] === 'Dictation').props.onClick(),
     suspend: suspended => { props.suspended = suspended; render(); },
-    openActions: () => find(node => node.props?.['aria-label'] === 'More actions').props.onClick(),
+    offline: offline => { props.offline = offline; render(); },
+    busy: busy => { props.busy = busy; render(); },
+    sendDisabled: () => find(node => node.props?.['aria-label'] === 'Send message').props.disabled,
+    openActions: () => find(node => node.props?.['aria-label'] === 'Attach file').props.onClick(),
     actionsOpen: () => !!find(node => node.props?.className === 'composer-actions-menu'),
     trapActive: () => { render(); return traps.at(-1); },
-    contextSuspended: () => find(node => node.type === 'ContextControl').props.suspended,
+    controlsSuspended: () => find(node => node.type === 'ModelPicker').props.disabled,
+    hasContextControl: () => !!find(node => node.type === 'ContextControl'),
     pauseUploads: () => { uploadsPaused = true; },
     resumeUploads: async () => { uploadsPaused = false; uploadGate.resolve(); await settled(); },
+    rejectUploads: async () => { uploadsPaused = false; uploadGate.reject(new Error('Old upload failed')); await settled(); },
     edit: value => find(node => node.type === 'textarea').props.onChange({ target: { value } }),
     send: () => find(node => node.props?.['aria-label'] === 'Send message').props.onClick(),
     draft: () => find(node => node.type === 'textarea').props.value,
     uploadNames: () => all(node => node.props?.className?.split(' ').includes('upload-chip'))
       .map(chip => chip.props.children[1].props.children),
-    upload: async name => {
+    upload: async names => {
       find(node => node.type === 'input' && node.props.multiple).props.onChange({
-        target: { files: [{ name, type: 'text/plain' }] },
+        target: { files: (Array.isArray(names) ? names : [names]).map(name => ({ name, type: 'text/plain' })) },
       });
       await settled();
       return uploads.at(-1);
     },
-  };
+};
 }
+
+test('queued uploads cannot continue after another account or host, animated exit, or unmount', async () => {
+  for (const failed of [false, true]) {
+    for (const invalidate of [
+      view => view.changeScope('user-b:local'),
+      view => view.changeScope('user-a:mac'),
+      view => view.exit(),
+      view => view.unmount(),
+    ]) {
+      const view = composer({ draftScope: 'user-a:local' });
+      view.pauseUploads();
+      await view.upload(['first.txt', 'queued-private.txt']);
+      assert.deepEqual(view.uploadedFiles.map(file => file.name), ['first.txt']);
+      invalidate(view);
+      await (failed ? view.rejectUploads() : view.resumeUploads());
+      assert.deepEqual(view.uploadedFiles.map(file => file.name), ['first.txt'],
+        'the old queue must not start a request with the newly active API identity');
+      assert.deepEqual(view.errors, []);
+      view.unmount();
+    }
+  }
+});
 
 test('microphone permission granted after sign-out stops every track without creating a recorder', async () => {
   const permission = deferred();
@@ -213,6 +239,57 @@ test('composer without an account identity cannot read or persist a draft', () =
   assert.deepEqual(Array.from(storage), [['connect-bots:draft:bot', 'Legacy private draft']]);
 });
 
+test('an offline host blocks sending and uploading while preserving the editable draft and files', async () => {
+  const view = composer();
+  view.edit('Keep this draft on reconnect');
+  await view.upload('ready.txt');
+  view.offline(true);
+  assert.equal(view.sendDisabled(), true);
+  view.send();
+  assert.equal(view.requests.length, 0);
+  await view.upload('offline.txt');
+  assert.deepEqual(view.uploadNames(), ['ready.txt']);
+  view.edit('Edited while offline');
+  assert.equal(view.draft(), 'Edited while offline');
+  assert.equal(view.controlsSuspended(), true);
+  view.offline(false);
+  assert.equal(view.sendDisabled(), false);
+  view.send();
+  assert.equal(view.requests[0].text, 'Edited while offline');
+  assert.deepEqual(Array.from(view.requests[0].attachments, file => file.name), ['ready.txt']);
+  view.requests[0].resolve();
+  await settled();
+  view.unmount();
+});
+
+test('an upload acknowledgement during a temporary host disconnect settles the retained attachment', async () => {
+  const view = composer({ draftScope: 'user-a:mac' });
+  view.pauseUploads();
+  await view.upload('accepted-before-disconnect.txt');
+  view.offline(true);
+  await view.resumeUploads();
+  view.offline(false);
+  assert.equal(view.sendDisabled(), false, 'the retained attachment must not remain stuck as uploading after reconnect');
+  view.send();
+  assert.deepEqual(Array.from(view.requests[0].attachments, file => file.name), ['accepted-before-disconnect.txt']);
+  view.requests[0].resolve();
+  await settled();
+  view.unmount();
+});
+
+test('microphone permission that arrives after the host disconnects releases capture', async () => {
+  const permission = deferred();
+  let stopped = 0;
+  const view = composer({ getUserMedia: () => permission.promise });
+  view.microphone();
+  view.offline(true);
+  permission.resolve({ getTracks: () => [{ stop: () => stopped++ }] });
+  await settled();
+  assert.equal(stopped, 1);
+  assert.equal(view.recordings.length, 0);
+  view.unmount();
+});
+
 test('suspending a retained mobile composer releases popup focus and keeps draft files', async () => {
   const view = composer();
   view.edit('Keep this mobile draft');
@@ -224,7 +301,7 @@ test('suspending a retained mobile composer releases popup focus and keeps draft
   view.suspend(true);
   assert.equal(view.trapActive(), false);
   assert.equal(view.actionsOpen(), false);
-  assert.equal(view.contextSuspended(), true);
+  assert.equal(view.controlsSuspended(), true);
   assert.equal(view.draft(), 'Keep this mobile draft');
   assert.deepEqual(view.uploadNames(), ['draft.txt']);
   view.send();
@@ -233,7 +310,7 @@ test('suspending a retained mobile composer releases popup focus and keeps draft
   view.suspend(false);
   assert.equal(view.trapActive(), false);
   assert.equal(view.actionsOpen(), false, 'the dismissed popup does not reopen on return');
-  assert.equal(view.contextSuspended(), false);
+  assert.equal(view.controlsSuspended(), false);
   view.send();
   assert.equal(view.requests[0].text, 'Keep this mobile draft');
   assert.deepEqual(Array.from(view.requests[0].attachments, file => file.id), [attachment.id]);
@@ -331,4 +408,23 @@ test('a failed POST retains the draft and attachments including changes made in 
   assert.equal(view.draft(), 'Revised message');
   assert.deepEqual(view.uploadNames(), ['first.txt', 'later.txt']);
   assert.deepEqual(view.errors, ['Offline']);
+});
+
+
+test('busy composer submits the next message instead of stopping and preserves a newer draft on acknowledgement', async () => {
+  const view = composer();
+  view.busy(true);
+  view.edit('First queued instruction');
+  await view.upload('queued.txt');
+  assert.equal(view.sendDisabled(), false, 'an active turn permits a queued message');
+  assert.equal(view.hasContextControl(), false, 'context moved to the statusline');
+  view.send();
+  assert.equal(view.requests[0].text, 'First queued instruction');
+  view.edit('Another queued instruction');
+  await view.upload('next.txt');
+  view.requests[0].resolve();
+  await settled();
+  assert.equal(view.draft(), 'Another queued instruction');
+  assert.deepEqual(view.uploadNames(), ['next.txt']);
+  view.unmount();
 });

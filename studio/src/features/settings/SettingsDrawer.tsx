@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState, type FormEvent, type ReactNode } from 'react'
-import { Archive, ArrowLeft, Check, Clock3, FileText, FolderOpen, LoaderCircle, Plus, RefreshCw, Search, Shield, Wrench, X } from 'lucide-react'
-import type { Bot, Capabilities, Maintenance, MaintenanceRun, Skill } from '../../lib/types'
+import { Archive, ArrowLeft, Check, Clock3, Copy, Download, FileText, FolderOpen, Laptop, LoaderCircle, Monitor, Plus, RefreshCw, Search, Shield, Trash2, Wrench, X } from 'lucide-react'
+import type { Bot, Capabilities, Maintenance, MaintenanceRun, NodeEnrollment, NodeInfo, Skill } from '../../lib/types'
 import { api } from '../../lib/api'
 import { isWorking,telegramLabel } from '../../lib/events'
 import { AnimatePresence, LayoutGroup, m, useIsPresent, useReducedMotion, fadeUp, controlMotion, motionSpring, motionTransition } from '../../lib/motion'
@@ -15,15 +15,22 @@ interface SettingsDrawerProps {
   onArchive: (id: string) => void
   initialTab?: string
   global?: boolean
+  nodes?: NodeInfo[]
+  activeNode?: NodeInfo
+  onSelectNode?: (id: string) => void
+  onCreateNodeEnrollment?: (name: string) => Promise<NodeEnrollment>
+  onRemoveNode?: (id: string) => Promise<void>
+  onRefreshNodes?: (options?: { background?: boolean }) => Promise<unknown>
+  nodeBinaryURL?: (platform: 'darwin', arch: 'arm64' | 'amd64') => string
 }
 
-export function SettingsDrawer({ bot, bots = [], capabilities, onClose, onBotChange, onArchive, initialTab, global = false }: SettingsDrawerProps) {
+export function SettingsDrawer({ bot, bots = [], capabilities, onClose, onBotChange, onArchive, initialTab, global = false, ...nodeProps }: SettingsDrawerProps) {
   if (!global && !bot) return null
   return <ModalShell title={global ? 'Shared settings' : bot!.name}
-    subtitle={global ? 'Instructions and skills for all bots.' : "Your bot's workspace."}
+    subtitle={global ? 'Instructions, skills, and connected hosts.' : "Your bot's workspace."}
     onClose={onClose} drawer={!global} wide={global}>
     <SettingsContent key={global ? 'shared' : bot!.id} bot={bot} bots={bots} capabilities={capabilities}
-      onClose={onClose} onBotChange={onBotChange} onArchive={onArchive} initialTab={initialTab} global={global} />
+      onClose={onClose} onBotChange={onBotChange} onArchive={onArchive} initialTab={initialTab} global={global} {...nodeProps} />
   </ModalShell>
 }
 
@@ -42,9 +49,9 @@ export function BotSettingsPanel({ bot, capabilities, onClose, onBotChange, onAr
   </div>
 }
 
-function SettingsContent({ bot, bots = [], capabilities, onClose, onBotChange, onArchive, initialTab, global = false }: SettingsDrawerProps) {
+function SettingsContent({ bot, bots = [], capabilities, onClose, onBotChange, onArchive, initialTab, global = false, ...nodeProps }: SettingsDrawerProps) {
   const tabs = global
-    ? [{ id: 'instructions', title: 'Instructions' }, { id: 'skills', title: 'Skills' }, { id: 'maintenance', title: 'Maintenance' }]
+    ? [{ id: 'instructions', title: 'Instructions' }, { id: 'skills', title: 'Skills' }, { id: 'maintenance', title: 'Maintenance' }, { id: 'hosts', title: 'Hosts' }]
     : [{ id: 'profile', title: 'Profile' }, { id: 'instructions', title: 'Instructions' }, { id: 'skills', title: 'Skills' }]
   const [tab, setTab] = useState(() => tabs.some((entry) => entry.id === initialTab) ? initialTab! : tabs[0].id)
   const tabsId = useId()
@@ -62,12 +69,187 @@ function SettingsContent({ bot, bots = [], capabilities, onClose, onBotChange, o
     <SettingsTabPanel key={tab} id={`${tabsId}-tab-${tab}`} labelledBy={`${tabsId}-tab-button-${tab}`}>
       {tab === 'profile' && bot && <ProfilePane key={bot.id} bot={bot} capabilities={capabilities} onBotChange={onBotChange}
         onArchive={(id) => { onArchive(id); onClose() }} />}
-      {tab === 'instructions' && <InstructionsPane key={scopeId ?? 'shared'} id={scopeId} />}
+      {tab === 'instructions' && <InstructionsPane key={scopeId ?? 'shared'} id={scopeId}
+        bot={global ? null : bot} onBotChange={onBotChange} />}
       {tab === 'skills' && <SkillsPane key={scopeId ?? 'shared'} bot={global ? null : bot} onBotChange={onBotChange} />}
       {tab === 'maintenance' && <MaintenancePane capabilities={capabilities} bots={bots} />}
+      {tab === 'hosts' && <HostsPane {...nodeProps} />}
     </SettingsTabPanel>
     </AnimatePresence>
   </>
+}
+
+type HostPaneProps = Pick<SettingsDrawerProps, 'nodes' | 'activeNode' | 'onSelectNode' | 'onCreateNodeEnrollment' | 'onRemoveNode' | 'onRefreshNodes' | 'nodeBinaryURL'>
+
+export function nodePairCommand(enrollment: NodeEnrollment, fallbackUrl: string): string {
+  const url = enrollment.serverUrl || fallbackUrl
+  const quotedUrl = `'${url.replace(/'/g, "'\\''")}'`
+  return `./connect-bots-node pair --server ${quotedUrl}${url.startsWith('http:') ? ' --allow-insecure' : ''}`
+}
+
+export function HostsPane({ nodes = [], activeNode, onSelectNode, onCreateNodeEnrollment, onRemoveNode, onRefreshNodes, nodeBinaryURL }: HostPaneProps) {
+  const [adding, setAdding] = useState(false)
+  const [name, setName] = useState('')
+  const [enrollment, setEnrollment] = useState<NodeEnrollment | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const [copied, setCopied] = useState('')
+  const [removing, setRemoving] = useState<string | null>(null)
+  const [now, setNow] = useState(Date.now())
+  const lifecycle = useRef({ active: true, epoch: 0 })
+  const present = useIsPresent()
+  lifecycle.current.active = present
+  useEffect(() => {
+    lifecycle.current.active = true
+    return () => { lifecycle.current.active = false; lifecycle.current.epoch++ }
+  }, [])
+  useEffect(() => {
+    if (!enrollment || !present) return
+    const timer = window.setInterval(() => setNow(Date.now()), 1000)
+    return () => window.clearInterval(timer)
+  }, [enrollment, present])
+  const paired = enrollment ? nodes.find(node => node.id === enrollment.nodeId && node.online) : null
+  const expiresAt = enrollment ? Date.parse(enrollment.expiresAt) : 0
+  const expired = Boolean(enrollment && (!Number.isFinite(expiresAt) || expiresAt <= now))
+  useEffect(() => {
+    if (!enrollment || paired || expired || !present || !onRefreshNodes) return
+    let refreshing = false
+    const refresh = async () => {
+      if (refreshing) return
+      refreshing = true
+      try { await onRefreshNodes({ background: true }) } catch { /* A transient reconnect is reflected in host status. */ }
+      finally { refreshing = false }
+    }
+    void refresh()
+    const timer = window.setInterval(() => void refresh(), 2500)
+    return () => window.clearInterval(timer)
+  }, [enrollment, paired, expired, present, onRefreshNodes])
+  useEffect(() => {
+    if (!copied) return
+    const timer = window.setTimeout(() => setCopied(''), 1800)
+    return () => window.clearTimeout(timer)
+  }, [copied])
+  async function add(event: FormEvent) {
+    event.preventDefault()
+    if (busy || !name.trim() || !onCreateNodeEnrollment) return
+    const epoch = ++lifecycle.current.epoch
+    setBusy(true); setError('')
+    try {
+      const result = await onCreateNodeEnrollment(name.trim())
+      if (!lifecycle.current.active || epoch !== lifecycle.current.epoch) return
+      setEnrollment(result); setNow(Date.now())
+    } catch (cause) { if (lifecycle.current.active && epoch === lifecycle.current.epoch) setError(errorMessage(cause)) }
+    finally { if (lifecycle.current.active && epoch === lifecycle.current.epoch) setBusy(false) }
+  }
+  async function remove(id: string) {
+    if (busy || !onRemoveNode) return
+    const epoch = ++lifecycle.current.epoch
+    setBusy(true); setError('')
+    try {
+      await onRemoveNode(id)
+      if (!lifecycle.current.active || epoch !== lifecycle.current.epoch) return
+      setRemoving(null)
+    } catch (cause) { if (lifecycle.current.active && epoch === lifecycle.current.epoch) setError(errorMessage(cause)) }
+    finally { if (lifecycle.current.active && epoch === lifecycle.current.epoch) setBusy(false) }
+  }
+  async function copy(value: string, kind: string) {
+    try { await navigator.clipboard.writeText(value); if (lifecycle.current.active) { setCopied(kind); setError('') } }
+    catch { if (lifecycle.current.active) setError('Copy is unavailable here. Select and copy the text below.') }
+  }
+  function reset() { lifecycle.current.epoch++; setAdding(false); setEnrollment(null); setError(''); setCopied(''); setBusy(false) }
+  const command = enrollment ? nodePairCommand(enrollment, typeof window === 'undefined' ? '' : window.location.origin) : ''
+  const remaining = enrollment ? Math.max(0, Math.ceil((expiresAt - now) / 60000)) : 0
+  return <div className="cb-settings-form cb-hosts-pane">
+    <div className="cb-settings-scroll">
+      <AnimatePresence initial={false} mode="wait">
+      {adding ? <SettingsView key="pair-host">
+        <m.button {...controlMotion} type="button" className="cb-settings-text-button cb-settings-back" onClick={reset} disabled={busy}>
+          <ArrowLeft size={15} />All hosts
+        </m.button>
+        {!enrollment ? <form className="cb-host-add-form" onSubmit={add}>
+          <div className="cb-host-pair-heading"><Laptop size={25} /><h3>Add your computer</h3><p>Bots run with the Codex account and files on this host.</p></div>
+          <label className="cb-settings-field">Host name<input value={name} onChange={event => setName(event.target.value)}
+            autoFocus placeholder="My MacBook" required maxLength={80} autoComplete="off" disabled={busy} /></label>
+          <SaveButton busy={busy} disabled={!name.trim() || !onCreateNodeEnrollment}>Continue</SaveButton>
+        </form> : paired ? <div className="cb-host-pair-success" role="status">
+          <span className="cb-host-success-icon"><Check size={24} /></span><h3>{paired.name} is connected</h3>
+          <p>You can now create bots and use this computer's Codex.</p>
+          <m.button {...controlMotion} type="button" className="cb-settings-button cb-settings-button--primary"
+            onClick={() => { onSelectNode?.(paired.id); reset() }}>Use this host</m.button>
+        </div> : expired ? <div className="cb-host-pair-success" role="status"><Clock3 size={25} /><h3>Pairing code expired</h3>
+          <p>Generate a new code to connect your computer.</p><m.button {...controlMotion} type="button" className="cb-settings-button"
+            onClick={() => { setEnrollment(null); setError('') }}>Try again</m.button>
+        </div> : <div className="cb-host-pair-steps">
+          <div className="cb-host-pair-heading"><Laptop size={25} /><h3>Connect {name.trim()}</h3>
+            <p>Open Terminal on your Mac and follow these three steps.</p></div>
+          <section className="cb-host-pair-step"><span className="cb-host-step-number">1</span><div><h4>Download the node</h4>
+            <div className="cb-host-downloads">{(['arm64', 'amd64'] as const).map(arch => <m.a key={arch} {...controlMotion}
+              className="cb-settings-button" href={nodeBinaryURL?.('darwin', arch)} download="connect-bots-node"
+              aria-disabled={!nodeBinaryURL || undefined}><Download size={14} />{arch === 'arm64' ? 'Apple silicon' : 'Intel Mac'}</m.a>)}</div>
+            <p>Make it executable: <code>chmod +x connect-bots-node*</code></p></div>
+          </section>
+          <section className="cb-host-pair-step"><span className="cb-host-step-number">2</span><div><h4>Run the pairing command</h4>
+            <div className="cb-host-copy-block"><code>{command}</code><m.button {...controlMotion} type="button"
+              onClick={() => void copy(command, 'command')} aria-label="Copy pairing command" title="Copy command">
+              {copied === 'command' ? <Check size={15} /> : <Copy size={15} />}</m.button></div>
+            <p>Use the downloaded filename if it includes an architecture suffix.</p></div>
+          </section>
+          <section className="cb-host-pair-step"><span className="cb-host-step-number">3</span><div><h4>Enter this code when asked</h4>
+            <div className="cb-host-pair-code"><input readOnly value={enrollment.code} aria-label="Pairing code" spellCheck={false}
+              onFocus={event => event.target.select()} /><m.button {...controlMotion} type="button" onClick={() => void copy(enrollment.code, 'code')}
+                aria-label="Copy pairing code" title="Copy code">{copied === 'code' ? <Check size={17} /> : <Copy size={17} />}</m.button></div>
+            <p><LoaderCircle size={12} className="cb-settings-spin" />Waiting for your host · expires in {remaining} {remaining === 1 ? 'minute' : 'minutes'}</p>
+          </div></section>
+        </div>}
+      </SettingsView> : <SettingsView key="host-list">
+        <div className="cb-hosts-heading"><div><h3>Your hosts</h3><p>Choose where your bots run.</p></div>
+          <m.button {...controlMotion} type="button" className="cb-settings-button" onClick={() => { setAdding(true); setName(''); setError('') }}
+            disabled={!onCreateNodeEnrollment}><Plus size={15} />Add host</m.button></div>
+        <div className="cb-host-list">{nodes.map(node => <m.div key={node.id} className={`cb-host-entry${activeNode?.id === node.id ? ' is-active' : ''}`}
+          layout="position" transition={motionSpring.layout}>
+          <div className="cb-host-row"><span className="cb-host-icon"><Monitor size={19} /></span>
+            <div className="cb-host-info"><strong>{node.name}{node.local && <small>This server</small>}</strong>
+              <span>{[node.hostname, node.os || node.platform, node.arch].filter(Boolean).join(' · ') || (node.local ? 'Built-in host' : 'Remote host')}</span>
+            </div><span className={`cb-host-online${node.online ? ' is-online' : ''}`}><i />{node.online ? 'Online' : 'Offline'}</span>
+            {!node.local && <m.button {...(!busy ? controlMotion : {})} type="button" className="cb-settings-icon-button cb-host-remove"
+              onClick={() => { setRemoving(removing === node.id ? null : node.id); setError('') }} aria-label={`Remove ${node.name}`} disabled={busy}><Trash2 size={16} /></m.button>}
+          </div>
+          {node.error && <p className="cb-host-error">{node.error}</p>}
+          <AnimatePresence initial={false}>{removing === node.id && <HostRemovalConfirmation key={node.id} name={node.name} busy={busy}
+            onCancel={() => setRemoving(null)} onRemove={() => void remove(node.id)} />}</AnimatePresence>
+        </m.div>)}</div>
+        {!nodes.length && <p className="cb-settings-empty">Your hosts will appear here.</p>}
+      </SettingsView>}
+      </AnimatePresence>
+      <Notice error={error} />
+    </div>
+    <footer className="cb-settings-footer"><span className="cb-settings-hint">Remote hosts use their own Codex login and workspace.</span>
+      {onRefreshNodes && !adding && <m.button {...(!busy ? controlMotion : {})} type="button" className="cb-settings-icon-button"
+        aria-label="Refresh hosts" disabled={busy} onClick={async () => {
+          setBusy(true); setError('')
+          try { await onRefreshNodes() } catch (cause) { if (lifecycle.current.active) setError(errorMessage(cause)) }
+          finally { if (lifecycle.current.active) setBusy(false) }
+        }}><RefreshCw size={17} className={busy ? 'cb-settings-spin' : ''} /></m.button>}
+    </footer>
+  </div>
+}
+
+function HostRemovalConfirmation({ name, busy, onCancel, onRemove }: {
+  name: string; busy: boolean; onCancel: () => void; onRemove: () => void;
+}) {
+  const present = useIsPresent()
+  const reduced = useReducedMotion()
+  const disabled = busy || !present
+  return <m.div className="cb-host-remove-confirm" inert={!present} aria-hidden={!present}
+    initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }}
+    transition={reduced ? { duration: 0 } : motionTransition.disclosure}>
+    <p>Disconnect {name}? Its bots and files stay on that computer.</p><div className="cb-settings-inline-actions">
+      <m.button {...(!disabled ? controlMotion : {})} type="button" className="cb-settings-button"
+        onClick={() => { if (!disabled) onCancel() }} disabled={disabled}>Cancel</m.button>
+      <m.button {...(!disabled ? controlMotion : {})} type="button" className="cb-settings-button cb-settings-button--danger"
+        onClick={() => { if (!disabled) onRemove() }} disabled={disabled}>{busy ? <LoaderCircle size={14} className="cb-settings-spin" /> : <Trash2 size={14} />}Remove host</m.button>
+    </div>
+  </m.div>
 }
 
 function SettingsTabPanel({ id, labelledBy, children }: { id: string; labelledBy: string; children: ReactNode }) {
@@ -103,7 +285,7 @@ function ProfilePane({ bot, capabilities, onBotChange, onArchive }: {
     if (busy) return
     setBusy(true); setError(''); setSuccess('')
     try {
-      const updated = await api.updateBot(bot.id, botPayload(draft))
+      const updated = await api.updateBot(bot.id, botPayload(draft, { includeRole: false }))
       setDraft(draftFromBot(updated, capabilities)); onBotChange(updated); setSuccess('Settings saved.')
     } catch (cause) { setError(errorMessage(cause)) }
     finally { setBusy(false) }
@@ -115,7 +297,8 @@ function ProfilePane({ bot, capabilities, onBotChange, onArchive }: {
   }
   return <form onSubmit={save} className="cb-settings-form">
     <div className="cb-settings-scroll">
-      <BotFields value={draft} onChange={(next) => { setDraft(next); setSuccess('') }} capabilities={capabilities} running={isWorking(bot.status)} />
+      <BotFields value={draft} onChange={(next) => { setDraft(next); setSuccess('') }} capabilities={capabilities}
+        running={isWorking(bot.status)} includeRole={false} />
       {bot.telegram?.enabled && <div className={`cb-settings-notice cb-settings-connection-status ${bot.telegram.status === 'error' ? 'cb-settings-notice--error' : ''}`}
         role={bot.telegram.status === 'error' ? 'alert' : 'status'}>
         <span>{telegramLabel(bot.telegram)}</span>{bot.telegram.error && <p>{bot.telegram.error}</p>}
@@ -175,7 +358,10 @@ export function reconcileBotDraft(current: BotDraft, previous: BotDraft, next: B
   return changed ? merged : current
 }
 
-function InstructionsPane({ id }: { id?: string }) {
+function InstructionsPane({ id, bot, onBotChange }: { id?: string; bot?: Bot | null; onBotChange?: (bot: Bot) => void }) {
+  const sourceRole = useRef(bot?.role ?? '')
+  const [role, setRole] = useState(bot?.role ?? '')
+  const [savedRole, setSavedRole] = useState(bot?.role ?? '')
   const [content, setContent] = useState('')
   const [saved, setSaved] = useState('')
   const [path, setPath] = useState('')
@@ -183,6 +369,13 @@ function InstructionsPane({ id }: { id?: string }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
+  useEffect(() => {
+    const next = bot?.role ?? ''
+    const previous = sourceRole.current
+    sourceRole.current = next
+    setRole(current => current === previous ? next : current)
+    setSavedRole(next)
+  }, [bot?.role])
   useEffect(() => {
     let alive = true
     api.instructions(id).then((result) => {
@@ -197,24 +390,37 @@ function InstructionsPane({ id }: { id?: string }) {
     if (busy) return
     setBusy(true); setError(''); setSuccess('')
     try {
-      const result = await api.saveInstructions(id, content)
-      setContent(result.content); setSaved(result.content); setPath(result.path); setSuccess('Instructions saved.')
+      if (bot && role.trim() !== savedRole) {
+        const updated = await api.updateBot(bot.id, { role: role.trim() })
+        sourceRole.current = updated.role
+        setRole(updated.role); setSavedRole(updated.role); onBotChange?.(updated)
+      }
+      if (content !== saved) {
+        const result = await api.saveInstructions(id, content)
+        setContent(result.content); setSaved(result.content); setPath(result.path)
+      }
+      setSuccess('Instructions saved.')
     } catch (cause) { setError(errorMessage(cause)) }
     finally { setBusy(false) }
   }
   return <form onSubmit={save} className="cb-settings-form">
     <div className="cb-settings-scroll">
+      {bot && <label className="cb-settings-field cb-settings-purpose">Purpose
+        <textarea value={role} onChange={event => { setRole(event.target.value); setSuccess('') }}
+          rows={2} maxLength={4000} disabled={busy} placeholder="What this bot helps with and the results it owns" />
+        <small>A short description of this bot's responsibility.</small>
+      </label>}
       <div className="cb-settings-intro"><FileText size={20} />
-        <p>{id ? 'AGENTS.md defines persistent rules for this bot. Shared instructions and user skills are also available.'
+        <p>{id ? 'AGENTS.md defines detailed working rules for this bot. Shared instructions and user skills are also available.'
           : 'This AGENTS.md adds shared rules to all bots. It is stored in a separate app folder.'}</p>
       </div>
       {loading ? <Loading /> : !error || path ? <MarkdownEditor content={content} onChange={(next) => { setContent(next); setSuccess('') }} readOnly={busy} label="AGENTS.md"
-        placeholder="Describe the role, habits, and working rules…" /> : null}
+        placeholder="Describe habits, constraints, and working rules…" /> : null}
       {path && <div className="cb-settings-location"><FolderOpen size={15} /><span>{path}</span></div>}
       <Notice error={error} success={success} />
     </div>
     <footer className="cb-settings-footer"><span className="cb-settings-hint">Changes apply to future messages.</span>
-      <SaveButton busy={busy} disabled={loading || !path || content === saved} /></footer>
+      <SaveButton busy={busy} disabled={loading || !path || (content === saved && (!bot || role.trim() === savedRole))} /></footer>
   </form>
 }
 

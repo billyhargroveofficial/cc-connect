@@ -18,6 +18,8 @@ export interface TranscriptMessage {
   source?: string;
   artifact?: boolean;
   time: string;
+  seq?: number;
+  position?: number;
 }
 
 export interface Activity {
@@ -35,6 +37,7 @@ export interface Activity {
   endedAt?: string;
   aliases: string[];
   native: boolean;
+  position?: number;
   thread?: TranscriptTurn;
 }
 
@@ -78,6 +81,76 @@ export interface TranscriptTurn {
   requests: UserRequest[];
   notices: string[];
   events: JournalEvent[];
+}
+
+export type TranscriptSegment =
+  | { kind: 'batch'; id: string; activities: Activity[]; requests: UserRequest[] }
+  | { kind: 'progress'; id: string; activity: Activity }
+  | { kind: 'message'; id: string; message: TranscriptMessage }
+  | { kind: 'request'; id: string; request: UserRequest };
+
+export type TranscriptServiceSegment = Extract<TranscriptSegment, { kind: 'batch' | 'progress' }>;
+export type TranscriptDisplaySegment = TranscriptSegment
+  | { kind: 'history'; id: string; segments: TranscriptServiceSegment[] };
+
+/** Narration separates adjacent action batches. Start sequence, rather than
+ * completion time, keeps parallel calls in the batch where they began. */
+export function buildTurnSegments(turn: TranscriptTurn): TranscriptSegment[] {
+  const entries = [
+    ...turn.activities.map(activity => ({ kind: 'activity' as const, value: activity,
+      seq: activity.seq ?? 0, position: activity.position ?? 0 })),
+    ...turn.responses.map(message => ({ kind: 'message' as const, value: message,
+      seq: message.seq ?? Number.MAX_SAFE_INTEGER, position: message.position ?? 0 })),
+    ...turn.requests.map(request => ({ kind: 'request' as const, value: request,
+      seq: request.seq ?? 0, position: 0 })),
+  ].sort((left, right) => left.seq - right.seq || left.position - right.position);
+  const segments: TranscriptSegment[] = [];
+  let batch: Extract<TranscriptSegment, { kind: 'batch' }> | undefined;
+  for (const entry of entries) {
+    if (entry.kind === 'message') {
+      batch = undefined;
+      segments.push({ kind: 'message', id: entry.value.id, message: entry.value });
+    } else if (entry.kind === 'activity' && entry.value.kind === 'commentary') {
+      batch = undefined;
+      // An empty streaming start establishes the boundary, without an empty
+      // dialogue row. Its first delta fills the same stable progress key.
+      if (entry.value.text.trim()) segments.push({ kind: 'progress', id: entry.value.id, activity: entry.value });
+    } else if (entry.kind === 'request' && !entry.value.resolved) {
+      batch = undefined;
+      segments.push({ kind: 'request', id: entry.value.id, request: entry.value });
+    } else {
+      if (!batch) {
+        batch = { kind: 'batch', id: `batch-${entry.value.id}`, activities: [], requests: [] };
+        segments.push(batch);
+      }
+      if (entry.kind === 'activity') batch.activities.push(entry.value);
+      else batch.requests.push(entry.value);
+    }
+  }
+  return segments;
+}
+
+/** Live narration stays in the dialogue. After the turn settles, one lazy
+ * disclosure takes its place immediately before the final answer. Messages,
+ * file publications and unresolved requests always keep their own rows. */
+export function collapseTurnActivity(turn: TranscriptTurn, segments: TranscriptSegment[]): TranscriptDisplaySegment[] {
+  if (!['completed', 'complete'].includes(turn.status)) return segments;
+  let finalIndex = -1;
+  for (let index = segments.length - 1; index >= 0; index--) {
+    const segment = segments[index];
+    if (segment.kind === 'message' && !segment.message.artifact) { finalIndex = index; break; }
+  }
+  if (finalIndex < 0) return segments;
+  const history = segments.filter((segment, index): segment is TranscriptServiceSegment => index < finalIndex
+    && (segment.kind === 'batch' || segment.kind === 'progress'));
+  if (!history.length) return segments;
+  const visible: TranscriptDisplaySegment[] = [];
+  for (let index = 0; index < segments.length; index++) {
+    const segment = segments[index];
+    if (index === finalIndex) visible.push({ kind: 'history', id: `history-${turn.id}`, segments: history });
+    if (index >= finalIndex || segment.kind !== 'batch' && segment.kind !== 'progress') visible.push(segment);
+  }
+  return visible;
 }
 
 export function record(value: unknown): RecordValue {
@@ -267,7 +340,7 @@ function attachments(value: unknown): TranscriptAttachment[] {
 function message(event: JournalEvent, data: RecordValue): TranscriptMessage {
   return {
     id: `message-${event.seq}`, role: string(data.role) || 'assistant', content: string(data.content) || string(data.caption),
-    attachments: attachments(data.attachments), source: string(data.source) || undefined, time: event.time,
+    attachments: attachments(data.attachments), source: string(data.source) || undefined, time: event.time, seq: event.seq,
     artifact: data.artifact === true || data.source === 'files',
   };
 }
@@ -332,17 +405,25 @@ function setCodexItem(turn: TranscriptTurn, event: JournalEvent, item: RecordVal
   if (type === 'agentMessage' && item.phase !== 'commentary') {
     const existing = turn.responses.find(v => v.id === id);
     if (existing) existing.content = string(item.text);
-    else turn.responses.push({ id, role: 'assistant', content: string(item.text), attachments: [], time: event.time });
+    else turn.responses.push({ id, role: 'assistant', content: string(item.text), attachments: [], time: event.time, seq: event.seq });
     return;
   }
+  // A recovered journal may begin with deltas before its commentary snapshot.
+  // Once phase is known, move that provisional response into narration.
+  const provisional = type === 'agentMessage' ? turn.responses.find(response => response.id === id) : undefined;
+  if (provisional) turn.responses = turn.responses.filter(response => response !== provisional);
   const activity = addActivity(turn, event, id, type === 'agentMessage' ? 'commentary' : itemKind(type));
+  if (provisional) {
+    activity.seq = provisional.seq ?? activity.seq;
+    activity.startedAt = provisional.time;
+  }
   if (activity.kind === 'tool' || activity.kind === 'search') activity.callId = string(item.id) || undefined;
   activity.data = { ...activity.data, ...item };
   activity.status = normalizedStatus(item.status) || (completed ? 'completed' : 'running');
   if (completed) activity.endedAt = event.time;
   switch (type) {
     case 'agentMessage':
-      activity.title = 'Progress message'; activity.text = string(item.text); break;
+      activity.title = 'Progress message'; activity.text = string(item.text) || (!completed ? provisional?.content || activity.text : ''); break;
     case 'reasoning':
       activity.title = 'Thinking';
       // Summaries and content are distinct provider-exposed fields. Preserve
@@ -417,7 +498,7 @@ function codexNative(turn: TranscriptTurn, event: JournalEvent, data: RecordValu
     else {
       const response = turn.responses.find(v => v.id === id);
       if (response) response.content += string(params.delta);
-      else turn.responses.push({ id, role: 'assistant', content: string(params.delta), attachments: [], time: event.time });
+      else turn.responses.push({ id, role: 'assistant', content: string(params.delta), attachments: [], time: event.time, seq: event.seq });
     }
     return;
   }
@@ -518,11 +599,12 @@ function piBlock(turn: TranscriptTurn, event: JournalEvent, messageId: string, i
     case 'text': {
       const response = turn.responses.find(v => v.id === id);
       if (response) response.content = string(block.text);
-      else turn.responses.push({ id, role: 'assistant', content: string(block.text), attachments: [], time: event.time });
+      else turn.responses.push({ id, role: 'assistant', content: string(block.text), attachments: [], time: event.time, seq: event.seq, position: index });
       break;
     }
     case 'thinking': {
       const activity = addActivity(turn, event, id, 'thinking');
+      activity.position = index;
       activity.title = 'Thinking'; activity.text = string(block.thinking);
       activity.status = complete ? 'completed' : 'running';
       // Retain signatures in the raw journal, not the visual reasoning block.
@@ -530,6 +612,7 @@ function piBlock(turn: TranscriptTurn, event: JournalEvent, messageId: string, i
     }
     case 'toolCall': {
       const activity = addActivity(turn, event, `pi-tool-${string(block.id) || id}`, 'tool');
+      activity.position = index;
       activity.callId = string(block.id) || undefined;
       activity.title = string(block.name) || 'Tool'; activity.aliases = [activity.title];
       activity.input = block.arguments; activity.data = { ...activity.data, ...block }; break;
@@ -567,7 +650,7 @@ function piNative(turn: TranscriptTurn, event: JournalEvent, data: RecordValue, 
       if (update.type === 'text_delta') {
         const response = turn.responses.find(v => v.id === id);
         if (response) response.content += string(update.delta);
-        else turn.responses.push({ id, role: 'assistant', content: string(update.delta), attachments: [], time: event.time });
+        else turn.responses.push({ id, role: 'assistant', content: string(update.delta), attachments: [], time: event.time, seq: event.seq, position: index });
       } else if (update.type === 'thinking_delta') {
         const activity = addActivity(turn, event, id, 'thinking');
         activity.title = 'Thinking'; activity.text += string(update.delta);
@@ -778,10 +861,10 @@ function finalize(turn: TranscriptTurn) {
   // Older adapters expose only text deltas. Keep those as one response when no
   // native item or finalized product message exists.
   if (!nativeResponses.length && !hasCanonicalText) {
-    const fragments = turn.events.filter(v => v.type === 'agent').map(v => record(v.data))
-      .filter(v => field(v, 'type') === 'text').map(v => string(field(v, 'content')));
+    const fragments = turn.events.filter(event => event.type === 'agent' && field(record(event.data), 'type') === 'text');
     if (fragments.length) turn.responses.push({
-      id: `fallback-text-${turn.id}`, role: 'assistant', content: fragments.join(''), attachments: [], time: turn.time,
+      id: `fallback-text-${turn.id}`, role: 'assistant', content: fragments.map(event => string(field(record(event.data), 'content'))).join(''),
+      attachments: [], time: fragments[0].time, seq: fragments[0].seq,
     });
   }
   turn.responses = turn.responses.filter(v => v.content.trim() || v.attachments.length);
@@ -803,7 +886,21 @@ function finalize(turn: TranscriptTurn) {
 /** Rebuilds a view from an append-only journal. Replay, overlap and unordered
  * snapshot/SSE delivery are safe: sequence numbers are the deduplication key.
  * No raw event is changed or discarded from its turn's journal. */
-export function buildTranscript(events: JournalEvent[], botId?: string): TranscriptTurn[] {
+interface CachedTurn { events: JournalEvent[]; root?: string; decisions: string; turn: TranscriptTurn }
+
+/** Scoped to one mounted conversation. Unchanged turns retain their identity,
+ * so streaming only rebuilds the affected turn and React can skip old replies.
+ * Snapshot replacements, late root metadata and shared decisions invalidate it. */
+export function createTranscriptProjector() {
+  const cache = new Map<string, CachedTurn>();
+  let owner: string | undefined;
+  return (events: JournalEvent[], botId?: string) => {
+    if (owner !== botId) { cache.clear(); owner = botId; }
+    return buildTranscript(events, botId, cache);
+  };
+}
+
+export function buildTranscript(events: JournalEvent[], botId?: string, cache?: Map<string, CachedTurn>): TranscriptTurn[] {
   const unique = new Map<number, JournalEvent>();
   for (const event of events) {
     if (!botId || event.botId === botId) unique.set(event.seq, event);
@@ -814,10 +911,8 @@ export function buildTranscript(events: JournalEvent[], botId?: string): Transcr
   for (const operation of manualCompactions.values()) {
     if (operation.backend === 'codex' && operation.threadId) roots.set(operation.id, operation.threadId);
   }
+  const groups = new Map<string, JournalEvent[]>();
   const turns: TranscriptTurn[] = [];
-  const byId = new Map<string, TranscriptTurn>();
-  const piStates = new Map<string, PiState>();
-  const normalizedStates = new Map<string, NormalizedState>();
   const resolvedRequests = new Map<string, string>();
   const backgroundCompactions = new Map<string, string>();
   for (const event of ordered) {
@@ -840,98 +935,119 @@ export function buildTranscript(events: JournalEvent[], botId?: string): Transcr
         backgroundCompactions.delete(event.botId);
       }
     }
-    let turn = byId.get(id);
-    if (!turn) {
-      turn = newTurn(id, event.time, event.turnId ? 'running' : 'completed');
-      byId.set(id, turn); turns.push(turn);
-      piStates.set(id, { messageIndex: 0, activeMessage: 'pi-message-0' });
-      normalizedStates.set(id, { pending: new Map() });
+    const group = groups.get(id);
+    if (group) group.push(event); else groups.set(id, [event]);
+  }
+  const decisions = JSON.stringify([...resolvedRequests]);
+  const reused = new Set<string>();
+  for (const [id, group] of groups) {
+    const previous = cache?.get(id);
+    if (previous && previous.root === roots.get(id) && previous.decisions === decisions
+      && previous.events.length === group.length && group.every((event, index) => event === previous.events[index])) {
+      turns.push(previous.turn);
+      reused.add(id);
+      continue;
     }
-    turn.events.push(event);
-    switch (event.type) {
-      case 'message':
-        if (data.role === 'user' && data.source === 'goal_context') {
-          const activity = addActivity(turn, event, `goal-context-${event.seq}`, 'event');
-          activity.title = 'Goal context'; activity.status = 'completed'; activity.endedAt = event.time;
-          activity.input = { ...data }; activity.data = { ...data };
+    const first = group[0];
+    const turn = newTurn(id, first.time, first.turnId ? 'running' : 'completed');
+    const piState: PiState = { messageIndex: 0, activeMessage: 'pi-message-0' };
+    const normalizedState: NormalizedState = { pending: new Map() };
+    turns.push(turn);
+    for (const event of group) {
+      const data = record(event.data);
+      turn.events.push(event);
+      switch (event.type) {
+        case 'message':
+          if (data.role === 'user' && data.source === 'goal_context') {
+            const activity = addActivity(turn, event, `goal-context-${event.seq}`, 'event');
+            activity.title = 'Goal context'; activity.status = 'completed'; activity.endedAt = event.time;
+            activity.input = { ...data }; activity.data = { ...data };
+          }
+          else if (data.role === 'user') turn.users.push(message(event, data));
+          else if (data.role === 'assistant') turn.responses.push(message(event, data));
+          else if (string(data.content)) turn.notices.push(string(data.content));
+          break;
+        case 'native':
+          turn.backend ||= string(data.backend);
+          if (data.backend === 'pi') piNative(turn, event, data, piState);
+          else scopedCodexNative(turn, event, data, roots.get(id));
+          break;
+        case 'agent': normalizedAgent(turn, event, data, normalizedState); break;
+        case 'turn':
+          turn.status = normalizedStatus(data.status) || turn.status;
+          turn.backend = string(data.backend) || turn.backend; turn.model = string(data.model) || turn.model;
+          turn.effort = string(data.effort) || turn.effort;
+          if (typeof data.serviceTier === 'string') turn.serviceTier = data.serviceTier;
+          turn.outputTokens = finiteNumber(data.outputTokens) ?? turn.outputTokens;
+          turn.generationMs = finiteNumber(data.generationMs) ?? turn.generationMs;
+          turn.tokensPerSecond = finiteNumber(data.tokensPerSecond) ?? turn.tokensPerSecond;
+          turn.error = string(data.error) || turn.error;
+          break;
+        case 'goal': {
+          if (data.method === 'get') break;
+          const result = record(data.result);
+          const value = 'goal' in data ? data.goal : 'goal' in result ? result.goal : data;
+          const activity = addActivity(turn, event, 'codex-goal', 'goal');
+          activity.title = value === null || data.method === 'clear' ? 'Goal cleared' : 'Goal'; activity.data = record(value);
+          activity.text = string(activity.data.objective); activity.status = normalizedStatus(activity.data.status) || 'active';
+          if (value === null || data.method === 'clear') activity.status = 'completed';
+          break;
         }
-        else if (data.role === 'user') turn.users.push(message(event, data));
-        else if (data.role === 'assistant') turn.responses.push(message(event, data));
-        else if (string(data.content)) turn.notices.push(string(data.content));
-        break;
-      case 'native':
-        turn.backend ||= string(data.backend);
-        if (data.backend === 'pi') piNative(turn, event, data, piStates.get(id)!);
-        else scopedCodexNative(turn, event, data, roots.get(id));
-        break;
-      case 'agent': normalizedAgent(turn, event, data, normalizedStates.get(id)!); break;
-      case 'turn':
-        turn.status = normalizedStatus(data.status) || turn.status;
-        turn.backend = string(data.backend) || turn.backend; turn.model = string(data.model) || turn.model;
-        turn.effort = string(data.effort) || turn.effort;
-        if (typeof data.serviceTier === 'string') turn.serviceTier = data.serviceTier;
-        turn.outputTokens = finiteNumber(data.outputTokens) ?? turn.outputTokens;
-        turn.generationMs = finiteNumber(data.generationMs) ?? turn.generationMs;
-        turn.tokensPerSecond = finiteNumber(data.tokensPerSecond) ?? turn.tokensPerSecond;
-        turn.error = string(data.error) || turn.error;
-        break;
-      case 'goal': {
-        if (data.method === 'get') break;
-        const result = record(data.result);
-        const value = 'goal' in data ? data.goal : 'goal' in result ? result.goal : data;
-        const activity = addActivity(turn, event, 'codex-goal', 'goal');
-        activity.title = value === null || data.method === 'clear' ? 'Goal cleared' : 'Goal'; activity.data = record(value);
-        activity.text = string(activity.data.objective); activity.status = normalizedStatus(activity.data.status) || 'active';
-        if (value === null || data.method === 'clear') activity.status = 'completed';
-        break;
-      }
-      case 'goal_action': {
-        const activity = addActivity(turn, event, `goal-action-${event.seq}`, 'event');
-        activity.title = 'Goal management'; activity.status = 'completed'; activity.data = data;
-        break;
-      }
-      case 'compact_action': {
-        const activity = addActivity(turn, event, `compact-action-${string(data.requestId) || event.seq}`, 'event');
-        activity.title = 'Context compaction';
-        activity.status = data.status === 'started' ? 'starting' : normalizedStatus(data.status) || 'starting';
-        activity.data = { ...activity.data, ...data }; activity.text = string(data.error);
-        turn.backend = string(data.backend) || turn.backend;
-        turn.status = activity.status;
-        if (isFailed(activity.status)) turn.error = string(data.error) || 'Unable to compact context';
-        if (terminal(activity.status)) activity.endedAt = event.time;
-        break;
-      }
-      case 'handoff': {
-        const activity = addActivity(turn, event, `handoff-${event.seq}`, 'event');
-        activity.title = 'Context transferred'; activity.status = 'completed'; activity.endedAt = event.time;
-        const from = string(data.from), to = string(data.to);
-        activity.text = from && to ? `${from} → ${to}` : '';
-        // History belongs in the expanded receipt, never the visible summary.
-        // Keep all provider/thread metadata available in its raw details too.
-        activity.output = string(data.content) || string(data.message);
-        activity.data = { ...data };
-        break;
-      }
-      case 'system':
-      case 'permission': {
-        const content = string(data.content);
-        if (content && content !== 'Session connected.' && content !== 'Session history saved.') turn.notices.push(content);
-        const requestId = string(data.requestId);
-        const request = turn.requests.find(v => v.id === requestId);
-        if (request && (data.behavior || data.status === 'resolved')) {
-          request.resolved = true; request.behavior = string(data.behavior);
+        case 'goal_action': {
+          const activity = addActivity(turn, event, `goal-action-${event.seq}`, 'event');
+          activity.title = 'Goal management'; activity.status = 'completed'; activity.data = data;
+          break;
         }
-        break;
+        case 'compact_action': {
+          const activity = addActivity(turn, event, `compact-action-${string(data.requestId) || event.seq}`, 'event');
+          activity.title = 'Context compaction';
+          activity.status = data.status === 'started' ? 'starting' : normalizedStatus(data.status) || 'starting';
+          activity.data = { ...activity.data, ...data }; activity.text = string(data.error);
+          turn.backend = string(data.backend) || turn.backend;
+          turn.status = activity.status;
+          if (isFailed(activity.status)) turn.error = string(data.error) || 'Unable to compact context';
+          if (terminal(activity.status)) activity.endedAt = event.time;
+          break;
+        }
+        case 'handoff': {
+          const activity = addActivity(turn, event, `handoff-${event.seq}`, 'event');
+          activity.title = 'Context transferred'; activity.status = 'completed'; activity.endedAt = event.time;
+          const from = string(data.from), to = string(data.to);
+          activity.text = from && to ? `${from} → ${to}` : '';
+          // History belongs in the expanded receipt, never the visible summary.
+          // Keep all provider/thread metadata available in its raw details too.
+          activity.output = string(data.content) || string(data.message);
+          activity.data = { ...data };
+          break;
+        }
+        case 'system':
+        case 'permission': {
+          const content = string(data.content);
+          if (content && content !== 'Session connected.' && content !== 'Session history saved.') turn.notices.push(content);
+          const requestId = string(data.requestId);
+          const request = turn.requests.find(v => v.id === requestId);
+          if (request && (data.behavior || data.status === 'resolved')) {
+            request.resolved = true; request.behavior = string(data.behavior);
+          }
+          break;
+        }
       }
     }
   }
-  turns.forEach(turn => {
+  function resolveRequests(turn: TranscriptTurn) {
     for (const request of turn.requests) {
       if (resolvedRequests.has(request.id)) {
         request.resolved = true; request.behavior = resolvedRequests.get(request.id);
       }
     }
+    for (const activity of turn.activities) if (activity.thread) resolveRequests(activity.thread);
+  }
+  turns.forEach(turn => {
+    if (reused.has(turn.id)) return;
+    resolveRequests(turn);
     finalize(turn);
+    cache?.set(turn.id, { events: groups.get(turn.id)!, root: roots.get(turn.id), decisions, turn });
   });
+  if (cache) for (const id of cache.keys()) if (!groups.has(id)) cache.delete(id);
   return turns;
 }

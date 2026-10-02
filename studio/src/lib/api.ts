@@ -8,6 +8,11 @@ import type {
   GoalSnapshot,
   Instructions,
   Maintenance,
+  MessageMode,
+  MessageQueueSnapshot,
+  MessageReceipt,
+  NodeEnrollment,
+  NodeInfo,
   Skill,
 } from "./types";
 const BASE = "/api/studio";
@@ -26,10 +31,24 @@ export interface AccountCredentials {
   username: string;
   password: string;
 }
+export interface WorkspaceBinding {
+  accountId?: string;
+  nodeId?: string;
+}
 let activeAccount: string | null = null;
+let activeNode = "local";
 const accountChangedListeners = new Set<(accountId: string) => void>();
 const publicPaths = new Set(["/session", "/login", "/register", "/health"]);
-export function setApiAccount(accountId: string | null) { activeAccount = accountId; }
+export function setApiAccount(accountId: string | null) {
+  if (accountId !== activeAccount) activeNode = "local";
+  activeAccount = accountId;
+}
+export function setApiNode(nodeId: string | null) { activeNode = nodeId || "local"; }
+const workspacePath = (path: string) => {
+  const pathname = path.split("?")[0];
+  return !publicPaths.has(pathname) && pathname !== "/logout" &&
+    pathname !== "/nodes" && !pathname.startsWith("/nodes/");
+};
 export function onApiAccountChanged(listener: (accountId: string) => void) {
   accountChangedListeners.add(listener);
   return () => { accountChangedListeners.delete(listener); };
@@ -55,6 +74,7 @@ export async function request<T>(
   path: string,
   options: RequestInit = {},
   expectedAccount?: string,
+  expectedNode?: string,
 ): Promise<T> {
   const headers = new Headers(options.headers);
   const protectedPath = !publicPaths.has(path.split("?")[0]);
@@ -62,6 +82,7 @@ export async function request<T>(
   if (protectedPath && accountId) headers.set("X-Connect-Bots-Account", accountId);
   else if (protectedPath && path !== "/logout")
     throw new ApiError("Sign in again to open this workspace.", 401);
+  if (workspacePath(path)) headers.set("X-Connect-Bots-Node", expectedNode || activeNode);
   if (
     options.body &&
     !(options.body instanceof FormData) &&
@@ -99,11 +120,11 @@ export async function request<T>(
   }
   return data as T;
 }
-function json<T>(path: string, method: string, body?: unknown, expectedAccount?: string) {
+function json<T>(path: string, method: string, body?: unknown, expectedAccount?: string, expectedNode?: string) {
   return request<T>(path, {
     method,
     body: body === undefined ? undefined : JSON.stringify(body),
-  }, expectedAccount);
+  }, expectedAccount, expectedNode);
 }
 const botPath = (id: string) => `/bots/${encodeURIComponent(id)}`;
 const scopePath = (id?: string) => (id ? botPath(id) : "/user");
@@ -114,23 +135,40 @@ export const api = {
   register: (credentials: AccountCredentials) =>
     json<StudioSession>("/register", "POST", credentials),
   logout: (expectedAccount?: string) => json<void>("/logout", "POST", undefined, expectedAccount),
-  bots: () => request<{ bots: Bot[] }>("/bots"),
-  createBot: (fields: Partial<Bot>) => json<Bot>("/bots", "POST", fields),
+  nodes: (expectedAccount?: string) => request<{ nodes: NodeInfo[] }>("/nodes", {}, expectedAccount),
+  createNodeEnrollment: (name: string) =>
+    json<NodeEnrollment>("/nodes/enrollments", "POST", { name }),
+  removeNode: (id: string) => json<void>(`/nodes/${encodeURIComponent(id)}`, "DELETE"),
+  bots: (nodeId?: string, signal?: AbortSignal, expectedAccount?: string) =>
+    request<{ bots: Bot[] }>("/bots", { signal }, expectedAccount, nodeId),
+  createBot: (fields: Partial<Bot>, nodeId?: string) =>
+    json<Bot>("/bots", "POST", fields, undefined, nodeId),
   updateBot: (id: string, fields: Partial<Bot>) =>
     json<Bot>(botPath(id), "PATCH", fields),
   archiveBot: (id: string) => json<void>(botPath(id), "DELETE"),
-  capabilities: (botId?: string, signal?: AbortSignal) =>
+  capabilities: (botId?: string, signal?: AbortSignal, nodeId?: string) =>
     request<Capabilities>(
       `/capabilities${botId ? `?botId=${encodeURIComponent(botId)}` : ""}`,
       { signal },
+      undefined,
+      nodeId,
     ),
   events: (id: string, after = 0) =>
     request<{ events: Event[] }>(`${botPath(id)}/events?after=${after}`),
-  send: (id: string, text: string, attachments: Attachment[] = []) =>
-    json<{ turnId: string }>(`${botPath(id)}/messages`, "POST", {
+  send: (id: string, text: string, attachments: Attachment[] = [], mode?: MessageMode, binding?: WorkspaceBinding) =>
+    json<MessageReceipt>(`${botPath(id)}/messages`, "POST", {
       text,
       attachments,
-    }),
+      ...(mode ? { mode } : {}),
+    }, binding?.accountId, binding?.nodeId),
+  queue: (id: string, signal?: AbortSignal, binding?: WorkspaceBinding) =>
+    request<MessageQueueSnapshot>(`${botPath(id)}/queue`, { signal }, binding?.accountId, binding?.nodeId),
+  removeQueued: (id: string, messageId: string, binding?: WorkspaceBinding) =>
+    json<void>(`${botPath(id)}/queue/${encodeURIComponent(messageId)}`, "DELETE", undefined, binding?.accountId, binding?.nodeId),
+  steerQueued: (id: string, messageId: string, binding?: WorkspaceBinding) =>
+    json<MessageReceipt>(`${botPath(id)}/queue/${encodeURIComponent(messageId)}/steer`, "POST", {}, binding?.accountId, binding?.nodeId),
+  resumeQueue: (id: string, binding?: WorkspaceBinding) =>
+    json<void>(`${botPath(id)}/queue/resume`, "POST", {}, binding?.accountId, binding?.nodeId),
   stop: (id: string) => json<void>(`${botPath(id)}/stop`, "POST"),
   context: (id: string, signal?: AbortSignal) =>
     request<BotContext>(`${botPath(id)}/context`, { signal }),
@@ -212,7 +250,11 @@ export function accountURL(path: string) {
   try { url = new URL(path, origin); } catch { return path; }
   if (url.origin !== origin || !url.pathname.startsWith(`${BASE}/`)) return path;
   url.searchParams.set("expectedAccount", activeAccount);
+  if (workspacePath(url.pathname.slice(BASE.length))) url.searchParams.set("node", activeNode);
   return path.startsWith("/") ? `${url.pathname}${url.search}${url.hash}` : url.toString();
+}
+export function nodeBinaryURL(platform: "darwin", arch: "arm64" | "amd64") {
+  return accountURL(`${BASE}/nodes/binary/${encodeURIComponent(platform)}/${encodeURIComponent(arch)}`);
 }
 export function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : "Something went wrong.";

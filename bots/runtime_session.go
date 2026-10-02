@@ -805,6 +805,13 @@ func (r *Runtime) finishTurn(s *botRuntime, t *runtimeTurn, status string, turnE
 		s.mu.Unlock()
 		t.cancel()
 		close(t.done)
+		if status == "completed" || status == "stopped" {
+			// Stop already paused its queue atomically. A later owner send or
+			// explicit resume can reopen it while cancellation is settling.
+			r.dispatchQueue(s)
+		} else {
+			r.logJournalError(t.botID, "", r.setQueuePaused(s, true, "turn_"+status, result.Error))
+		}
 		r.pruneCompletedTurns()
 	})
 }

@@ -51,8 +51,9 @@ function modalHarness() {
   const closingSave = new Element({ inert: true });
   const notTabbable = new Element({ tabIndex: -1 });
   const panel = new Element({ tabIndex: -1 });
-  panel.querySelectorAll = () => [first, last, closingSave, notTabbable];
-  panel.contains = focused => [panel, first, last, closingSave, notTabbable].includes(focused);
+  panel.controls = [first, last, closingSave, notTabbable];
+  panel.querySelectorAll = () => panel.controls;
+  panel.contains = focused => focused === panel || panel.controls.includes(focused);
   dialogs.push(panel);
   return {
     document, dialogs, Element, panel, first, last,
@@ -64,6 +65,7 @@ function modalHarness() {
     },
     mountEffect: () => effects[0](),
     keyboard: event => listeners.get('keydown')(event),
+    focusin: event => listeners.get('focusin')?.(event),
     flushFrames() {
       const pending = [...frames.values()]; frames.clear();
       pending.forEach(callback => callback());
@@ -85,6 +87,33 @@ test('settings modal Tab boundary ignores inert closing panes and controls outsi
   cleanup();
   view.flushFrames();
   assert.equal(view.document.body.style.overflow, '');
+});
+
+test('settings modal retains keyboard focus when a dynamic pane removes the focused control', () => {
+  const view = modalHarness();
+  view.render();
+  const cleanup = view.mountEffect();
+  view.last.focus();
+  view.panel.controls = [view.first, new view.Element()];
+  // Removing a focused form submit (for example after host enrollment)
+  // resets the browser's activeElement to BODY without firing focusin.
+  view.document.activeElement = view.document.body;
+  let prevented = 0;
+  view.keyboard({ key: 'Tab', shiftKey: false, preventDefault() { prevented += 1; } });
+  assert.equal(view.document.activeElement, view.first);
+  view.document.activeElement = view.document.body;
+  view.keyboard({ key: 'Tab', shiftKey: true, preventDefault() { prevented += 1; } });
+  assert.equal(view.document.activeElement, view.panel.controls.at(-1));
+  assert.equal(prevented, 2);
+  const background = new view.Element();
+  background.focus();
+  view.focusin({ target: background });
+  assert.equal(view.document.activeElement, view.first, 'programmatic focus cannot escape the active modal');
+  cleanup();
+  background.focus();
+  view.focusin({ target: background });
+  assert.equal(view.document.activeElement, background, 'closing releases focus containment');
+  view.flushFrames();
 });
 
 test('settings modal captures its trigger before mount focus and restores it after inert clears focus to BODY', () => {

@@ -7,7 +7,7 @@ each conversation keeps the actual tool activity, results and files.
 Connect Bots lives on the `connect-bots` branch of a
 [cc-connect fork](https://github.com/billyhargroveofficial/cc-connect/tree/connect-bots).
 The existing cc-connect command and web dashboard remain available. The product
-adds `bots/`, `cmd/connect-bots/` and `studio/`, and reuses the Codex, Pi and
+adds `bots/`, `cmd/connect-bots/`, `cmd/connect-bots-node/` and `studio/`, and reuses the Codex, Pi and
 Telegram adapters. The original Go module and upstream attribution are retained.
 
 ## What you can do
@@ -15,6 +15,10 @@ Telegram adapters. The original Go module and upstream attribution are retained.
 - Create an account and sign in with a username and password. Each account has
   its own bots, history, folders, product instructions and skills.
 - Create persistent bots with independent folders and a shared coordinator.
+- Pair another computer in **Settings → Hosts**. See bots from all your devices
+  in one list, with a device label beside each bot and **Server** / **Mac**
+  checkboxes to filter the list. Its bots run in folders on that computer using
+  its own authenticated Codex.
 - Use Codex through a dedicated app-server, or Pi with a configured DeepSeek provider.
 - Change the model, effort and supported Codex service tier from the conversation.
   Codex goals, ultra and subagents appear when the installed runtime supports them.
@@ -43,11 +47,12 @@ recent requests and published files live in a floating card on the right.
 On narrow screens, open it with the panel button in the upper-right corner;
 the upper-left arrow returns to the bot list on mobile.
 
-One host can serve several accounts. The browser and API expose only the signed-in
-account's workspace. All bots still run as the same operating-system user and use
-the host's inference credentials; this is logical isolation for trusted users,
-not an operating-system sandbox. No screen streaming or cloud control plane is
-required.
+One server can serve several accounts. The browser and API expose only the signed-in
+account's workspace and paired hosts. Each selected host supplies its own bot
+folders and inference credentials. Bots on the central server still run as that
+server's operating-system user; a remote node runs as its local user. Account
+separation assumes trusted users and does not sandbox arbitrary agent commands.
+No screen streaming or hosted cloud service is required.
 
 ## Build and run
 
@@ -75,8 +80,29 @@ and [Deployment](DEPLOYMENT.md) for LAN access and services.
 The built binary embeds the web app. Node.js is needed for building the frontend
 and for a Pi runtime; the Go web server itself does not need Node.js.
 
-Connect Bots starts one dedicated Codex app-server for all its Codex bots and
-maintenance across accounts. It uses the owner's existing Codex authentication,
+For a remote Mac, build the lightweight node without Studio, Node.js or pnpm:
+
+```sh
+make -f Makefile.connect-bots release-node-macos VERSION=your-release-version
+```
+
+This produces Apple Silicon and Intel binaries, archives and SHA-256 checksums
+in `dist/connect-bots/`. Pair it to your signed-in account using the one-time
+code from **Settings → Hosts → Add host**, then run it on that computer:
+
+```sh
+./connect-bots-node pair --server https://bots.example.com
+./connect-bots-node run
+```
+
+The pairing command prompts for the code. Authenticate Codex on the Mac itself
+before starting the node. The central server does not copy Codex credentials to
+the node. See [remote nodes](DEPLOYMENT.md#remote-nodes) for TLS, LAN development,
+binary downloads and a macOS service example.
+
+Connect Bots starts one dedicated Codex app-server for its central-server Codex bots and
+maintenance across accounts. Each node owns a separate app-server on its computer.
+The central server uses the owner's existing Codex authentication,
 instructions and skills, with private SQLite state and logs under the product
 data directory.
 Connect Bots owns that process and stops it during shutdown. See
@@ -88,6 +114,16 @@ Every bot has an `AGENTS.md`, `.agents/skills/` and `tmp/` inside its own
 workspace. Shared product instructions live in `user/AGENTS.md` and shared
 product skills in `user/skills/` within that account's workspace root. The owner's
 root stays at the data directory; other roots are under `users/user_<random>/`.
+Paired nodes keep equivalent workspace state on their own computer, separately
+from the central server. The roster combines the signed-in account's bots across
+hosts. Both device filters are enabled initially; filtering hides rows without
+moving or stopping their bots. Clicking a bot opens its host's conversation,
+instructions, skills and files, without a page reload. An offline host keeps its
+last known rows during that account's session and shows an offline indicator.
+The **Run on** choice in **Create bot** selects where a new bot is created and
+defaults to the current conversation's host.
+The first node version does not move existing bots or delegate between hosts;
+a coordinator operates within its current host.
 Turning off a skill for a bot does not rewrite the owner's global harness
 configuration.
 
@@ -136,12 +172,29 @@ The frontend listens on `0.0.0.0:5173` and proxies `/api/studio` to
 same network. Microphone recording requires a secure browser context; audio-file
 upload also works over LAN HTTP.
 
+`dev-studio` uses Vite hot reload. For uninterrupted everyday use while source
+files are changing, serve a completed build instead:
+
+```sh
+pnpm --dir studio build
+pnpm --dir studio preview
+```
+
+Preview uses the same LAN port and API proxy, with no hot reload or source-file
+watching. Rebuild when an update is ready, then refresh the browser to load it.
+For a normal deployment, the built Go binary serves its embedded frontend;
+see [stable frontend operation](DEPLOYMENT.md#stable-frontend-operation).
+Background host-status and roster refreshes keep the current conversation open
+and retain the last successful catalog during a temporary connection failure.
+Failed user actions and an expired account session still receive explicit
+feedback.
+
 ```sh
 make -f Makefile.connect-bots check
 ```
 
 This builds the frontend, runs its unit tests, vets all Go packages with
-`no_web`, and runs the product, core, Codex, Pi and command tests with the race
+`no_web`, and runs the product, core, Codex, Pi and both command tests with the race
 detector. Core critical-user-journey tests are included. The old web dashboard's
 generated assets are not needed.
 

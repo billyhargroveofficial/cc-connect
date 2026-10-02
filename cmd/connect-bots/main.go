@@ -50,6 +50,9 @@ func run() (runErr error) {
 	assets := flag.String("assets", "", "serve a frontend build directory instead of embedded assets")
 	origins := flag.String("origins", "", "additional allowed browser origins, comma separated")
 	registration := flag.Bool("registration", true, "allow new account registration")
+	publicURL := flag.String("public-url", "", "externally reachable HTTP(S) origin for remote host enrollment")
+	allowInsecureNodes := flag.Bool("allow-insecure-nodes", false, "allow remote hosts over plain HTTP on a trusted network")
+	nodeBinaries := flag.String("node-binaries", "", "directory containing downloadable macOS node binaries")
 	codexEndpoint := flag.String("codex-app-server-url", "", "explicit dedicated Codex endpoint; default starts a private app-server")
 	httpsAddr := flag.String("https-addr", "", "optional HTTPS listening address (browser microphone on LAN)")
 	tlsCert := flag.String("tls-cert", "", "HTTPS certificate chain file")
@@ -59,6 +62,13 @@ func run() (runErr error) {
 	if *showVersion {
 		fmt.Println("Connect Bots " + version)
 		return nil
+	}
+	if flag.NArg() != 0 {
+		return fmt.Errorf("unexpected argument %q; remote hosts use the connect-bots-node executable", flag.Arg(0))
+	}
+	nodePublicURL, err := bots.ValidateNodePublicURL(*publicURL, *allowInsecureNodes)
+	if err != nil {
+		return err
 	}
 	internalURL, err := internalToolURL(*addr)
 	if err != nil {
@@ -121,6 +131,11 @@ func run() (runErr error) {
 		return err
 	}
 	defer func() { runErr = errors.Join(runErr, tenants.Close()) }()
+	nodes, err := bots.OpenNodeHub(bots.NodeHubConfig{Root: dataRoot, AllowInsecure: *allowInsecureNodes})
+	if err != nil {
+		return err
+	}
+	defer func() { runErr = errors.Join(runErr, nodes.Close()) }()
 	server, err := bots.NewHostServer(bots.HostServerConfig{
 		Root: dataRoot, StaticDir: config.StaticDir, StaticFS: config.StaticFS,
 		AllowedOrigins: config.AllowedOrigins, RegistrationAllowed: *registration,
@@ -132,6 +147,7 @@ func run() (runErr error) {
 			return tenants.Resolve(account)
 		},
 		ResolveInternalToken: tenants.ResolveInternalToken,
+		Nodes:                nodes, PublicURL: nodePublicURL, NodeBinaryDir: *nodeBinaries, Version: version,
 	})
 	if err != nil {
 		return err

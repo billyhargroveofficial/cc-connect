@@ -35,6 +35,7 @@ type rpcNotificationEnvelope struct {
 type rpcError struct {
 	Code    int    `json:"code"`
 	Message string `json:"message"`
+	cause   error
 }
 
 type initResponse struct {
@@ -1949,7 +1950,7 @@ func (s *appServerSession) rejectPending(err error) {
 	for id, ch := range s.pending {
 		delete(s.pending, id)
 		select {
-		case ch <- rpcResponseEnvelope{ID: id, Error: &rpcError{Message: err.Error()}}:
+		case ch <- rpcResponseEnvelope{ID: id, Error: &rpcError{Message: err.Error(), cause: err}}:
 		default:
 		}
 	}

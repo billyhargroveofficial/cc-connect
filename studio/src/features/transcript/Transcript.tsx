@@ -1,4 +1,4 @@
-import { useEffect, useId, useMemo, useState } from 'react';
+import { memo, useEffect, useId, useMemo, useState } from 'react';
 import type { FormEvent, ReactNode } from 'react';
 import {
   ArrowUpRight, Check, CheckCheck, ChevronDown, Code2, Copy, Download,
@@ -10,6 +10,8 @@ import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
 import rehypeHighlight from 'rehype-highlight';
 import rehypeKatex from 'rehype-katex';
+import 'katex/dist/katex.min.css';
+import type { Extension } from 'micromark-util-types';
 import type { Bot, Event as JournalEvent } from '../../lib/types';
 import Avatar from '../../components/Avatar';
 import { botMessagePresentation } from '../../lib/events';
@@ -19,10 +21,10 @@ import {
   rowMotion, softControlMotion, useIsPresent, useReducedMotion,
 } from '../../lib/motion';
 import {
-  buildTranscript, field, isFailed, isRunning, json, record, string,
+  createTranscriptProjector, buildTurnSegments, collapseTurnActivity, field, isFailed, isRunning, json, record, string,
 } from './reducer';
 import type {
-  Activity, Question, RecordValue, TranscriptAttachment, TranscriptMessage, TranscriptTurn, UserRequest,
+  Activity, Question, RecordValue, TranscriptAttachment, TranscriptMessage, TranscriptServiceSegment, TranscriptTurn, UserRequest,
 } from './reducer';
 import './transcript.css';
 
@@ -96,7 +98,7 @@ function CopyButton({ content, label = 'Copy' }: { content: string; label?: stri
   }
   return <m.button {...controlMotion} type="button" className="transcript-icon-button" onClick={() => void copy()}
     aria-label={copied ? 'Copied' : label} title={error || (copied ? 'Copied' : label)}>
-    <AnimatePresence initial={false} mode="wait"><m.span key={copied ? 'copied' : 'copy'} className="transcript-motion-icon"
+    <AnimatePresence presenceAffectsLayout={false} initial={false} mode="wait"><m.span key={copied ? 'copied' : 'copy'} className="transcript-motion-icon"
       initial={{ opacity: 0, scale: .8 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: .8 }} transition={motionTransition.quick}>
       {copied ? <Check size={14} /> : <Copy size={14} />}
     </m.span></AnimatePresence>
@@ -112,9 +114,51 @@ function codeText(children: ReactNode): string {
   return '';
 }
 
-export function Markdown({ content }: { content: string }) {
+type MarkdownPlugin = Extract<
+  NonNullable<Parameters<typeof ReactMarkdown>[0]['remarkPlugins']>[number],
+  (...args: never[]) => unknown
+>;
+
+const remarkMathWithSafeDollars: MarkdownPlugin = function () {
+  remarkMath.call(this);
+  const data = this.data() as { micromarkExtensions?: Extension[] };
+  const extension = data.micromarkExtensions?.at(-1);
+  const construct = extension?.text?.[36];
+  if (!construct || Array.isArray(construct)) return;
+  const tokenize = construct.tokenize;
+  construct.tokenize = function (effects, ok, nok) {
+    const start = this.now();
+    return tokenize.call(this, effects, code => {
+      const source = this.sliceSerialize({ start, end: this.now() });
+      if (source.startsWith('$$')) return ok(code);
+      const value = source.slice(1, -1);
+      // Single-dollar math follows delimiter boundaries: neither inner edge
+      // may be whitespace, and a closing dollar cannot start another amount.
+      // Rejecting the tokenizer restores normal Markdown parsing for the whole
+      // span, including emphasis and links that would otherwise be swallowed.
+      if (/^\s|\s$/.test(value) || (code !== null && code >= 48 && code <= 57)) return nok(code);
+      // A currency amount can also precede a formatted formula, where the
+      // candidate closing dollar follows `**` or `(` instead of whitespace.
+      // Keep numeric formulas ($200$, $2x$, $2 xy$, $2+2$, TeX commands) while
+      // recognizing price suffixes and numeric amounts followed by prose.
+      const amount = /^[+-]?\d[\d.,]*/.exec(value);
+      if (amount) {
+        const suffix = value.slice(amount[0].length);
+        const currency = /^[-–—]\p{Script=Cyrillic}{2,}/u.test(suffix)
+          || /^\/(?:mo(?:nth(?:s)?)?|yr|years?|wk|weeks?|days?|мес(?:яц(?:а|ев)?)?|год|года|лет|нед(?:ел[юьи])?|день|сутки)(?=$|[^\p{L}])/iu.test(suffix)
+          || /^(?:[,;:.!?]\s*)?\s+(?:\p{Script=Cyrillic}{2,}|\p{Script=Cyrillic}\s+\p{Script=Cyrillic}{2,})/u.test(suffix)
+          || /^(?:[,;:.!?]\s*)?\s+[A-Za-z]+\s+[A-Za-z]{3,}/.test(suffix)
+          || /[+\-*/^_=<>~`[(]$/.test(value);
+        if (currency) return nok(code);
+      }
+      return ok(code);
+    }, nok);
+  };
+};
+
+export const Markdown = memo(function Markdown({ content }: { content: string }) {
   return <div className="transcript-markdown"><ReactMarkdown
-    remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeHighlight, [rehypeKatex, { strict: false }]]}
+    remarkPlugins={[remarkGfm, remarkMathWithSafeDollars]} rehypePlugins={[rehypeHighlight, [rehypeKatex, { strict: false }]]}
     components={{
       a: ({ href, children }) => <a href={href ? accountURL(href) : href} target="_blank" rel="noreferrer noopener">{children}<ArrowUpRight size={11} className="transcript-link-arrow" /></a>,
       pre: ({ children }) => <div className="transcript-code-block"><CopyButton content={codeText(children)} label="Copy code" /><pre>{children}</pre></div>,
@@ -122,7 +166,7 @@ export function Markdown({ content }: { content: string }) {
       img: ({ src, alt }) => <a href={src ? accountURL(src) : src} target="_blank" rel="noreferrer noopener"><img src={src ? accountURL(src) : src} alt={alt || 'Illustration'} loading="lazy" /></a>,
     }}
   >{content}</ReactMarkdown></div>;
-}
+});
 
 function attachmentUrl(botId: string, attachment: TranscriptAttachment) {
   const url = attachment.id
@@ -147,7 +191,7 @@ function attachmentFormat(attachment: TranscriptAttachment, kind: string) {
 
 function Attachments({ botId, attachments }: { botId: string; attachments: TranscriptAttachment[] }) {
   if (!attachments.length) return null;
-  return <div className="transcript-attachments"><AnimatePresence initial={false}>{attachments.map((attachment, index) => {
+  return <div className="transcript-attachments"><AnimatePresence presenceAffectsLayout={false} initial={false}>{attachments.map((attachment, index) => {
     const url = attachmentUrl(botId, attachment);
     const kind = attachmentKind(attachment.mimeType);
     const media = kind === 'audio' || kind === 'video';
@@ -169,14 +213,20 @@ function Attachments({ botId, attachments }: { botId: string; attachments: Trans
   })}</AnimatePresence></div>;
 }
 
-function Message({ message, botId, details }: { message: TranscriptMessage; botId: string; details?: ReactNode }) {
+function StreamingText({ content }: { content: string }) {
+  return <div className="transcript-markdown transcript-streaming-text">{content}</div>;
+}
+
+function Message({ message, botId, details, streaming = false }: {
+  message: TranscriptMessage; botId: string; details?: ReactNode; streaming?: boolean;
+}) {
   const user = message.role === 'user';
   const delegated = user ? botMessagePresentation(message.content, message.source || '') : null;
   const content = delegated?.content ?? message.content;
   return <m.article variants={user ? fadeUp : fade} initial="hidden" animate="visible" exit="exit"
     className={user ? 'transcript-user-message' : `transcript-assistant-message${message.artifact ? ' transcript-artifact-message' : ''}`}>
     <div className={user ? 'transcript-user-bubble' : 'transcript-message-body'}>
-      {content && <Markdown content={content} />}
+      {content && (streaming ? <StreamingText content={content} /> : <Markdown content={content} />)}
       <Attachments botId={botId} attachments={message.attachments} />
     </div>
     {user ? <div className={`transcript-message-meta${!delegated && message.source !== 'telegram' ? ' is-time-only' : ''}`}>
@@ -189,9 +239,20 @@ function Message({ message, botId, details }: { message: TranscriptMessage; botI
   </m.article>;
 }
 
+function ProgressMessage({ activity, active, details }: { activity: Activity; active: boolean; details?: ReactNode }) {
+  const present = useIsPresent();
+  return <m.article variants={fade} initial="hidden" animate="visible" exit="exit"
+    className={`transcript-progress-message${active ? ' is-active' : ''}`} data-progress-id={activity.id} aria-hidden={!present} inert={!present}>
+    <div className="transcript-progress-text">{active
+      ? <StreamingText content={activity.text} />
+      : <Markdown content={activity.text} />}</div>
+    {details && <div className="transcript-message-actions">{details}</div>}
+  </m.article>;
+}
+
 function Status({ value }: { value: string }) {
   return <span className={`transcript-status${isRunning(value) ? ' is-running' : ''}${isFailed(value) ? ' is-failed' : ''}`}>
-    <AnimatePresence initial={false} mode="wait"><m.span key={value} className="transcript-status-content"
+    <AnimatePresence presenceAffectsLayout={false} initial={false} mode="wait"><m.span key={value} className="transcript-status-content"
       variants={fade} initial="hidden" animate="visible" exit="exit">
       {isRunning(value) ? <LoaderCircle size={12} className="transcript-spin" />
         : isFailed(value) ? <CircleAlert size={12} /> : value === 'completed' || value === 'complete' ? <Check size={12} /> : null}
@@ -267,7 +328,7 @@ function SearchResults({ value }: { value: unknown }) {
   }
   visit(value, 0);
   if (!sources.length) return null;
-  return <ul className="transcript-search-results"><AnimatePresence initial={false}>{sources.map(source => <m.li key={source.url}
+  return <ul className="transcript-search-results"><AnimatePresence presenceAffectsLayout={false} initial={false}>{sources.map(source => <m.li key={source.url}
     variants={rowMotion} initial="hidden" animate="visible" exit="exit">
     <m.a whileHover={{ x: 2 }} whileTap={{ opacity: .65 }} transition={motionTransition.quick}
       href={source.url} target="_blank" rel="noreferrer noopener"><Globe2 size={13} /><span>{source.title}</span><ArrowUpRight size={13} /></m.a>
@@ -278,10 +339,10 @@ function SearchResults({ value }: { value: unknown }) {
 function Plan({ activity }: { activity: Activity }) {
   const steps = Array.isArray(activity.data.plan) ? activity.data.plan : [];
   return <>{activity.text && <Markdown content={activity.text} />}
-    {steps.length > 0 && <ul className="transcript-plan"><AnimatePresence initial={false}>{steps.map((value, index) => {
+    {steps.length > 0 && <ul className="transcript-plan"><AnimatePresence presenceAffectsLayout={false} initial={false}>{steps.map((value, index) => {
       const step = record(value);
       return <m.li key={index} variants={rowMotion} initial="hidden" animate="visible" exit="exit" className={step.status === 'completed' ? 'is-done' : ''}>
-        <AnimatePresence initial={false} mode="wait"><m.span className="transcript-plan-icon" key={string(step.status)}
+        <AnimatePresence presenceAffectsLayout={false} initial={false} mode="wait"><m.span className="transcript-plan-icon" key={string(step.status)}
           initial={{ opacity: 0, scale: .8 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: .8 }} transition={motionTransition.quick}>
           {step.status === 'completed' ? <Check size={14} /> : step.status === 'inProgress' ? <LoaderCircle size={14} className="transcript-spin" /> : <span className="transcript-step-dot" />}
         </m.span></AnimatePresence>
@@ -352,21 +413,21 @@ function Subagents({ activity, onPermission, onQuestion }: { activity: Activity;
       {[string(activity.data.model), string(activity.data.reasoningEffort)].filter(Boolean).join(' · ')}
     </div>}
     {activity.text && <Markdown content={activity.text} />}
-    <AnimatePresence initial={false}>{ids.map(id => {
+    <AnimatePresence presenceAffectsLayout={false} initial={false}>{ids.map(id => {
       const state = record(states[id]);
       return <m.div key={id} variants={rowMotion} initial="hidden" animate="visible" exit="exit" className="transcript-subagent"><div className="transcript-subagent-header">
         <span title={id}><Users size={13} />{string(state.name) || string(state.agentNickname) || 'Subagent'}</span>{string(state.status) && <Status value={string(state.status)} />}
       </div>{string(state.message) && <Markdown content={string(state.message)} />}</m.div>;
     })}</AnimatePresence>
-    <AnimatePresence initial={false}>{child && <m.div key={child.id} variants={fade} initial="hidden" animate="visible" exit="exit"
+    <AnimatePresence presenceAffectsLayout={false} initial={false}>{child && <m.div key={child.id} variants={fade} initial="hidden" animate="visible" exit="exit"
       className="transcript-subagent-thread" data-thread-id={child.id}>
       <div className="transcript-subagent-header"><span title={child.id}><Users size={13} />{string(record(activity.data.thread).name) || string(record(activity.data.thread).agentNickname) || 'Subagent conversation'}</span><Status value={child.status} /></div>
-      <AnimatePresence initial={false}>{child.activities.map(item => <ActivityItem key={item.id} activity={item} onPermission={onPermission} onQuestion={onQuestion} />)}</AnimatePresence>
-      <AnimatePresence initial={false}>{child.responses.map(response => <m.section className="transcript-subagent-response" key={response.id}
+      <AnimatePresence presenceAffectsLayout={false} initial={false}>{child.activities.map(item => <ActivityItem key={item.id} activity={item} onPermission={onPermission} onQuestion={onQuestion} />)}</AnimatePresence>
+      <AnimatePresence presenceAffectsLayout={false} initial={false}>{child.responses.map(response => <m.section className="transcript-subagent-response" key={response.id}
         variants={fade} initial="hidden" animate="visible" exit="exit">
         <Markdown content={response.content} /><CopyButton content={response.content} label="Copy subagent response" />
       </m.section>)}</AnimatePresence>
-      <AnimatePresence initial={false}>{child.requests.filter(request => request.resolved).map(request => <RequestCard key={request.id} request={request} onPermission={onPermission} onQuestion={onQuestion} />)}</AnimatePresence>
+      <AnimatePresence presenceAffectsLayout={false} initial={false}>{child.requests.filter(request => request.resolved).map(request => <RequestCard key={request.id} request={request} onPermission={onPermission} onQuestion={onQuestion} />)}</AnimatePresence>
       {child.notices.map((notice, index) => <p className="transcript-muted" key={index}>{notice}</p>)}
       {child.error && <p className="transcript-error">{child.error}</p>}
       <RawJournal events={child.events} title="Session events" />
@@ -452,44 +513,56 @@ function TurnStats({ turn }: { turn: TranscriptTurn }) {
   </div>;
 }
 
-function TurnActivity({ turn, onPermission, onQuestion }: { turn: TranscriptTurn; onPermission: PermissionHandler; onQuestion?: PermissionHandler }) {
+function TurnActivity({ turn, onPermission, onQuestion, batch = false, journal = true }: {
+  turn: TranscriptTurn; onPermission: PermissionHandler; onQuestion?: PermissionHandler; batch?: boolean; journal?: boolean;
+}) {
   const contentId = useId();
+  const present = useIsPresent();
   const [override, setOverride] = useState<{ running: boolean; open: boolean } | null>(null);
   const running = isRunning(turn.status);
   const open = override?.running === running ? override.open : false;
   const renderContent = useDisclosureContent(open);
   const disclosureMotion = useDisclosureMotion(open);
   const resolvedRequests = turn.requests.filter(request => request.resolved);
+  const actions = [
+    ...turn.activities.map(activity => ({ kind: 'activity' as const, id: activity.id, seq: activity.seq ?? 0,
+      position: activity.position ?? 0, activity })),
+    ...resolvedRequests.map(request => ({ kind: 'request' as const, id: request.id, seq: request.seq ?? 0,
+      position: 0, request })),
+  ].sort((left, right) => left.seq - right.seq || left.position - right.position);
   const terminalStatus = isFailed(turn.status) || ['stopped', 'interrupted', 'cancelled', 'canceled'].includes(turn.status);
   if (!turn.activities.length && !running && !resolvedRequests.length && !terminalStatus) return null;
   const serviceTitle = !turn.users.length && !turn.responses.length && turn.activities.length === 1
     && turn.activities[0].kind === 'event' ? turn.activities[0].title : '';
   const label = running ? currentActivityLabel(turn) : serviceTitle || (isFailed(turn.status) ? 'Execution failed'
     : ['stopped', 'interrupted', 'cancelled', 'canceled'].includes(turn.status) ? statusLabel(turn.status)
-      : turn.activities.length ? 'Activity' : 'Response details');
-  return <m.section variants={fade} initial="hidden" animate="visible" exit="exit" className={`transcript-turn-activity${running ? ' is-running' : ''}`}>
+      : batch ? `${turn.activities.length + resolvedRequests.length} ${turn.activities.length + resolvedRequests.length === 1 ? 'action' : 'actions'}`
+        : turn.activities.length ? 'Activity' : 'Response details');
+  return <m.section variants={fade} initial="hidden" animate="visible" exit="exit"
+    className={`transcript-turn-activity${batch ? ' is-batch' : ''}${running ? ' is-running' : ''}`} aria-hidden={!present} inert={!present}>
     <m.button className="transcript-activity-toggle" type="button" aria-expanded={open} aria-controls={contentId} whileTap={{ opacity: .7 }}
       onClick={() => setOverride({ running, open: !open })}>
-      <AnimatePresence initial={false} mode="wait"><m.span className="transcript-motion-icon" key={running ? 'running' : isFailed(turn.status) ? 'failed' : 'done'}
+      <AnimatePresence presenceAffectsLayout={false} initial={false} mode="wait"><m.span className="transcript-motion-icon" key={running ? 'running' : isFailed(turn.status) ? 'failed' : 'done'}
         variants={fade} initial="hidden" animate="visible" exit="exit" aria-hidden="true">
         {running ? <LoaderCircle size={14} className="transcript-spin" />
           : isFailed(turn.status) ? <CircleAlert size={14} /> : <CheckCheck size={14} />}
       </m.span></AnimatePresence>
       <span className="transcript-current-activity" role={running ? 'status' : undefined} aria-live={running ? 'polite' : undefined} title={label}>
-        <AnimatePresence initial={false} mode="wait"><m.span key={running ? turn.activities.at(-1)?.id || turn.status : turn.status}
+        <AnimatePresence presenceAffectsLayout={false} initial={false} mode="wait"><m.span key={running ? turn.activities.at(-1)?.id || turn.status : turn.status}
           variants={fade} initial="hidden" animate="visible" exit="exit">{label}</m.span></AnimatePresence>
       </span>
-      {turn.activities.length > 0 && <small className="transcript-activity-count" aria-label={`Action count: ${turn.activities.length}`}>
-        <AnimatePresence initial={false} mode="wait"><m.span key={turn.activities.length} variants={fade} initial="hidden" animate="visible" exit="exit">{turn.activities.length}</m.span></AnimatePresence>
+      {turn.activities.length > 0 && (!batch || running) && <small className="transcript-activity-count" aria-label={`Action count: ${turn.activities.length}`}>
+        <AnimatePresence presenceAffectsLayout={false} initial={false} mode="wait"><m.span key={turn.activities.length} variants={fade} initial="hidden" animate="visible" exit="exit">{turn.activities.length}</m.span></AnimatePresence>
       </small>}
       <Chevron open={open} size={13} />
     </m.button>
     <m.div {...disclosureMotion} className={`transcript-disclosure${open ? ' is-open' : ''}`} id={contentId} aria-hidden={!open} inert={!open}>
       <div className="transcript-disclosure-inner">{renderContent && <div className="transcript-activity-list">
-      <AnimatePresence initial={false}>{turn.activities.map(activity => <ActivityItem key={activity.id} activity={activity} onPermission={onPermission} onQuestion={onQuestion} />)}</AnimatePresence>
-      <AnimatePresence initial={false}>{resolvedRequests.map(request => <RequestCard key={request.id} request={request} onPermission={onPermission} onQuestion={onQuestion} />)}</AnimatePresence>
-      {!running && <TurnStats turn={turn} />}
-      <RawJournal events={turn.events} />
+      <AnimatePresence presenceAffectsLayout={false} initial={false}>{actions.map(action => action.kind === 'activity'
+        ? <ActivityItem key={action.id} activity={action.activity} onPermission={onPermission} onQuestion={onQuestion} />
+        : <RequestCard key={action.id} request={action.request} onPermission={onPermission} onQuestion={onQuestion} />)}</AnimatePresence>
+      {(!batch || journal) && !running && <TurnStats turn={turn} />}
+      {journal && <RawJournal events={turn.events} />}
       </div>}</div>
     </m.div>
   </m.section>;
@@ -554,7 +627,7 @@ function RequestCard({ request, onPermission, onQuestion }: {
   return <m.section variants={fadeUp} initial="hidden" animate="visible" exit="exit"
     className={`transcript-request${resolved ? ' is-resolved' : ''}`} aria-label={request.title} aria-hidden={!present} inert={!present}>
     <div className="transcript-request-header"><ShieldCheck size={17} /><strong>{request.title}</strong>
-      <AnimatePresence initial={false}>{resolved && <m.span key="resolved" variants={fade} initial="hidden" animate="visible" exit="exit">{request.behavior === 'deny' ? 'Denied' : 'Closed'}</m.span>}</AnimatePresence>
+      <AnimatePresence presenceAffectsLayout={false} initial={false}>{resolved && <m.span key="resolved" variants={fade} initial="hidden" animate="visible" exit="exit">{request.behavior === 'deny' ? 'Denied' : 'Closed'}</m.span>}</AnimatePresence>
     </div>
     <m.div {...disclosureMotion} className="transcript-disclosure transcript-request-decision" aria-hidden={!formOpen} inert={!formOpen}>
       {renderForm && <form onSubmit={submit}>
@@ -563,10 +636,10 @@ function RequestCard({ request, onPermission, onQuestion }: {
           : <>{Boolean(request.input) && <Payload label="Action" value={request.input} />}
             {request.method === 'input' && <input className="transcript-request-input" value={input} onChange={event => setInput(event.target.value)}
               placeholder={request.placeholder || 'Your answer'} autoComplete="off" aria-label={request.title} />}</>}
-        <AnimatePresence initial={false}>{error && <m.p key="error" variants={fade} initial="hidden" animate="visible" exit="exit" className="transcript-error" role="alert">{error}</m.p>}</AnimatePresence>
+        <AnimatePresence presenceAffectsLayout={false} initial={false}>{error && <m.p key="error" variants={fade} initial="hidden" animate="visible" exit="exit" className="transcript-error" role="alert">{error}</m.p>}</AnimatePresence>
         <div className="transcript-request-actions">
           <m.button {...softControlMotion} className="transcript-button is-primary" type="submit" disabled={busy || !formOpen || !canSubmit}>
-            <AnimatePresence initial={false} mode="wait"><m.span className="transcript-motion-icon" key={busy ? 'busy' : 'ready'} variants={fade} initial="hidden" animate="visible" exit="exit">
+            <AnimatePresence presenceAffectsLayout={false} initial={false} mode="wait"><m.span className="transcript-motion-icon" key={busy ? 'busy' : 'ready'} variants={fade} initial="hidden" animate="visible" exit="exit">
               {busy ? <LoaderCircle size={14} className="transcript-spin" /> : <Check size={14} />}
             </m.span></AnimatePresence>
             {request.questions.length || request.method === 'input' ? 'Send response' : 'Allow'}
@@ -575,7 +648,7 @@ function RequestCard({ request, onPermission, onQuestion }: {
         </div>
       </form>}
     </m.div>
-    <AnimatePresence initial={false}>{resolved && <m.p key="closed" variants={fade} initial="hidden" animate="visible" exit="exit" className="transcript-muted">
+    <AnimatePresence presenceAffectsLayout={false} initial={false}>{resolved && <m.p key="closed" variants={fade} initial="hidden" animate="visible" exit="exit" className="transcript-muted">
       {request.questions.length ? request.questions.map(q => q.question).join(' · ') : 'This request no longer needs a decision.'}
     </m.p>}</AnimatePresence>
   </m.section>;
@@ -646,26 +719,102 @@ function ResponseDetails({ turn }: { turn: TranscriptTurn }) {
   </>;
 }
 
-function Turn({ bot, turn, onPermission, onQuestion, onRetry }: TranscriptProps & { turn: TranscriptTurn }) {
+function workHistoryLabel(turn: TranscriptTurn) {
+  if (!['completed', 'complete'].includes(turn.status)) return 'Work details';
+  const started = Date.parse(turn.time || turn.events[0]?.time || '');
+  const finished = Date.parse(turn.events.at(-1)?.time || '');
+  if (!Number.isFinite(started) || !Number.isFinite(finished) || finished < started) return 'Work details';
+  const seconds = Math.floor((finished - started) / 1000);
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor(seconds % 3600 / 60);
+  const parts = [hours ? `${hours}h` : '', minutes ? `${minutes}m` : '', !hours ? `${seconds % 60}s` : ''].filter(Boolean);
+  return `Worked for ${parts.join(' ')}`;
+}
+
+function TurnHistory({ turn, segments, onPermission, onQuestion }: {
+  turn: TranscriptTurn; segments: TranscriptServiceSegment[]; onPermission: PermissionHandler; onQuestion?: PermissionHandler;
+}) {
+  const contentId = useId();
+  const [open, setOpen] = useState(false);
+  const renderContent = useDisclosureContent(open);
+  const disclosureMotion = useDisclosureMotion(open);
+  const label = workHistoryLabel(turn);
+  const actions = segments.reduce((count, segment) => count + (segment.kind === 'batch' ? segment.activities.length + segment.requests.length : 0), 0);
+  const updates = segments.reduce((count, segment) => count + (segment.kind === 'progress' ? 1 : 0), 0);
+  const summary = [actions ? `${actions} ${actions === 1 ? 'action' : 'actions'}` : '',
+    updates ? `${updates} ${updates === 1 ? 'update' : 'updates'}` : ''].filter(Boolean).join(' · ');
+  return <section className={`transcript-turn-history${open ? ' is-open' : ''}`} data-history-turn={turn.id}>
+    <m.button type="button" className="transcript-history-toggle" aria-expanded={open} aria-controls={contentId}
+      aria-label={`${label}: ${summary}`} title={summary} whileTap={{ opacity: .7 }} onClick={() => setOpen(value => !value)}>
+      {isFailed(turn.status) ? <CircleAlert size={13} aria-hidden="true" /> : <CheckCheck size={13} aria-hidden="true" />}
+      <span>{label}</span><Chevron open={open} size={12} />
+    </m.button>
+    <m.div {...disclosureMotion} className={`transcript-disclosure${open ? ' is-open' : ''}`} id={contentId}
+      aria-hidden={!open} inert={!open}>
+      <div className="transcript-disclosure-inner">{renderContent && <div className="transcript-history-content" role="region" aria-label="Previous activity">
+        {segments.map(segment => segment.kind === 'progress'
+          ? <ProgressMessage key={segment.id} activity={segment.activity} active={false} />
+          : <TurnActivity key={segment.id} batch journal={false}
+            turn={{ ...turn, status: 'completed', activities: segment.activities, requests: segment.requests }}
+            onPermission={onPermission} onQuestion={onQuestion} />)}
+      </div>}</div>
+    </m.div>
+  </section>;
+}
+
+function Turn({ bot, turn, onPermission, onQuestion, onRetry }: Omit<TranscriptProps, "events"> & { turn: TranscriptTurn }) {
   const present = useIsPresent();
   const running = isRunning(turn.status);
-  const resolvedRequests = turn.requests.filter(request => request.resolved);
-  const detailsMessageId = ['completed', 'complete'].includes(turn.status) && !turn.activities.length && !resolvedRequests.length
-    && (hasTurnStats(turn) || turn.events.length) ? turn.responses.at(-1)?.id : undefined;
+  const segments = useMemo(() => buildTurnSegments(turn), [turn]);
+  const displayed = useMemo(() => collapseTurnActivity(turn, segments), [turn, segments]);
+  const latestNarration = segments.slice().reverse().find(segment => segment.kind === 'progress'
+    || segment.kind === 'message' && !segment.message.artifact);
+  const lastBatch = segments.slice().reverse().find(segment => segment.kind === 'batch');
+  const hasDetails = !running && (hasTurnStats(turn) || turn.events.length > 0);
+  const detailsMessage = segments.slice().reverse().find(segment => segment.kind === 'message' && !segment.message.artifact)
+    || segments.slice().reverse().find(segment => segment.kind === 'message');
+  const detailsMessageId = hasDetails ? detailsMessage?.id : undefined;
+  const detailsProgressId = hasDetails && !detailsMessageId
+    ? segments.slice().reverse().find(segment => segment.kind === 'progress')?.id : undefined;
+  const rootRequests = new Set(turn.requests.map(request => request.id));
+  const pending = pendingRequests(turn);
+  const childRequests = pending.filter(request => !rootRequests.has(request.id));
+  const lastSegment = segments.at(-1);
+  const hasBatch = segments.some(segment => segment.kind === 'batch');
+  const needsStatus = !hasBatch && !turn.error
+    && (isFailed(turn.status) || ['stopped', 'interrupted', 'cancelled', 'canceled'].includes(turn.status));
   const service = !turn.users.length && !turn.responses.length && !turn.requests.length && !running && !turn.error;
-  const hasBotContent = Boolean(turn.responses.length || turn.activities.length || turn.requests.length || running || turn.error);
+  const hasBotContent = Boolean(turn.responses.length || turn.activities.length || turn.requests.length || running || turn.error || hasDetails || needsStatus);
   return <m.section variants={fadeUp} initial="hidden" animate="visible" exit="exit"
-    className={`transcript-turn${service ? ' is-service' : ''}`} data-turn-id={turn.id} aria-hidden={!present} inert={!present}>
-    <AnimatePresence initial={false}>{turn.users.map(message => <Message key={message.id} message={message} botId={bot.id} />)}</AnimatePresence>
-    <AnimatePresence initial={false}>{turn.notices.map((notice, index) => <m.div className="transcript-notice" key={index}
+    className={`transcript-turn${service ? ' is-service' : ''}`} data-turn-id={turn.id} data-turn-status={turn.status} aria-hidden={!present} inert={!present}>
+    <AnimatePresence presenceAffectsLayout={false} initial={false}>{turn.users.map(message => <Message key={message.id} message={message} botId={bot.id} />)}</AnimatePresence>
+    <AnimatePresence presenceAffectsLayout={false} initial={false}>{turn.notices.map((notice, index) => <m.div className="transcript-notice" key={index}
       variants={fade} initial="hidden" animate="visible" exit="exit"><MessageSquare size={13} /><Markdown content={notice} /></m.div>)}</AnimatePresence>
     {hasBotContent && <div className="transcript-bot-response">
       <div className="transcript-response-body">
-        <TurnActivity turn={turn} onPermission={onPermission} onQuestion={onQuestion} />
-        <AnimatePresence initial={false}>{pendingRequests(turn).map(request => <RequestCard key={request.id} request={request} onPermission={onPermission} onQuestion={onQuestion} />)}</AnimatePresence>
-        <AnimatePresence initial={false}>{turn.responses.map(message => <Message key={message.id} message={message} botId={bot.id}
-          details={message.id === detailsMessageId ? <ResponseDetails turn={turn} /> : undefined} />)}</AnimatePresence>
-        <AnimatePresence initial={false}>{turn.error && <m.div key="error" variants={fadeUp} initial="hidden" animate="visible" exit="exit"
+        <AnimatePresence presenceAffectsLayout={false} initial={false}>{displayed.map(segment => {
+          if (segment.kind === 'history') return <TurnHistory key={segment.id} turn={turn} segments={segment.segments}
+            onPermission={onPermission} onQuestion={onQuestion} />;
+          if (segment.kind === 'progress') return <ProgressMessage key={segment.id} activity={segment.activity}
+            active={running && latestNarration?.id === segment.id && !pending.length}
+            details={segment.id === detailsProgressId ? <ResponseDetails turn={turn} /> : undefined} />;
+          if (segment.kind === 'message') return <Message key={segment.id} message={segment.message} botId={bot.id}
+            streaming={running && latestNarration?.id === segment.id && !pending.length}
+            details={segment.id === detailsMessageId ? <ResponseDetails turn={turn} /> : undefined} />;
+          if (segment.kind === 'request') return <RequestCard key={segment.id} request={segment.request} onPermission={onPermission} onQuestion={onQuestion} />;
+          const batchRunning = running && (lastSegment === segment || segment.activities.some(activity => isRunning(activity.status)
+            || Boolean(activity.thread && isRunning(activity.thread.status))));
+          const status = batchRunning ? turn.status : isFailed(turn.status) && lastSegment === segment ? turn.status
+            : !running && lastSegment === segment && ['stopped', 'interrupted', 'cancelled', 'canceled'].includes(turn.status) ? turn.status : 'completed';
+          return <TurnActivity key={segment.id} batch journal={!turn.responses.length && !detailsProgressId && lastBatch === segment}
+            turn={{ ...turn, status, activities: segment.activities, requests: segment.requests }}
+            onPermission={onPermission} onQuestion={onQuestion} />;
+        })}</AnimatePresence>
+        {needsStatus && <TurnActivity turn={turn} onPermission={onPermission} onQuestion={onQuestion} />}
+        {hasDetails && !detailsMessageId && !detailsProgressId && !hasBatch && !needsStatus
+          && <div className="transcript-message-actions"><ResponseDetails turn={turn} /></div>}
+        <AnimatePresence presenceAffectsLayout={false} initial={false}>{childRequests.map(request => <RequestCard key={request.id} request={request} onPermission={onPermission} onQuestion={onQuestion} />)}</AnimatePresence>
+        <AnimatePresence presenceAffectsLayout={false} initial={false}>{turn.error && <m.div key="error" variants={fadeUp} initial="hidden" animate="visible" exit="exit"
           className="transcript-turn-error" role="alert"><CircleAlert size={16} /><div><strong>Unable to finish work</strong><p>{turn.error}</p>
           {onRetry && <m.button {...softControlMotion} type="button" className="transcript-button" onClick={() => void onRetry(turn.id)}>Refresh status</m.button>}
         </div></m.div>}</AnimatePresence>
@@ -674,20 +823,47 @@ function Turn({ bot, turn, onPermission, onQuestion, onRetry }: TranscriptProps 
   </m.section>;
 }
 
+const MemoTurn = memo(Turn, (a, b) => a.turn === b.turn && a.bot.id === b.bot.id
+  && a.onPermission === b.onPermission && a.onQuestion === b.onQuestion && a.onRetry === b.onRetry);
+
 export function Transcript(props: TranscriptProps) {
   const { bot, events } = props;
-  const turns = useMemo(() => buildTranscript(events, bot.id), [events, bot.id]);
+  const project = useMemo(() => createTranscriptProjector(), [bot.id]);
+  const turns = useMemo(() => project(events, bot.id), [events, bot.id, project]);
   const visible = turns.filter(turn => turn.users.length || turn.responses.length || turn.activities.length || turn.requests.length || turn.notices.length || turn.error || isRunning(turn.status));
+  // Long journals should never block the first useful frame. Mount the latest
+  // turns immediately and hydrate older Markdown in idle-sized batches. Once
+  // caught up, Infinity keeps future turns synchronous without extra renders.
+  const [turnLimit, setTurnLimit] = useState(() => visible.length > 12 ? 12 : Number.POSITIVE_INFINITY);
+  useEffect(() => {
+    if (!Number.isFinite(turnLimit) || turnLimit >= visible.length) return;
+    let cancelled = false;
+    const reveal = () => {
+      if (cancelled) return;
+      setTurnLimit(current => {
+        const next = current + 12;
+        return next >= visible.length ? Number.POSITIVE_INFINITY : next;
+      });
+    };
+    const idle = window.requestIdleCallback?.(reveal, { timeout: 100 });
+    const timer = idle === undefined ? window.setTimeout(reveal, 16) : undefined;
+    return () => {
+      cancelled = true;
+      if (idle !== undefined) window.cancelIdleCallback?.(idle);
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
+  }, [turnLimit, visible.length]);
+  const rendered = Number.isFinite(turnLimit) ? visible.slice(-turnLimit) : visible;
   return <div className="transcript" aria-label={`Conversation with ${bot.name}`}>
-    <AnimatePresence initial={false}>{!visible.length && <m.div key="empty" variants={fadeUp} initial="hidden" animate="visible" exit="exit" className="transcript-empty">
+    <AnimatePresence presenceAffectsLayout={false} initial={false}>{!visible.length && <m.div key="empty" variants={fadeUp} initial="hidden" animate="visible" exit="exit" className="transcript-empty">
       <m.div className="transcript-empty-avatar" whileHover={{ rotate: 3, y: -2 }} transition={motionTransition.enter}><Avatar bot={bot} size={72} /></m.div>
       <span className="transcript-empty-eyebrow">{bot.chief ? 'YOUR COORDINATOR' : 'YOUR PERSISTENT ASSISTANT'}</span>
       <h2>{bot.name} is ready.</h2><p>{bot.role || 'Tell me what you want to achieve. Your bot will keep the context and continue working here.'}</p>
     </m.div>}
-    {visible.map(turn => <Turn key={turn.id} {...props} turn={turn} />)}</AnimatePresence>
-    {events.length > 0 && <div className="transcript-all-events"><RawJournal events={events.filter(event => event.botId === bot.id)} title="All bot events" /></div>}
+    {rendered.map(turn => <MemoTurn key={turn.id} bot={bot} turn={turn}
+      onPermission={props.onPermission} onQuestion={props.onQuestion} onRetry={props.onRetry} />)}</AnimatePresence>
     <div className="transcript-end" />
   </div>;
 }
 
-export default Transcript;
+export default memo(Transcript);

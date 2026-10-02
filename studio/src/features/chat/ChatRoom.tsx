@@ -1,24 +1,26 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { lazy, memo, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowLeft,
   PanelRight,
   LoaderCircle,
   ArrowDown,
 } from "lucide-react";
-import type { Attachment, Bot, Capabilities, Event } from "../../lib/types";
+import type { Attachment, Bot, Capabilities, Event, NodeInfo } from "../../lib/types";
 import { api, errorMessage } from "../../lib/api";
 import { isWorking, statusLabel } from "../../lib/events";
 import Avatar from "../../components/Avatar";
 import Composer from "./Composer";
 import { GoalDialog, useGoal } from "./GoalPanel";
-import Transcript from "../transcript/Transcript";
 import { useBotContext } from "../../hooks/useBotContext";
 import BotIsland from "./BotIsland";
-import { PresenceSurface } from "./ModelPicker";
+import { createChatStatusProjector } from "../../lib/chatStatus";
+import { QueuePanel, SessionStatus, WorkingStrip } from "./LiveStatus";
+import { useMessageQueue } from "./useMessageQueue";
 import {
   AnimatePresence, m, useIsPresent, useReducedMotion,
-  controlMotion, fade, fadeUp, popoverMotion, motionTransition,
+  controlMotion, fade, fadeUp, popoverMotion,
 } from "../../lib/motion";
+const Transcript = lazy(() => import("../transcript/Transcript"));
 
 function LatestButton({ onClick }: { onClick: () => void }) {
   const present = useIsPresent();
@@ -36,15 +38,13 @@ function LatestButton({ onClick }: { onClick: () => void }) {
     <ArrowDown size={14} />Jump to latest
   </m.button>;
 }
-function turnStats(events: Event[]) {
-  for (let i = events.length - 1; i >= 0; i--)
-    if (events[i].type === "turn") return events[i].data;
-  return {};
-}
-export default function ChatRoom({
+function ChatRoom({
   bot,
+  node,
+  offline,
   draftScope,
   events,
+  messages,
   capabilities,
   loading,
   suspended,
@@ -55,8 +55,11 @@ export default function ChatRoom({
   onHistory,
 }: {
   bot: Bot;
+  node?: NodeInfo;
+  offline?: boolean;
   draftScope: string;
   events: Event[];
+  messages: Event[];
   capabilities: Capabilities | null;
   loading: boolean;
   suspended: boolean;
@@ -75,12 +78,25 @@ export default function ChatRoom({
   const [detailsOpen, setDetailsOpen] = useState(false);
   const detailsTrigger = useRef<HTMLButtonElement>(null);
   const [pending, setPending] = useState("");
+  const pendingAt = useRef(0);
+  const activeScope = useRef(draftScope);
+  activeScope.current = draftScope;
+  const statusProjector = useMemo(createChatStatusProjector, []);
   const supportsGoal = !!capabilities?.backends[bot.backend]?.goals;
   const { goal, setGoal } = useGoal(bot, events, supportsGoal);
   const context = useBotContext(bot, events);
-  const stats = turnStats(events);
+  const stats = statusProjector(events);
   const working =
-    isWorking(bot.status) || isWorking(String(stats.status || "")) || !!pending;
+    isWorking(bot.status) || isWorking(stats.status) || !!pending;
+  const runtimeStatus = useMemo(() => pending && stats.turnId !== pending
+    ? { ...stats, turnId: pending, turn: stats.turn + 1, step: 0, status: "running", startedAt: pendingAt.current, endedAt: null, tokensPerSecond: null }
+    : stats, [pending, stats]);
+  const queue = useMessageQueue(bot.id, draftScope, stats.queueRevision, !!offline, onError);
+  const selectedModel = capabilities?.models.find(model => model.backend === bot.backend && model.id === bot.model);
+  const statusModel = working && stats.model ? capabilities?.models.find(model => model.id === stats.model)?.name || stats.model
+    : selectedModel?.name || bot.model || bot.backend;
+  const statusEffort = working && stats.effort ? stats.effort : bot.effort;
+  const serviceTier = selectedModel?.serviceTiers?.find(tier => tier.id === bot.serviceTier)?.name || bot.serviceTier || "";
   useEffect(() => {
     if (!suspended) return;
     setGoalOpen(false);
@@ -97,7 +113,10 @@ export default function ChatRoom({
     if (nearBottom.current && scroll.current)
       scroll.current.scrollTop = scroll.current.scrollHeight;
     else setShowScroll(true);
-  }, [events.length, events.at(-1)?.seq]);
+  // ResizeObserver follows actual height changes. Token events that do not
+  // change layout must not force a synchronous scrollHeight measurement.
+  }, [bot.id, loading, events.length > 0,
+    typeof ResizeObserver === "undefined" ? events.at(-1)?.seq : 0]);
   useLayoutEffect(() => {
     if (typeof ResizeObserver === "undefined" || !content.current || !scroll.current) return;
     const observer = new ResizeObserver(() => {
@@ -110,24 +129,34 @@ export default function ChatRoom({
     observer.observe(scroll.current);
     return () => observer.disconnect();
   }, []);
-  async function send(text: string, attachments: Attachment[]) {
-    const response = await api.send(bot.id, text, attachments);
-    setPending(response.turnId);
-    nearBottom.current = true;
-  }
-  async function permission(
+  const send = useCallback(async (text: string, attachments: Attachment[]) => {
+    const started = Date.now();
+    const response = await api.send(bot.id, text, attachments, working ? "queue" : undefined, queue.binding);
+    if (activeScope.current !== draftScope) return;
+    if (response.status === "queued") queue.refresh();
+    else if (response.status !== "steered") {
+      pendingAt.current = started;
+      setPending(response.turnId);
+      nearBottom.current = true;
+    }
+  }, [bot.id, draftScope, working, queue.binding, queue.refresh]);
+  const permission = useCallback(async (
     requestId: string,
     behavior: string,
     updatedInput?: Record<string, unknown>,
     message?: string,
-  ) {
+  ) => {
     try {
       await api.permission(bot.id, requestId, behavior, updatedInput, message);
     } catch (error) {
       onError(errorMessage(error));
       throw error;
     }
-  }
+  }, [bot.id, onError]);
+  const stop = useCallback(async () => { await api.stop(bot.id); setPending(""); }, [bot.id]);
+  const openDetails = useCallback(() => setDetailsOpen(true), []);
+  const closeDetails = useCallback(() => setDetailsOpen(false), []);
+  const openGoal = useCallback(() => { setDetailsOpen(false); setGoalOpen(true); }, []);
   const status = working
     ? statusLabel(bot.status === "idle" ? "working" : bot.status)
     : statusLabel(bot.status);
@@ -169,7 +198,7 @@ export default function ChatRoom({
         }}
       >
         <div className="chat-content" ref={content} style={{ height: events.length ? undefined : "100%" }}>
-        <AnimatePresence initial={false} mode="wait">
+        <AnimatePresence presenceAffectsLayout={false} initial={false} mode="wait">
         {loading && !events.length ? (
           <m.div key="loading" className="chat-loading" variants={fade} initial="hidden" animate="visible" exit="exit">
             <LoaderCircle size={23} className="spin" />
@@ -196,36 +225,22 @@ export default function ChatRoom({
           </m.div>
         ) : (
           <m.div key="conversation" className="conversation" variants={fade} initial="hidden" animate="visible" exit="exit">
-            <Transcript
-              bot={bot}
-              events={events}
-              onPermission={permission}
-              onQuestion={permission}
-              onRetry={onHistory ? () => onHistory() : undefined}
-            />
+            <Suspense fallback={<div className="chat-loading"><LoaderCircle size={19} className="spin" /><span>Rendering conversation…</span></div>}>
+              <Transcript
+                bot={bot}
+                events={events}
+                onPermission={permission}
+                onQuestion={permission}
+                onRetry={onHistory}
+              />
+            </Suspense>
           </m.div>
-        )}
-        </AnimatePresence>
-        <AnimatePresence initial={false}>
-        {pending && (
-          <PresenceSurface
-            key="pending"
-            className="accepted-message" aria-live="polite"
-            initial={{ opacity: 0, height: 0, paddingTop: 0, paddingBottom: 0 }}
-            animate={{ opacity: 1, height: "auto", paddingTop: 4, paddingBottom: 14 }}
-            exit={{ opacity: 0, height: 0, paddingTop: 0, paddingBottom: 0 }}
-            transition={reducedMotion ? { duration: 0 } : motionTransition.disclosure}
-            style={{ overflow: "hidden" }}
-          >
-            <LoaderCircle size={14} className="spin" />
-            Starting work…
-          </PresenceSurface>
         )}
         </AnimatePresence>
         </div>
       </div>
       <div className="chat-input-area">
-      <AnimatePresence initial={false}>
+      <AnimatePresence presenceAffectsLayout={false} initial={false}>
       {showScroll && (
         <LatestButton
           key="latest"
@@ -240,45 +255,48 @@ export default function ChatRoom({
         />
       )}
       </AnimatePresence>
+      <div className="chat-input-stack">
+      <QueuePanel snapshot={queue.snapshot} pending={queue.pending} busy={working} offline={offline} suspended={suspended}
+        error={queue.error} onSteer={queue.steer} onRemove={queue.remove} onResume={queue.resume} />
+      <WorkingStrip working={working} compacting={context.compacting || context.requesting} status={runtimeStatus}
+        offline={offline} suspended={suspended} onStop={stop} onError={onError} />
       <Composer
         key={`${draftScope}:${bot.id}`}
         draftScope={draftScope}
         suspended={suspended}
+        offline={offline}
         bot={bot}
         capabilities={capabilities}
         busy={working}
         context={context}
         onSend={send}
-        onStop={async () => {
-          await api.stop(bot.id);
-          setPending("");
-        }}
         onBotChange={onBotChange}
         onError={onError}
       />
+      <SessionStatus status={runtimeStatus} working={working} suspended={suspended} offline={offline} context={context.context}
+        model={statusModel} effort={statusEffort} tier={serviceTier} />
+      </div>
       </div>
       </div>
       <BotIsland
         bot={bot}
-        events={events}
+        events={messages}
         status={status}
         working={working}
         supportsGoal={supportsGoal}
         hasGoal={!!goal}
         open={detailsOpen}
         suspended={suspended}
-        onOpen={() => setDetailsOpen(true)}
-        onClose={() => setDetailsOpen(false)}
+        onOpen={openDetails}
+        onClose={closeDetails}
         triggerRef={detailsTrigger}
         capabilities={capabilities}
         onBotChange={onBotChange}
         onArchive={onArchive}
-        onGoal={() => {
-          setDetailsOpen(false);
-          setGoalOpen(true);
-        }}
+        node={node}
+        onGoal={openGoal}
       />
-      <AnimatePresence>
+      <AnimatePresence presenceAffectsLayout={false}>
       {goalOpen && !suspended && (
         <GoalDialog
           key="goal"
@@ -293,3 +311,5 @@ export default function ChatRoom({
     </section>
   );
 }
+
+export default memo(ChatRoom);

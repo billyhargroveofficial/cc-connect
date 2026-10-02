@@ -4,6 +4,7 @@ import test from 'node:test';
 import { runInNewContext } from 'node:vm';
 import ts from 'typescript';
 import { motionTestModule } from '../lib/motion-stub.mjs';
+import * as hostCatalog from '../lib/hostCatalog.ts';
 
 const source = ts.transpileModule(readFileSync(new URL('./BotRoster.tsx', import.meta.url), 'utf8'), {
   compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX },
@@ -12,11 +13,12 @@ const source = ts.transpileModule(readFileSync(new URL('./BotRoster.tsx', import
 function renderRoster(bots, onCreate, overrides = {}) {
   const element = (type, props) => typeof type === 'function' ? type(props) : ({ type, props });
   const modules = {
+    react: { memo: component => component, useMemo: factory => factory(), useEffect() {}, useRef: initial => ({ current: initial }), useState: initial => [typeof initial === 'function' ? initial() : initial, () => {}], ...overrides.hooks },
     'react/jsx-runtime': { jsx: element, jsxs: element },
     'lucide-react': new Proxy({}, { get: (_, name) => name }),
     '../lib/events': {
       isWorking: () => false,
-      messagePreview: () => '',
+      messagePreview: events => events.at(-1)?.data?.content || '',
       statusLabel: () => 'Ready',
       telegramTitle: () => 'Connected',
     },
@@ -24,18 +26,22 @@ function renderRoster(bots, onCreate, overrides = {}) {
     './SidebarResizeHandle': { default: 'SidebarResizeHandle' },
     './ThemePicker': { default: 'ThemePicker' },
     '../lib/motion': { ...motionTestModule(), useIsPresent: () => overrides.present !== false },
+    '../lib/hostCatalog': hostCatalog,
   };
   const exports = {};
   runInNewContext(source, {
     exports,
+    requestAnimationFrame: callback => { callback(); return 1; },
     require: name => {
       assert.ok(name in modules, `Unexpected BotRoster import: ${name}`);
       return modules[name];
     },
   }, { filename: 'BotRoster.tsx' });
   return exports.default({
-    bots, events: {}, selectedId: '', onCreate,
+    bots: bots.map(bot => bot.bot ? bot : ({ bot, node: { id: 'local', name: 'This server', local: true, online: true }, key: hostCatalog.catalogBotKey('local', bot.id) })),
+    events: {}, selectedKey: hostCatalog.catalogBotKey('local', overrides.selectedId || ''), onCreate,
     onSelect() {}, onSettings() {}, onTheme() {}, onLogout() {},
+    hostFilters: { server: true, mac: true }, onFilterChange() {},
     theme: 'system', connection: 'connected',
     ...overrides,
   });
@@ -104,6 +110,62 @@ test('the account identity shares the existing connection line', () => {
   assert.equal(identity.props.children, '@billy.name · Connected');
   assert.equal(line.props.title, 'Signed in as @billy.name · Workspace connected');
   assert.equal(allIn(roster, node => node.props.className === 'roster-connection').length, 1);
+});
+
+test('an offline active device shares the existing connection line without a host dropdown', () => {
+  const node = { id: 'mac', name: 'MacBook', online: false, local: false };
+  const roster = renderRoster([], () => {}, { activeNode: node, user: { id: 'user-1', username: 'billy' } });
+  const line = allIn(roster, node => node.props?.className === 'roster-connection')[0];
+  assert.equal(line.props.title, 'Signed in as @billy · MacBook · Offline');
+  assert.equal(allIn(line, node => node.props?.className === 'roster-connection-copy')[0].props.children, '@billy · Offline');
+  assert.equal(allIn(roster, node => node.type === 'header').length, 0);
+  assert.equal(allIn(roster, node => node.props?.className?.split(' ').includes('roster-connection')).length, 1);
+  assert.equal(allIn(roster, node => node.props?.['aria-haspopup'] === 'menu').length, 0);
+});
+
+test('native Server and Mac checkboxes filter rows independently without selecting another host', () => {
+  const local = { id: 'local', name: 'Server', online: true, local: true };
+  const mac = { id: 'mac', name: 'MacBook', online: false, local: false, os: 'darwin' };
+  const entries = [local, mac].map(node => ({ key: hostCatalog.catalogBotKey(node.id, 'shared'), node,
+    bot: { id: 'shared', name: node.local ? 'Server bot' : 'Mac bot', createdAt: '2026-10-02', status: 'idle' } }));
+  const selections = [], filters = { server: true, mac: true };
+  const overrides = { activeNode: local, hostFilters: filters,
+    onFilterChange: (category, enabled) => { filters[category] = enabled; },
+    onSelect: (id, nodeId) => selections.push([id, nodeId]) };
+  const render = () => renderRoster(entries, () => {}, overrides);
+  const rows = () => allIn(render(), node => node.props?.className?.startsWith('bot-row '));
+  const checks = () => allIn(render(), node => node.type === 'input' && node.props.type === 'checkbox');
+  assert.equal(rows().length, 2);
+  assert.deepEqual(checks().map(check => check.props.checked), [true, true]);
+  checks()[0].props.onChange({ target: { checked: false } });
+  assert.equal(rows().length, 1);
+  assert.equal(allIn(rows()[0], node => node.props?.className === 'bot-row-name')[0].props.children, 'Mac bot');
+  assert.deepEqual(selections, [], 'filtering does not change the active host or conversation');
+  rows()[0].props.onClick();
+  assert.deepEqual(selections, [['shared', 'mac']], 'offline cached rows remain selectable with their explicit node');
+  checks()[1].props.onChange({ target: { checked: false } });
+  assert.equal(rows().length, 0);
+  assert.equal(allIn(render(), node => node.props?.className === 'roster-empty')[0].props.children, 'No bots on the selected devices.');
+  checks()[0].props.onChange({ target: { checked: true } });
+  assert.equal(rows().length, 1);
+  assert.equal(allIn(rows()[0], node => node.props?.className === 'bot-row-name')[0].props.children, 'Server bot');
+});
+
+test('duplicate bot IDs have separate selection and device labels and do not borrow active-host previews', () => {
+  const local = { id: 'local', name: 'This server', local: true, online: true };
+  const mac = { id: 'mac', name: 'MacBook', local: false, online: true, os: 'darwin' };
+  const entries = [local, mac].map(node => ({ key: hostCatalog.catalogBotKey(node.id, 'shared'), node,
+    bot: { id: 'shared', name: node.name, createdAt: '2026-10-02', status: 'idle', role: 'Own role' } }));
+  const roster = renderRoster(entries, () => {}, { activeNode: local, selectedKey: entries[1].key,
+    events: { shared: [{ type: 'message', data: { content: 'Private server preview' } }] } });
+  const rows = allIn(roster, node => node.props?.className?.startsWith('bot-row '));
+  const rowFor = name => rows.find(row => allIn(row, node => node.props?.className === 'bot-row-name')[0].props.children === name);
+  assert.equal(rowFor(local.name).props['aria-current'], undefined);
+  assert.equal(rowFor(mac.name).props['aria-current'], 'page');
+  assert.equal(allIn(rowFor(local.name), node => node.props?.className === 'bot-row-device')[0].props.children[1], 'Server');
+  assert.equal(allIn(rowFor(mac.name), node => node.props?.className === 'bot-row-device')[0].props.children[1], 'MacBook');
+  assert.equal(allIn(rowFor(local.name), node => node.props?.className?.startsWith('bot-row-preview'))[0].props.children[1], 'Private server preview');
+  assert.equal(allIn(rowFor(mac.name), node => node.props?.className?.startsWith('bot-row-preview'))[0].props.children[1], 'Own role');
 });
 
 test('roster layout measurements follow ordering and selection instead of streaming updates', () => {

@@ -1,6 +1,17 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { buildTranscript, isRunning } from './reducer.ts';
+import { buildTranscript as rebuildTranscript, createTranscriptProjector, buildTurnSegments, collapseTurnActivity, isRunning } from './reducer.ts';
+
+// Every semantic fixture also checks cached replay, including a partial journal
+// followed by recovery/late metadata, against the complete reference reducer.
+function buildTranscript(events, botId) {
+  const project = createTranscriptProjector();
+  project(events.slice(0, Math.floor(events.length / 2)), botId);
+  const expected = rebuildTranscript(events, botId);
+  assert.deepEqual(project(events, botId), expected);
+  assert.deepEqual(project([...events], botId), expected);
+  return expected;
+}
 
 function event(seq, type, data, turnId = 'turn-1', botId = 'bot-1') {
   return { seq, botId, turnId, type, time: `2026-10-01T10:00:${String(seq % 60).padStart(2, '0')}Z`, data };
@@ -11,6 +22,141 @@ function native(seq, method, params, backend = 'codex', extra = {}) {
 function backgroundNative(seq, method, params, backend = 'codex', extra = {}) {
   return { ...native(seq, method, params, backend, extra), turnId: '' };
 }
+
+test('completed service history folds once before the final answer without swallowing files, prompts, steered input, or later activity', () => {
+  const [turn] = buildTranscript([
+    event(1, 'message', { role: 'user', content: 'Make a report.' }),
+    native(2, 'item/completed', { item: { id: 'p1', type: 'agentMessage', phase: 'commentary', text: 'Reading the sources.' } }),
+    native(3, 'item/completed', { item: { id: 'a', type: 'commandExecution', command: 'read', aggregatedOutput: 'source', status: 'completed' } }),
+    event(4, 'message', { role: 'user', content: 'Use the newer source.', source: 'steer' }),
+    native(5, 'item/completed', { item: { id: 'p2', type: 'agentMessage', phase: 'commentary', text: 'Checking the newer source.' } }),
+    event(6, 'message', { role: 'assistant', content: 'Report', artifact: true, source: 'files', attachments: [{ id: 'file', name: 'report.pdf', mimeType: 'application/pdf' }] }),
+    native(7, 'item/completed', { item: { id: 'b', type: 'commandExecution', command: 'verify', aggregatedOutput: 'verified', status: 'completed' } }),
+    native(8, 'item/completed', { item: { id: 'answer', type: 'agentMessage', phase: 'final_answer', text: 'The report is ready.' } }),
+    event(9, 'turn', { status: 'completed' }),
+  ]);
+  const segments = buildTurnSegments(turn);
+  const live = { ...turn, status: 'running' };
+  assert.equal(collapseTurnActivity(live, segments), segments, 'live progress stays inline with no extra projection');
+  const pending = { kind: 'request', id: 'approval', request: { id: 'approval', resolved: false } };
+  const after = { kind: 'progress', id: 'after', activity: { id: 'after', text: 'Additional service notice.' } };
+  const afterBatch = { kind: 'batch', id: 'after-batch', activities: [{ id: 'late', output: 'Late result' }], requests: [] };
+  const afterFile = { kind: 'message', id: 'after-file', message: { id: 'after-file', artifact: true, attachments: [{ id: 'late-file' }] } };
+  const source = [...segments.slice(0, 4), pending, ...segments.slice(4), after, afterBatch, afterFile];
+  const visible = collapseTurnActivity(turn, source);
+  assert.deepEqual(visible.map(segment => segment.kind), ['message', 'request', 'history', 'message', 'progress', 'batch', 'message']);
+  assert.equal(visible[0].message, turn.responses.find(message => message.artifact), 'file publication stays visible');
+  assert.equal(visible[1], pending, 'an unresolved request remains actionable');
+  assert.equal(visible[2].id, `history-${turn.id}`);
+  assert.deepEqual(visible[2].segments.map(segment => segment.kind), ['progress', 'batch', 'progress', 'batch']);
+  assert.deepEqual(visible[2].segments.filter(segment => segment.kind === 'batch').flatMap(segment => segment.activities.map(activity => activity.output)), ['source', 'verified']);
+  assert.equal(visible[3].message.content, 'The report is ready.');
+  assert.equal(visible[4], after, 'service notices after the final answer never join the earlier history');
+  assert.equal(visible[5], afterBatch, 'post-final action batches keep their position');
+  assert.equal(visible[6], afterFile, 'post-final files remain after their action batch');
+  assert.deepEqual(turn.users.map(message => message.content), ['Make a report.', 'Use the newer source.']);
+  assert.equal(turn.users[1].source, 'steer');
+  assert.deepEqual(source.filter(segment => ['batch', 'progress'].includes(segment.kind)).slice(0, -2), visible[2].segments,
+    'archived segments keep their original objects and chronology');
+  for (const status of ['failed', 'error', 'stopped', 'interrupted', 'waiting_permission']) {
+    assert.equal(collapseTurnActivity({ ...turn, status }, source), source, `${status} work remains visible`);
+  }
+  const withoutAnswer = source.filter(segment => segment.kind !== 'message');
+  assert.equal(collapseTurnActivity({ ...turn, responses: [] }, withoutAnswer), withoutAnswer,
+    'progress-only completions remain visible because there is no final answer');
+});
+
+test('progress splits action batches by first appearance even when parallel tools finish later', () => {
+  const source = [
+    event(1, 'message', { role: 'user', content: 'Fix it' }),
+    native(2, 'item/started', { item: { id: 'a', type: 'commandExecution', command: 'first' } }),
+    native(3, 'item/started', { item: { id: 'b', type: 'mcpToolCall', server: 'files', tool: 'read', arguments: { path: 'b' } } }),
+    native(4, 'item/started', { item: { id: 'p', type: 'agentMessage', phase: 'commentary', text: '' } }),
+    native(5, 'item/agentMessage/delta', { itemId: 'p', delta: 'Found ' }),
+    native(6, 'item/agentMessage/delta', { itemId: 'p', delta: 'the cause.' }),
+    native(7, 'item/started', { item: { id: 'c', type: 'dynamicToolCall', tool: 'apply_patch', arguments: { patch: 'fix' } } }),
+    native(8, 'item/completed', { item: { id: 'a', type: 'commandExecution', aggregatedOutput: 'First output', status: 'completed' } }),
+    native(9, 'item/completed', { item: { id: 'b', type: 'mcpToolCall', result: 'Second output', status: 'completed' } }),
+    native(10, 'item/completed', { item: { id: 'p', type: 'agentMessage', phase: 'commentary', text: 'Found the cause.' } }),
+    native(11, 'item/completed', { item: { id: 'c', type: 'dynamicToolCall', contentItems: ['Patched'], status: 'completed' } }),
+    native(12, 'item/started', { item: { id: 'answer', type: 'agentMessage', phase: 'final_answer', text: '' } }),
+    native(13, 'item/agentMessage/delta', { itemId: 'answer', delta: 'Fixed.' }),
+    native(14, 'item/completed', { item: { id: 'answer', type: 'agentMessage', phase: 'final_answer', text: 'Fixed.' } }),
+    event(15, 'turn', { status: 'completed' }),
+  ];
+  const [turn] = buildTranscript([...source.slice().reverse(), source[1], source[9]]);
+  const segments = buildTurnSegments(turn);
+  assert.deepEqual(segments.map(segment => segment.kind), ['batch', 'progress', 'batch', 'message']);
+  assert.deepEqual(segments[0].activities.map(activity => activity.id), ['codex-a', 'codex-b']);
+  assert.equal(segments[0].activities[0].output, 'First output');
+  assert.equal(segments[1].activity.text, 'Found the cause.');
+  assert.equal(segments[1].activity.seq, 4);
+  assert.deepEqual(segments[2].activities.map(activity => activity.id), ['codex-c']);
+  assert.equal(segments[3].message.content, 'Fixed.');
+  assert.equal(segments[3].message.seq, 12);
+  assert.equal(turn.events.length, source.length, 'all unmodified details remain in the turn journal');
+});
+
+test('empty progress establishes a batch boundary without a blank row and recovered deltas keep one progress item', () => {
+  const source = [
+    native(1, 'item/started', { item: { id: 'a', type: 'commandExecution', command: 'first' } }),
+    native(2, 'item/started', { item: { id: 'p', type: 'agentMessage', phase: 'commentary', text: '' } }),
+    native(3, 'item/started', { item: { id: 'b', type: 'commandExecution', command: 'second' } }),
+  ];
+  let [turn] = buildTranscript(source);
+  assert.deepEqual(buildTurnSegments(turn).map(segment => segment.kind), ['batch', 'batch']);
+  [turn] = buildTranscript([...source, native(4, 'item/agentMessage/delta', { itemId: 'p', delta: 'Progress' })]);
+  assert.deepEqual(buildTurnSegments(turn).map(segment => segment.kind), ['batch', 'progress', 'batch']);
+  assert.equal(buildTurnSegments(turn)[1].id, 'codex-p');
+
+  [turn] = buildTranscript([
+    native(1, 'item/agentMessage/delta', { itemId: 'p', delta: 'Recovered progress' }),
+    native(2, 'item/started', { item: { id: 'a', type: 'commandExecution', command: 'check' } }),
+    native(3, 'item/completed', { item: { id: 'p', type: 'agentMessage', phase: 'commentary', text: 'Recovered progress.' } }),
+  ]);
+  assert.equal(turn.responses.length, 0, 'resolved commentary is not also a provisional final response');
+  assert.deepEqual(buildTurnSegments(turn).map(segment => segment.kind), ['progress', 'batch']);
+  assert.equal(buildTurnSegments(turn)[0].activity.text, 'Recovered progress.');
+  assert.equal(buildTurnSegments(turn)[0].activity.seq, 1, 'recovered phase retains the first delta position');
+});
+
+test('Pi text and published attachments retain chronological boundaries between tool batches', () => {
+  const [turn] = buildTranscript([
+    native(1, 'message_start', { message: { role: 'assistant', content: [] } }, 'pi'),
+    native(2, 'message_end', { message: { role: 'assistant', content: [
+      { type: 'thinking', thinking: 'Check' }, { type: 'text', text: 'I will inspect it.' },
+      { type: 'toolCall', id: 'read', name: 'read', arguments: { path: 'a.txt' } },
+    ] } }, 'pi'),
+    native(3, 'tool_execution_end', { toolCallId: 'read', toolName: 'read', result: 'File contents' }, 'pi'),
+    event(4, 'message', { role: 'assistant', source: 'files', artifact: true, caption: 'Preview', attachments: [{ id: 'preview', name: 'preview.png', mimeType: 'image/png' }] }),
+    native(5, 'message_start', { message: { role: 'assistant', content: [] } }, 'pi'),
+    native(6, 'message_end', { message: { role: 'assistant', content: [{ type: 'text', text: 'Finished.' }] } }, 'pi'),
+    native(7, 'agent_settled', {}, 'pi'),
+  ]);
+  const segments = buildTurnSegments(turn);
+  assert.deepEqual(segments.map(segment => segment.kind), ['batch', 'message', 'batch', 'message', 'message']);
+  assert.equal(segments[1].message.content, 'I will inspect it.');
+  assert.equal(segments[2].activities[0].output, 'File contents');
+  assert.equal(segments[3].message.artifact, true);
+  assert.equal(segments[3].message.attachments[0].id, 'preview');
+  assert.equal(segments[4].message.content, 'Finished.');
+});
+
+test('consecutive narration stays inline, service details stay batched, and pending approvals stay outside batches', () => {
+  const [turn] = buildTranscript([
+    native(1, 'item/completed', { item: { id: 'p1', type: 'agentMessage', phase: 'commentary', text: 'First update' } }),
+    native(2, 'item/completed', { item: { id: 'p2', type: 'agentMessage', phase: 'commentary', text: 'Second update' } }),
+    native(3, 'item/completed', { item: { id: 'think', type: 'reasoning', summary: ['Consider'], content: [] } }),
+    native(4, 'turn/plan/updated', { plan: [{ step: 'Check', status: 'completed' }] }),
+    native(5, 'item/tool/requestUserInput', { questions: [{ id: 'q', question: 'Continue?', options: [] }] }, 'codex', { requestId: 'approval' }),
+    native(6, 'item/started', { item: { id: 'compaction', type: 'contextCompaction' } }),
+  ]);
+  const segments = buildTurnSegments(turn);
+  assert.deepEqual(segments.map(segment => segment.kind), ['progress', 'progress', 'batch', 'request', 'batch']);
+  assert.deepEqual(segments[2].activities.map(activity => activity.kind), ['thinking', 'plan']);
+  assert.equal(segments[3].request.resolved, false);
+  assert.equal(segments[4].activities[0].title, 'Context compaction');
+});
 
 test('turn service tier stays scoped to its historical turn and survives sparse lifecycle updates', () => {
   const [fast, automatic] = buildTranscript([
@@ -130,6 +276,21 @@ test('permission/question requests are deduplicated, native metadata retained, a
   assert.equal(turn.requests[0].questions[0].isSecret, true);
   assert.equal(turn.requests[0].resolved, true);
   assert.equal(turn.requests[0].behavior, 'allow');
+});
+
+test('shared decisions resolve child requests while its subagent and parent remain active', () => {
+  const [turn] = buildTranscript([
+    native(1, 'turn/started', { threadId: 'root', turn: { status: 'inProgress' } }, 'codex', { rootThreadId: 'root' }),
+    native(2, 'item/tool/requestUserInput', { threadId: 'child', questions: [{ id: 'q', question: 'Continue?' }] },
+      'codex', { rootThreadId: 'root', requestId: 'child-request' }),
+    event(3, 'permission', { requestId: '"child-request"', behavior: 'allow', status: 'resolved' }, ''),
+  ]);
+  assert.equal(turn.status, 'inProgress');
+  assert.equal(turn.requests.length, 0);
+  const child = turn.activities.find(activity => activity.thread?.id === 'child').thread;
+  assert.equal(child.status, 'running');
+  assert.equal(child.requests[0].resolved, true, 'an answered subagent question must stop prompting the owner');
+  assert.equal(child.requests[0].behavior, 'allow');
 });
 
 test('interrupted turn closes pending requests and activities without fabricating an answer', () => {
@@ -692,4 +853,25 @@ test('legacy runtime and adapter origin queues resolve a shared call even after 
   assert.equal(turn.activities[0].callId, 'known-call');
   assert.deepEqual(turn.activities[0].output, output);
   assert.equal(turn.events.length, events.length);
+});
+
+test('streaming preserves completed turn identities and invalidates corrected history and account scope', () => {
+  const project = createTranscriptProjector();
+  const history = [event(1, 'message', { role: 'user', content: 'old' }, 'old'),
+    event(2, 'message', { role: 'assistant', content: 'done' }, 'old'),
+    event(3, 'turn', { status: 'completed' }, 'old'),
+    event(4, 'turn', { status: 'running' }, 'live')];
+  const before = project(history, 'bot-1');
+  const stream = [...history, event(5, 'agent', { type: 'text', content: 'new' }, 'live')];
+  const after = project(stream, 'bot-1');
+  assert.equal(after[0], before[0], 'a token never reconstructs the old answer');
+  assert.notEqual(after[1], before[1]);
+  assert.deepEqual(after, rebuildTranscript(stream, 'bot-1'));
+  const corrected = stream.map(e => e.seq === 2 ? { ...e, data: { role: 'assistant', content: 'corrected' } } : e);
+  const next = project(corrected, 'bot-1');
+  assert.notEqual(next[0], after[0]);
+  assert.equal(next[1], after[1]);
+  assert.deepEqual(project(corrected, 'another-bot'), []);
+  assert.notEqual(project(corrected, 'bot-1')[0], next[0], 'another scope cannot inherit turn references');
+  assert.deepEqual(project([], 'bot-1'), []);
 });

@@ -33,6 +33,10 @@ type hostTestFixture struct {
 }
 
 func newHostTest(t *testing.T, legacy bool) *hostTestFixture {
+	return newConfiguredHostTest(t, legacy, nil)
+}
+
+func newConfiguredHostTest(t *testing.T, legacy bool, configure func(*HostServerConfig)) *hostTestFixture {
 	t.Helper()
 	f := &hostTestFixture{root: t.TempDir(), stores: make(map[string]*Store), servers: make(map[string]*Server)}
 	if legacy {
@@ -43,10 +47,14 @@ func newHostTest(t *testing.T, legacy bool) *hostTestFixture {
 		}
 	}
 	var err error
-	f.host, err = NewHostServer(HostServerConfig{
+	config := HostServerConfig{
 		Root: f.root, RegistrationAllowed: true, LegacyWorkspace: legacy,
 		LegacyToken: testOwnerToken, ResolveTenant: f.resolve,
-	})
+	}
+	if configure != nil {
+		configure(&config)
+	}
+	f.host, err = NewHostServer(config)
 	if err != nil {
 		t.Fatal(err)
 	}

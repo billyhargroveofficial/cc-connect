@@ -38,9 +38,9 @@ export function draftFromBot(bot?: Bot | null, capabilities?: Capabilities | nul
   }
 }
 
-export function botPayload(draft: BotDraft): Partial<Bot> {
+export function botPayload(draft: BotDraft, { includeRole = true }: { includeRole?: boolean } = {}): Partial<Bot> {
   return {
-    name: draft.name.trim(), role: draft.role.trim(), avatar: draft.avatar,
+    name: draft.name.trim(), ...(includeRole ? { role: draft.role.trim() } : {}), avatar: draft.avatar,
     chief: draft.chief, backend: draft.backend, model: draft.model, effort: draft.effort,
     telegram: {
       enabled: draft.telegramEnabled,
@@ -87,24 +87,35 @@ export function ModalShell({ title, subtitle, onClose, children, footer, drawer 
     const element = panel.current
     const unlockBody = lockModalBody()
     panel.current?.focus()
+    const controls = () => Array.from(panel.current?.querySelectorAll<HTMLElement>(
+      'button:not(:disabled), [href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex="0"]',
+    ) ?? []).filter((element) => element.tabIndex >= 0 && !element.closest('[inert]') && element.getClientRects().length > 0)
     const onKey = (event: KeyboardEvent) => {
       if (event.key === 'Escape') { event.preventDefault(); close.current(); return }
       if (event.key !== 'Tab' || !panel.current) return
-      const items = Array.from(panel.current.querySelectorAll<HTMLElement>(
-        'button:not(:disabled), [href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex="0"]',
-      )).filter((element) => element.tabIndex >= 0 && !element.closest('[inert]') && element.getClientRects().length > 0)
+      const items = controls()
       const first = items[0]
       const last = items[items.length - 1]
-      if (!first) { event.preventDefault(); return }
-      if (event.shiftKey && (document.activeElement === first || document.activeElement === panel.current)) {
+      if (!first) { event.preventDefault(); panel.current.focus(); return }
+      // Dynamic settings panes can remove the focused control without a
+      // focusin event, leaving BODY focused. Re-enter the active dialog.
+      if (!panel.current.contains(document.activeElement)) {
+        event.preventDefault(); (event.shiftKey ? last : first).focus()
+      } else if (event.shiftKey && (document.activeElement === first || document.activeElement === panel.current)) {
         event.preventDefault(); last.focus()
       } else if (!event.shiftKey && (document.activeElement === last || document.activeElement === panel.current)) {
         event.preventDefault(); first.focus()
       }
     }
+    const onFocus = (event: FocusEvent) => {
+      if (panel.current && !panel.current.contains(event.target as Node | null))
+        (controls()[0] || panel.current).focus({ preventScroll: true })
+    }
     document.addEventListener('keydown', onKey)
+    document.addEventListener('focusin', onFocus)
     return () => {
       document.removeEventListener('keydown', onKey)
+      document.removeEventListener('focusin', onFocus)
       unlockBody()
       returnFrame.current = window.requestAnimationFrame(() => {
         returnFrame.current = null
@@ -160,9 +171,9 @@ export function SaveButton({ busy, children = 'Save', disabled = false }: {
   </m.button>
 }
 
-export function BotFields({ value, onChange, capabilities, running = false }: {
+export function BotFields({ value, onChange, capabilities, running = false, beforeModel, includeRole = true }: {
   value: BotDraft; onChange: (value: BotDraft) => void;
-  capabilities: Capabilities | null; running?: boolean;
+  capabilities: Capabilities | null; running?: boolean; beforeModel?: ReactNode; includeRole?: boolean;
 }) {
   const paletteId = useId()
   const update = <K extends keyof BotDraft>(key: K, next: BotDraft[K]) => onChange({ ...value, [key]: next })
@@ -180,14 +191,15 @@ export function BotFields({ value, onChange, capabilities, running = false }: {
     <label className="cb-settings-field">Name
       <input value={value.name} onChange={(event) => update('name', event.target.value)} required maxLength={80} placeholder="What is your bot's name?" autoComplete="off" />
     </label>
-    <label className="cb-settings-field">Role
+    {includeRole && <label className="cb-settings-field">Purpose
       <textarea value={value.role} onChange={(event) => update('role', event.target.value)} rows={3}
         maxLength={4000} placeholder="What it helps with and the results it is responsible for" />
-    </label>
+    </label>}
     <label className="cb-settings-toggle-row">
       <span><strong>Lead bot</strong><small>Coordinates the other bots and stays first in the list.</small></span>
       <input type="checkbox" className="cb-settings-switch" checked={value.chief} onChange={(event) => update('chief', event.target.checked)} />
     </label>
+    {beforeModel}
     <section className="cb-settings-section">
       <h3>Default model</h3>
       <RuntimeFields backend={value.backend} model={value.model} effort={value.effort}

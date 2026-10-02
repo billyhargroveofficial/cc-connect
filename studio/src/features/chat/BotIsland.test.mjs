@@ -36,7 +36,7 @@ function island({ desktop = true, shellPresent = true, panePresent = true } = {}
     try { return type(props); } finally { rendering.pop(); }
   };
   const modules = {
-    react: {
+    react: { memo: component => component,
       useState: state,
       useRef: initial => state(() => ({ current: initial }))[0],
       useEffect(effect) { effects.push(effect); },
@@ -93,7 +93,7 @@ function island({ desktop = true, shellPresent = true, panePresent = true } = {}
   const card = () => find(node => node.props?.className === 'bot-island-card');
   const panel = () => find(node => node.type === 'BotSettingsPanel');
   return {
-    calls, props, card, panel,
+    calls, props, card, panel, focusWithoutScroll: exports.focusWithoutScroll,
     shell: () => find(node => node.props?.className?.split(' ').includes('bot-island-shell')),
     pane: () => find(node => ['bot-island-overview', 'bot-island-settings'].includes(node.props?.className)),
     flushEffects: () => { render(); effects.forEach(effect => effect()); },
@@ -145,6 +145,32 @@ test('opening settings only requests the bot details overlay on mobile', () => {
   mobile.openSettings();
   assert.equal(mobile.props.open, true, 'the mobile settings controller opens the host details overlay');
   assert.ok(mobile.panel());
+});
+
+test('settings transition stays pinned to the island right edge and focus never scrolls it', () => {
+  const view = island();
+  const panePresence = findIn(view.card(), node => node.props?.mode === 'popLayout');
+  assert.ok(panePresence, 'overview and settings use one presence switch');
+  assert.equal(panePresence.props.anchorX, 'right', 'the popped overview follows the card fixed edge');
+  assert.equal(view.pane().props.layout, undefined, 'pane crossfades must not start a second layout projection');
+
+  const calls = [];
+  const target = { focus: options => calls.push(options) };
+  view.focusWithoutScroll(target);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].preventScroll, true);
+});
+
+test('bot overview identifies its host in one muted line', () => {
+  const view = island();
+  view.props.node = { id: 'mac', name: 'MacBook', hostname: 'Billy-Mac', os: 'darwin', online: false };
+  const line = findIn(view.card(), node => node.props?.className === 'bot-island-host');
+  assert.ok(line);
+  assert.equal(line.props.title, 'MacBook · Billy-Mac · darwin');
+  assert.equal(findIn(line, node => node.type === 'span').props.children, 'MacBook');
+  assert.equal(findIn(line, node => node.type === 'small').props.children, 'Offline');
+  view.props.node.online = true;
+  assert.equal(findIn(view.card(), node => node.type === 'small' && node.props?.children === 'Offline'), undefined);
 });
 
 test('mobile Escape first returns from bot settings to details, then closes details', () => {

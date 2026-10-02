@@ -291,12 +291,15 @@ func (s *piSession) deliverRPCResponse(raw map[string]any) {
 		return
 	}
 	var reply piRPCResponse
-	if success, _ := raw["success"].(bool); !success {
+	success, acknowledged := raw["success"].(bool)
+	if !acknowledged {
+		reply.err = fmt.Errorf("pi: RPC %v returned a malformed acknowledgement", raw["command"])
+	} else if !success {
 		message, _ := raw["error"].(string)
 		if message == "" {
 			message = "command failed"
 		}
-		reply.err = fmt.Errorf("pi: RPC %v: %s", raw["command"], message)
+		reply.err = &core.RPCRejectionError{Message: fmt.Sprintf("pi: RPC %v: %s", raw["command"], message)}
 	} else if raw["data"] != nil {
 		reply.data, reply.err = json.Marshal(raw["data"])
 	}

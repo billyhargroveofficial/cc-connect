@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState } from "react";
+import { memo, useEffect, useId, useRef, useState } from "react";
 import {
   ArrowUp,
   Square,
@@ -8,12 +8,10 @@ import {
   X,
   FileText,
   AudioLines,
-  MoreHorizontal,
 } from "lucide-react";
 import type { Attachment, Bot, Capabilities } from "../../lib/types";
 import { api, errorMessage } from "../../lib/api";
 import ModelPicker, { PresenceSurface, useDialogFocus } from "./ModelPicker";
-import ContextControl from "./ContextControl";
 import type { useBotContext } from "../../hooks/useBotContext";
 import {
   AnimatePresence, m, useIsPresent, useReducedMotion,
@@ -34,28 +32,28 @@ function initialDraft(scope: string, id: string) {
     return "";
   }
 }
-export default function Composer({
+function Composer({
   bot,
   draftScope,
   capabilities,
   busy,
   onSend,
-  onStop,
   onBotChange,
   onError,
   context,
   suspended = false,
+  offline = false,
 }: {
   bot: Bot;
   draftScope: string;
   capabilities: Capabilities | null;
   busy: boolean;
   onSend: (text: string, attachments: Attachment[]) => Promise<void>;
-  onStop: () => Promise<void>;
   onBotChange: (bot: Bot) => void;
   onError: (error: string) => void;
   context: ReturnType<typeof useBotContext>;
   suspended?: boolean;
+  offline?: boolean;
 }) {
   const present = useIsPresent();
   const reducedMotion = useReducedMotion();
@@ -64,7 +62,6 @@ export default function Composer({
   const [sending, setSending] = useState(false);
   const [transcribing, setTranscribing] = useState(false);
   const [recording, setRecording] = useState(false);
-  const [stopping, setStopping] = useState(false);
   const [elapsed, setElapsed] = useState(0);
   const [actionsOpen, setActionsOpen] = useState(false);
   const [modelPickerOpen, setModelPickerOpen] = useState(false);
@@ -78,8 +75,13 @@ export default function Composer({
   const recorder = useRef<MediaRecorder | null>(null);
   const stream = useRef<MediaStream | null>(null);
   const audioChunks = useRef<Blob[]>([]);
-  const microphoneLifecycle = useRef({ epoch: 0, active: true, present, draftScope, botId: bot.id });
+  const uploadLifecycle = useRef({ epoch: 0, active: true, present, draftScope, botId: bot.id });
+  uploadLifecycle.current.present = present;
+  uploadLifecycle.current.draftScope = draftScope;
+  uploadLifecycle.current.botId = bot.id;
+  const microphoneLifecycle = useRef({ epoch: 0, active: true, present, offline, draftScope, botId: bot.id });
   microphoneLifecycle.current.present = present;
+  microphoneLifecycle.current.offline = offline;
   microphoneLifecycle.current.draftScope = draftScope;
   microphoneLifecycle.current.botId = bot.id;
   function closeActions() {
@@ -118,9 +120,16 @@ export default function Composer({
     return () => clearInterval(timer);
   }, [recording]);
   useEffect(() => {
-    const lifecycle = microphoneLifecycle.current;
+    const lifecycle = uploadLifecycle.current;
     lifecycle.epoch++;
     lifecycle.active = present;
+    return () => { lifecycle.active = false; lifecycle.epoch++; };
+  }, [draftScope, bot.id, present]);
+  useEffect(() => {
+    const lifecycle = microphoneLifecycle.current;
+    lifecycle.epoch++;
+    lifecycle.active = present && !offline;
+    if (offline) setRecording(false);
     return () => {
       lifecycle.active = false;
       lifecycle.epoch++;
@@ -130,7 +139,7 @@ export default function Composer({
       }
       stream.current?.getTracks().forEach((track) => track.stop());
     };
-  }, [draftScope, bot.id, present]);
+  }, [draftScope, bot.id, present, offline]);
   const pendingUploads = uploads.some(
     (upload) => !upload.attachment && !upload.error,
   );
@@ -138,8 +147,8 @@ export default function Composer({
     if (
       !present ||
       suspended ||
+      offline ||
       sending ||
-      busy ||
       context.compacting || context.requesting ||
       pendingUploads ||
       transcribing ||
@@ -151,6 +160,10 @@ export default function Composer({
     const submittedRevision = textRevision.current;
     const submittedUploads = uploads.filter((upload) => upload.attachment);
     const submittedKeys = new Set(submittedUploads.map((upload) => upload.key));
+    const lifecycle = uploadLifecycle.current;
+    const epoch = lifecycle.epoch;
+    const current = () => lifecycle.active && lifecycle.present && lifecycle.epoch === epoch
+      && lifecycle.draftScope === draftScope && lifecycle.botId === bot.id;
     setSending(true);
     try {
       await onSend(
@@ -159,32 +172,42 @@ export default function Composer({
           upload.attachment ? [upload.attachment] : [],
         ),
       );
+      if (!current()) return;
       // Acknowledging this message must not discard the next draft prepared
       // while the request was in flight, even if its text was edited back.
       setText((current) => textRevision.current === submittedRevision ? "" : current);
       setUploads((current) => current.filter((upload) => !submittedKeys.has(upload.key)));
       textarea.current?.focus();
     } catch (error) {
-      onError(errorMessage(error));
+      if (current()) onError(errorMessage(error));
     } finally {
       setSending(false);
     }
   }
   async function files(files: FileList | null) {
-    if (!files) return;
+    const lifecycle = uploadLifecycle.current;
+    const epoch = lifecycle.epoch;
+    const current = () => lifecycle.active && lifecycle.present && lifecycle.epoch === epoch
+      && lifecycle.draftScope === draftScope && lifecycle.botId === bot.id;
+    if (!files || offline || suspended || !current()) return;
     for (const file of Array.from(files)) {
+      // Each upload starts a new request. A previous upload can finish after
+      // another account or host becomes active, so never advance its queue.
+      if (!current()) return;
       const key =
         window.crypto?.randomUUID?.() ||
         `upload-${Date.now()}-${Math.random().toString(36).slice(2)}`;
       setUploads((current) => [...current, { key, name: file.name }]);
       try {
         const attachment = await api.upload(bot.id, file);
+        if (!current()) return;
         setUploads((current) =>
           current.map((upload) =>
             upload.key === key ? { ...upload, attachment } : upload,
           ),
         );
       } catch (error) {
+        if (!current()) return;
         setUploads((current) =>
           current.map((upload) =>
             upload.key === key
@@ -195,9 +218,10 @@ export default function Composer({
         onError(errorMessage(error));
       }
     }
-    if (input.current) input.current.value = "";
+    if (current() && input.current) input.current.value = "";
   }
   async function transcribe(file: Blob, name?: string) {
+    if (offline) return;
     setTranscribing(true);
     try {
       const result = await api.transcribe(file, name);
@@ -211,6 +235,7 @@ export default function Composer({
     }
   }
   async function microphone() {
+    if (offline) return;
     if (recording) {
       recorder.current?.stop();
       setRecording(false);
@@ -225,7 +250,7 @@ export default function Composer({
     }
     const lifecycle = microphoneLifecycle.current;
     const epoch = lifecycle.epoch;
-    const current = () => lifecycle.active && lifecycle.present && lifecycle.epoch === epoch
+    const current = () => lifecycle.active && lifecycle.present && !lifecycle.offline && lifecycle.epoch === epoch
       && lifecycle.draftScope === draftScope && lifecycle.botId === bot.id;
     try {
       const grantedStream = await navigator.mediaDevices.getUserMedia({
@@ -271,16 +296,6 @@ export default function Composer({
           ? "Microphone access was denied."
           : errorMessage(error),
       );
-    }
-  }
-  async function stop() {
-    setStopping(true);
-    try {
-      await onStop();
-    } catch (error) {
-      onError(errorMessage(error));
-    } finally {
-      setStopping(false);
     }
   }
   return (
@@ -415,7 +430,7 @@ export default function Composer({
               transcribing
                 ? "Transcribing your voice…"
                   : busy
-                  ? "Prepare your next message…"
+                  ? "Queue your next message…"
                   : context.compacting
                     ? "Compacting context…"
                   : `Message ${bot.name}`
@@ -426,21 +441,49 @@ export default function Composer({
           />
         <div className="composer-toolbar">
           <div className="composer-tools">
-            <m.button
-              {...controlMotion}
-              className="icon-button"
-              onClick={() => input.current?.click()}
-              aria-label="Attach file"
-              title="Attach file"
-            >
-              {pendingUploads ? <LoaderCircle size={18} className="spin" /> : <Plus size={19} />}
-            </m.button>
+            <div className="composer-actions">
+              <m.button {...controlMotion} className="icon-button" ref={actionsTrigger}
+                onClick={() => capabilities?.voice ? setActionsOpen(!actionsOpen) : input.current?.click()}
+                aria-label="Attach file" title="Add attachments" disabled={offline}
+                aria-expanded={capabilities?.voice ? actionsOpen : undefined}
+                aria-haspopup={capabilities?.voice ? "dialog" : undefined}
+                aria-controls={actionsOpen ? actionsId : undefined}>
+                {pendingUploads ? <LoaderCircle size={18} className="spin" /> : <Plus size={19} />}
+              </m.button>
+              {actionsOpen && present && !suspended && <button className="popover-backdrop" tabIndex={-1} onClick={closeActions} aria-label="Close actions" />}
+              <AnimatePresence initial={false}>
+                {actionsOpen && present && !suspended && <PresenceSurface key="actions" variants={fade}
+                  initial="hidden" animate="visible" exit="exit" className="composer-actions-menu" ref={actionsDialog}
+                  tabIndex={-1} id={actionsId} role="dialog" modal aria-label="Add attachments">
+                  <m.button {...controlMotion} onClick={() => { closeActions(); input.current?.click(); }} disabled={offline}>
+                    <FileText size={16} /><span>Attach files</span>
+                  </m.button>
+                  {capabilities?.voice && <m.button {...controlMotion} onClick={() => { closeActions(); audioInput.current?.click(); }} disabled={offline || transcribing}>
+                    <AudioLines size={16} /><span>Transcribe audio file</span>
+                  </m.button>}
+                </PresenceSurface>}
+              </AnimatePresence>
+            </div>
+          </div>
+          <div className="composer-trailing">
+            <ModelPicker
+              bot={bot}
+              capabilities={capabilities}
+              disabled={offline || suspended || busy || sending || context.compacting || context.requesting}
+              suspended={suspended || actionsOpen}
+              onBotChange={onBotChange}
+              onOpenChange={(open) => {
+                setModelPickerOpen(open);
+                if (open) setActionsOpen(false);
+              }}
+              onError={onError}
+            />
             {capabilities?.voice && (
               <m.button
                 {...controlMotion}
                 className={`icon-button ${recording ? "is-recording" : ""}`}
                 onClick={() => void microphone()}
-                disabled={transcribing || sending}
+                disabled={offline || transcribing || sending}
                 aria-label={recording ? "Finish recording" : "Dictation"}
                 title={
                   window.isSecureContext
@@ -457,55 +500,11 @@ export default function Composer({
                 )}
               </m.button>
             )}
-          </div>
-          <div className="composer-trailing">
-            <ContextControl state={context} busy={busy || sending} suspended={suspended} onError={onError} />
-            <div className="composer-actions">
-              <m.button
-                {...controlMotion}
-                ref={actionsTrigger}
-                className="composer-actions-trigger"
-                onClick={() => setActionsOpen(!actionsOpen)}
-                aria-label="More actions"
-                aria-expanded={actionsOpen}
-                aria-haspopup="dialog"
-                aria-controls={actionsOpen ? actionsId : undefined}
-                title="More actions"
-              ><MoreHorizontal size={19} /></m.button>
-              {actionsOpen && present && !suspended && (
-                <button className="popover-backdrop" tabIndex={-1} onClick={closeActions} aria-label="Close actions" />
-              )}
-              <AnimatePresence initial={false}>
-                {actionsOpen && present && !suspended && <PresenceSurface
-                  key="actions"
-                  variants={fade}
-                  initial="hidden" animate="visible" exit="exit"
-                  className="composer-actions-menu" ref={actionsDialog} tabIndex={-1} id={actionsId} role="dialog" modal={!modelPickerOpen} aria-label="Message actions"
-                >
-                  <ModelPicker
-                    bot={bot}
-                    capabilities={capabilities}
-                    disabled={busy || sending || context.compacting || context.requesting}
-                    onBotChange={onBotChange}
-                    onOpenChange={setModelPickerOpen}
-                    onError={onError}
-                  />
-                  {capabilities?.voice && <m.button
-                    {...controlMotion}
-                    onClick={() => {
-                      closeActions();
-                      audioInput.current?.click();
-                    }}
-                    disabled={transcribing}
-                  ><AudioLines size={16} /><span>Transcribe audio file</span></m.button>}
-                </PresenceSurface>}
-              </AnimatePresence>
-            </div>
             <m.button
               {...controlMotion}
-              className={`send-button ${busy ? "stop-button" : ""}`.trim()}
-              onClick={() => void (busy ? stop() : send())}
-              disabled={busy ? stopping :
+              className="send-button"
+              onClick={() => void send()}
+              disabled={offline || suspended ||
                 sending ||
                 context.compacting || context.requesting ||
                 pendingUploads ||
@@ -513,19 +512,19 @@ export default function Composer({
                 recording ||
                 (!text.trim() && !uploads.some((u) => u.attachment))
               }
-              aria-label={busy ? "Stop bot" : "Send message"}
-              title={busy ? "Stop" : "Send"}
+              aria-label="Send message"
+              title={offline ? "Host is offline · your draft is kept" : busy ? "Add to queue" : "Send"}
             >
               <span className="composer-send-icon">
                 <AnimatePresence initial={false} mode="popLayout">
                   <m.span
-                    key={busy ? stopping ? "stopping" : "stop" : sending ? "sending" : "send"}
+                    key={sending ? "sending" : "send"}
                     initial={{ opacity: 0, scale: reducedMotion ? 1 : 0.7, rotate: reducedMotion ? 0 : -12 }}
                     animate={{ opacity: 1, scale: 1, rotate: 0 }}
                     exit={{ opacity: 0, scale: reducedMotion ? 1 : 0.7, rotate: reducedMotion ? 0 : 12 }}
                     transition={reducedMotion ? { duration: 0 } : motionTransition.quick}
                   >
-                    {busy ? stopping ? <LoaderCircle size={16} className="spin" /> : <Square size={14} fill="currentColor" /> : sending ? <LoaderCircle size={16} className="spin" /> : <ArrowUp size={20} />}
+                    {sending ? <LoaderCircle size={16} className="spin" /> : <ArrowUp size={20} />}
                   </m.span>
                 </AnimatePresence>
               </span>
@@ -536,6 +535,7 @@ export default function Composer({
       {(transcribing || pendingUploads) && <span className="composer-live-status" role="status">
         {transcribing ? "Transcribing voice…" : "Uploading files…"}
       </span>}
+      {offline && !transcribing && !pendingUploads && <span className="composer-live-status composer-offline-status" role="status">Host offline · your draft is kept</span>}
       <input
         hidden
         type="file"
@@ -557,3 +557,5 @@ export default function Composer({
     </div>
   );
 }
+
+export default memo(Composer);

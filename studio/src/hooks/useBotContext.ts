@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useMemo, useEffect, useRef, useState } from "react";
 import type { Bot, BotContext, Event } from "../lib/types";
 import { api } from "../lib/api";
 import { contextCompacting, contextEventRevision } from "../lib/contextState";
@@ -39,7 +39,7 @@ export function useBotContext(bot: Bot, events: Event[]) {
     return () => { controller.abort(); clearTimeout(timer); };
   }, [bot.id, identity, revision, refresh]);
 
-  async function compact() {
+  const compact = useCallback(async () => {
     setRequesting(true);
     try {
       await api.compact(bot.id);
@@ -47,6 +47,7 @@ export function useBotContext(bot: Bot, events: Event[]) {
     } finally {
       setRequesting(false);
     }
-  }
-  return { context: current?.context ?? null, compacting, requesting, error, compact };
+  }, [bot.id]);
+  return useMemo(() => ({ context: current?.context ?? null, compacting, requesting, error, compact }),
+    [current?.context, compacting, requesting, error, compact]);
 }

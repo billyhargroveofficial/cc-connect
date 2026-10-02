@@ -25,6 +25,8 @@ type runtimeFakeFactory struct {
 type runtimeFakeSend struct {
 	session *runtimeFakeSession
 	prompt  string
+	images  []core.ImageAttachment
+	files   []core.FileAttachment
 }
 type runtimeFakeAgent struct {
 	backend  string
@@ -52,6 +54,9 @@ type runtimeFakeSession struct {
 	falseKeepsAlive bool
 	sendErr         error
 	interruptErr    error
+	steerErr        error
+	steerEntered    chan struct{}
+	steerRelease    chan struct{}
 	materialized    atomic.Bool
 }
 
@@ -126,14 +131,14 @@ func (a *runtimeFakeAgent) SetNativeEventHandler(handler core.NativeEventHandler
 func (a *runtimeFakeAgent) SetDynamicTools(tools []map[string]any, _ core.DynamicToolHandler) {
 	a.tools = tools
 }
-func (s *runtimeFakeSession) Send(prompt, _ string, _ []core.ImageAttachment, _ []core.FileAttachment) error {
+func (s *runtimeFakeSession) Send(prompt, _ string, images []core.ImageAttachment, files []core.FileAttachment) error {
 	s.mu.Lock()
 	err := s.sendErr
 	s.mu.Unlock()
 	if err == nil {
 		s.materialized.Store(true)
 	}
-	s.factory.sends <- runtimeFakeSend{session: s, prompt: prompt}
+	s.factory.sends <- runtimeFakeSend{session: s, prompt: prompt, images: images, files: files}
 	return err
 }
 func (s *runtimeFakeSession) Events() <-chan core.Event { return s.events }
@@ -166,6 +171,17 @@ func (s *runtimeFakeSession) complete(text string) {
 }
 func (s *runtimeFakeSession) RPC(_ context.Context, method string, params any, result any) error {
 	s.mu.Lock()
+	if method == "turn/steer" || method == "steer" {
+		entered, release := s.steerEntered, s.steerRelease
+		s.mu.Unlock()
+		if entered != nil {
+			close(entered)
+		}
+		if release != nil {
+			<-release
+		}
+		s.mu.Lock()
+	}
 	defer s.mu.Unlock()
 	s.rpcCalls = append(s.rpcCalls, method)
 	var fields map[string]any
@@ -216,6 +232,10 @@ func (s *runtimeFakeSession) RPC(_ context.Context, method string, params any, r
 	case "turn/interrupt":
 		if s.interruptErr != nil {
 			return s.interruptErr
+		}
+	case "turn/steer", "steer":
+		if s.steerErr != nil {
+			return s.steerErr
 		}
 	}
 	if result != nil {
@@ -287,7 +307,7 @@ func TestRuntimeAsyncTurnSurvivesRequestAndKeepsFullNativeJournal(t *testing.T) 
 	}
 	cancel()
 	send := nextRuntimeSend(t, f)
-	if _, err := r.SendMessage(context.Background(), bot.ID, MessageRequest{Text: "duplicate"}); !errors.Is(err, ErrBusy) {
+	if _, err := r.sendMessage(context.Background(), r.ctx, bot.ID, MessageRequest{Text: "internal overlap"}); !errors.Is(err, ErrBusy) {
 		t.Fatalf("busy error: %v", err)
 	}
 	large := strings.Repeat("complete native tool output ", 2000)

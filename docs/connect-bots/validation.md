@@ -8,7 +8,7 @@ make -f Makefile.connect-bots check
 
 The gate builds TypeScript/Vite, runs the frontend tests, vets every Go package
 with `no_web`, and runs race-enabled tests for `bots`, `core`, `agent/codex`,
-`agent/pi` and `cmd/connect-bots`. It includes core CUJ tests and does not skip
+`agent/pi`, `cmd/connect-bots` and `cmd/connect-bots-node`. It includes core CUJ tests and does not skip
 product tests. Building the old web dashboard is not required.
 
 ## Account authentication and workspace isolation
@@ -40,6 +40,88 @@ while an anonymous registration receives a new folder. Tests of browser/API
 isolation do not establish an operating-system sandbox; harnesses still share
 the host Unix user and Codex/provider credentials.
 
+## Remote host and macOS release checks
+
+The node change adds a separate command and an account-scoped remote workspace.
+Run the product gate, then verify node cross-builds without relying on Studio:
+
+```sh
+go test -race ./bots ./cmd/connect-bots ./cmd/connect-bots-node
+make -f Makefile.connect-bots build-node VERSION=node-check
+./bin/connect-bots-node version
+make -f Makefile.connect-bots release-node-macos VERSION=node-check
+file dist/connect-bots/connect-bots-node-darwin-arm64 \
+  dist/connect-bots/connect-bots-node-darwin-amd64
+cd dist/connect-bots
+shasum -a 256 -c SHA256SUMS
+tar -tzf connect-bots-node-darwin-arm64.tar.gz
+tar -tzf connect-bots-node-darwin-amd64.tar.gz
+```
+
+Cross-compilation verifies target code and packaging, not native Mac execution.
+On a disposable Mac workspace, execute the matching architecture's binary,
+check `version` and `status`, pair it to a test account, run with the Mac user's
+authenticated Codex, and exercise a real answer with a local output file. Stop
+and restart the node, verify conversation continuity, then remove the test host
+and verify that its old credential cannot reconnect. Record the architecture,
+OS and result; do not treat an Intel cross-build as a tested Intel runtime.
+
+Protocol and browser regression coverage must check:
+
+- A pairing code expires, can be used once, and registers only under its issuing
+  account. Another account cannot list, select, reconnect or revoke that host.
+- Plain HTTP pairing beyond loopback fails by default. The explicit insecure LAN option is
+  required on both sides, while HTTPS still verifies certificates and hostnames.
+- The node makes an outbound connection, handles reconnects, propagates request
+  cancellation and streams events without replaying a prompt.
+- Bot creation, history, instructions, skills, uploads, downloads, capabilities,
+  compaction and goals resolve on the selected host; offline operations fail
+  visibly and local hub bots remain available.
+- Stale account or host requests cannot merge bot lists, event sequences,
+  attachments or drafts from the previous selection. Every direct file URL
+  carries its account and host binding.
+- The roster combines bots from the hub and paired devices, with the correct
+  device label and independent Server/Mac filters. Equal bot IDs on two hosts
+  remain separate rows. Clicking either row opens the correct host without a
+  document reload; offline catalogs remain visible until that account signs out
+  or the host is removed.
+- Revocation closes the connection, cancels pending routed requests and rejects
+  future connections. Download paths are restricted to the configured fixed
+  binary names and require account authentication.
+- Node shutdown closes its own sessions and Codex child, preserves local state,
+  and does not stop another Codex daemon on the computer.
+
+The commands and acceptance cases above describe the node release gate. Results
+from earlier local-server checks below are not evidence that a node or a Mac
+runtime has passed; record the completed node checks separately when run.
+
+## Conversation stability checks
+
+Run the frontend regression suite and production build:
+
+```sh
+pnpm --dir studio test
+pnpm --dir studio build
+```
+
+Verify the built app, either embedded in the Go binary or served with
+`pnpm --dir studio preview`. The HTML and modules must not reference Vite's HMR
+client. Editing a source file must leave an existing browser document open.
+Switch repeatedly between conversations, then leave one idle across several
+host polls. Its selected bot, draft, attachment state and scroll position must
+remain intact.
+
+Simulate a failed background `/nodes` or inactive-host roster request. The last
+successful catalog must remain, with no repeating connection-error toast and no
+workspace reset. Recovery must update host status without resending a message.
+Confirm separately that a real session expiry requests sign-in and an explicit
+failed send, pairing or host removal reports its error.
+
+The Markdown regressions include currency such as `$200`, `$500/month` and
+currency followed by real math. Currency must stay ordinary text without
+consuming intervening prose; genuine inline/display formulas, escaped dollars,
+code and links must keep their intended rendering.
+
 ## Upstream suite and external CLIs
 
 ```sh
@@ -69,11 +151,13 @@ Record that exception with the result. It is not a pass of the unfiltered
 upstream suite. To exercise the live Cursor probes separately, use a configured,
 authenticated CLI and omit `CI`/`SKIP_REAL_AGENT_CLI` from its test environment.
 
-## Final gates
+## Previously recorded local-server gates
 
-The completed product and explicitly limited upstream gates include the dedicated
-Codex app-server. The final compaction-to-goal regression also passed the full
-`bots` race suite and vet after the product gate.
+These completed product and explicitly limited upstream gates include the
+dedicated Codex app-server and account workspaces. They predate remote nodes,
+the aggregate roster and the conversation-stability changes above. The
+compaction-to-goal regression also passed the full `bots` race suite and vet
+after that product gate. Record the new gate separately when completed.
 
 | Check | Result |
 | --- | --- |
@@ -184,3 +268,11 @@ A product PR against `telegram-rich` isolates the new product changes; targeting
 that older `main` also includes 70 pre-existing changed files. Existing
 Telegram-rich and managed-app-server work is part of the inherited baseline;
 Connect Bots uses its dedicated runtime instead of that managed default.
+
+### Frontend performance audit (2026-10-02)
+
+See [frontend-performance.md](frontend-performance.md) for the complete surface
+inventory, before/after render evidence, regression coverage and limits. The
+repeatable synthetic browser fixture is `pnpm --dir studio bench:render` and
+never connects to actual bot workspaces. The LAN preview now serves a separately
+published directory so normal source builds cannot invalidate open clients.

@@ -24,6 +24,34 @@ export interface Bot {
   createdAt: string;
   updatedAt: string;
 }
+export interface NodeInfo {
+  id: string;
+  name: string;
+  status: string;
+  online: boolean;
+  local: boolean;
+  hostname?: string;
+  os?: string;
+  platform?: string;
+  arch?: string;
+  version?: string;
+  error?: string;
+  createdAt?: string;
+  updatedAt?: string;
+  connectedAt?: string;
+  lastSeenAt?: string;
+}
+export interface CatalogBot {
+  key: string;
+  bot: Bot;
+  node: NodeInfo;
+}
+export interface NodeEnrollment {
+  nodeId: string;
+  code: string;
+  expiresAt: string;
+  serverUrl?: string;
+}
 export interface Event {
   seq: number;
   botId: string;
@@ -39,6 +67,24 @@ export interface Attachment {
   mimeType: string;
   path?: string;
   url?: string;
+}
+export type MessageMode = "queue" | "steer";
+export interface MessageReceipt {
+  turnId: string;
+  status: "running" | "queued" | "steered";
+  queueId?: string;
+}
+export interface QueuedMessage {
+  id: string;
+  text: string;
+  attachments: Attachment[];
+  source: string;
+  createdAt: string;
+  status: string;
+}
+export interface MessageQueueSnapshot {
+  messages: QueuedMessage[];
+  paused: boolean;
 }
 export interface Model {
   id: string;

@@ -1,8 +1,14 @@
 # Connect Bots
 
+The detailed Studio ownership and hot-path map lives in
+[`studio/ARCHITECTURE.md`](../../studio/ARCHITECTURE.md). The application shell
+composes chat, transcript and settings capsules; high-frequency journals use
+per-bot external-store selectors instead of a global React broadcast.
+
 Connect Bots is an additive product in a cc-connect fork: `bots/` owns the
-persistent bot workspace, `cmd/connect-bots/` runs it, and `studio/` supplies the
-React client. Existing `web/`, config, engine, and messaging projects are retained.
+persistent bot workspace, `cmd/connect-bots/` runs the account hub,
+`cmd/connect-bots-node/` runs a paired computer, and `studio/` supplies the React
+client. Existing `web/`, config, engine, and messaging projects are retained.
 Only optional native-event/RPC/tool capabilities are added to existing adapters.
 
 Each bot owns one directory, AGENTS.md, `.agents/skills/`, `tmp/`, and durable
@@ -71,6 +77,58 @@ configured junior model. Durable instructions, skills, uploads, and artifacts ar
 outside the cleanup boundary. No general autonomous scheduler or screen streaming
 is introduced.
 
+## Paired hosts
+
+A remote node belongs to exactly one hub account. Pairing uses a short-lived,
+single-use code issued to that account and exchanges it for a private node
+credential. The node initiates the connection to the hub, so the hub does not
+connect to a user-supplied host address or require inbound access to a laptop.
+TLS is required beyond loopback by default; plaintext LAN use requires explicit opt-in on the
+hub and during node pairing. Node credentials are independent from browser
+sessions and Codex authentication. Removing a host revokes its node connection.
+
+The node owns a local Store, Workspace, Runtime, maintenance worker and dedicated
+Codex app-server. Bot files, journals, uploads and Codex state remain on that
+computer. Native Codex authentication, user instructions and skills come from
+the local user or an explicitly configured local Codex home. The hub routes
+authenticated browser requests and streaming responses to that node; it never
+copies the hub owner's harness credentials into the node workspace. The node
+command has no Studio dependency and can be cross-compiled with CGO disabled.
+
+The roster is an account-scoped catalog combining bots from all paired hosts and
+the hub. Each row has a device label, and **Server** / **Mac** checkboxes filter
+visibility. Bot identity in this catalog is the pair `(nodeId, botId)`, so equal
+bot IDs from different workspaces cannot collide. Last successful catalogs remain
+in account-local browser memory while a host is offline; sign-out and account
+changes clear them, and removing a host drops its catalog.
+
+The browser opens one host's conversation at a time. Clicking a roster bot
+switches that active workspace without navigating or reloading the document.
+`X-Connect-Bots-Node` binds ordinary
+workspace requests to a node; EventSource and direct GET/HEAD requests use the
+`node` query parameter. An absent node binding retains the local hub workspace
+for compatibility. The selected node must belong to the session account.
+Account binding is checked independently, before dispatch, and a node selection
+does not grant access to another account. The client resets workspace state and
+event cursors on host changes; each host has its own journal sequence.
+
+Only the active workspace has an event stream. Other online hosts refresh their
+bot catalogs through requests with explicit account and node bindings. Host
+polling runs in the background; transient status or catalog failures retain the
+last successful snapshot without a repeating error toast. Expired sessions and
+failed user operations still report their state. The built app and preview mode
+do not inject a hot-reload client; Vite dev mode remains a development tool.
+
+A bot belongs to the host where it was created. Switching the active host does
+not change that bot's execution location or replay an in-flight prompt. An offline
+host cannot accept new operations. Reconnection resumes access to its durable
+local workspace. Version one has no cross-host bot migration or delegation;
+coordinator tools resolve only bots in their current workspace.
+
+`--node-binaries` enables account-authenticated downloads of the two fixed macOS
+binary filenames. It is not a general static directory server. `--public-url`
+controls the externally advertised pairing origin behind a reverse proxy.
+
 ## HTTP contract
 
 All APIs are under `/api/studio`. JSON errors are `{error:string}`. Account login
@@ -103,6 +161,9 @@ never returned by the API.
 - `GET /health`: unauthenticated liveness.
 - `POST /login` `{username,password}`; `POST /register` `{username,password,accessKey?}`; `POST /logout`.
 - `GET /session` -> `{authenticated,user?:{id,username},registrationAllowed,setupRequired?,legacyClaimAvailable?}`.
+- `GET /nodes` -> `{nodes:NodeInfo[]}`; `POST /nodes/enrollments` `{name}` -> one-time pairing details; `DELETE /nodes/:id` revokes a host.
+- `GET /nodes/binary/darwin/arm64` and `/nodes/binary/darwin/amd64` -> fixed configured node binary, with account authentication.
+- `POST /nodes/enroll` exchanges a valid pairing code; `GET /nodes/connect` upgrades the authenticated node connection to WebSocket. These use pairing/node credentials instead of a browser session.
 - `GET /bots` -> `{bots:Bot[]}`; `POST /bots` Bot fields -> Bot.
 - `GET /bots/:id` -> Bot; `PATCH /bots/:id` partial Bot; `DELETE` archives bot.
 - `GET /bots/:id/events?after=seq` -> `{events:Event[]}`.
@@ -122,9 +183,11 @@ never returned by the API.
 - `GET /maintenance` -> settings and last reports; `PATCH` settings; `POST /maintenance/run`.
 
 Every protected route dispatches to the workspace from the authenticated account,
-including capabilities, file downloads and SSE. The loopback-only Pi bridge at
+and its selected host, including capabilities, file downloads and SSE. The loopback-only Pi bridge at
 `POST /internal/tools` uses a separate random internal token per workspace, never
 a browser credential; its token selects the workspace before resolving a bot ID.
+Node administration and enrollment remain on the hub even when a remote node
+binding accompanies the request; these routes are never proxied into a workspace.
 
 Event types: `message` ({role,content,attachments,source}), `native` (core.NativeEvent),
 `agent` (normalized core.Event with error converted to string), `turn`

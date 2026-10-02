@@ -1,17 +1,21 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ComponentProps, ReactNode, Ref, RefObject } from "react";
-import { FileText, Image, MessageSquare, Send, Settings2, Target, X } from "lucide-react";
+import { FileText, Image, MessageSquare, Monitor, Send, Settings2, Target, X } from "lucide-react";
 import Avatar from "../../components/Avatar";
 import { fileURL } from "../../lib/api";
 import { botMessagePresentation, telegramLabel, telegramTitle } from "../../lib/events";
-import type { Attachment, Bot, Capabilities, Event } from "../../lib/types";
-import { AnimatePresence, m, useIsPresent, useReducedMotion, fade, fadeUp, popoverMotion, controlMotion, motionSpring } from "../../lib/motion";
+import type { Attachment, Bot, Capabilities, Event, NodeInfo } from "../../lib/types";
+import { AnimatePresence, m, useIsPresent, useReducedMotion, fade, popoverMotion, controlMotion, motionSpring } from "../../lib/motion";
 import { BotSettingsPanel } from "../settings/SettingsDrawer";
 import { useDialogFocus } from "./ModelPicker";
 import "./bot-island.css";
 
 const desktopQuery = "(min-width: 1100px)";
 const avatarPriorityStatuses = new Set(["blocked", "waiting", "interrupted", "failed", "error"]);
+
+export function focusWithoutScroll(target?: HTMLElement | null) {
+  target?.focus({ preventScroll: true });
+}
 
 function IslandShell(props: ComponentProps<typeof m.aside>) {
   const present = useIsPresent();
@@ -23,7 +27,7 @@ function IslandShell(props: ComponentProps<typeof m.aside>) {
 
 function IslandPane({ className, children, ref }: { className: string; children: ReactNode; ref?: Ref<HTMLDivElement> }) {
   const present = useIsPresent();
-  return <m.div ref={ref} className={className} layout="position" variants={fadeUp} initial="hidden" animate="visible" exit="exit"
+  return <m.div ref={ref} className={className} variants={fade} initial="hidden" animate="visible" exit="exit"
     inert={!present} aria-hidden={!present || undefined}>{children}</m.div>;
 }
 
@@ -44,7 +48,8 @@ function botIslandContent(events: Event[], botId: string) {
   const seenRequests = new Set<string>();
   const seenFiles = new Set<string>();
   const seenEvents = new Set<number>();
-  for (const event of [...events].sort((a, b) => b.seq - a.seq)) {
+  for (let index = events.length - 1; index >= 0; index--) {
+    const event = events[index];
     if (event.botId !== botId || event.type !== "message" || seenEvents.has(event.seq)) continue;
     seenEvents.add(event.seq);
     const data = event.data;
@@ -80,9 +85,9 @@ function botIslandContent(events: Event[], botId: string) {
   return { requests, files };
 }
 
-export default function BotIsland({
+function BotIsland({
   bot, events, status, working, supportsGoal, hasGoal, onGoal,
-  open, suspended, onOpen, onClose, triggerRef, capabilities, onBotChange, onArchive,
+  open, suspended, onOpen, onClose, triggerRef, capabilities, onBotChange, onArchive, node,
 }: {
   bot: Bot;
   events: Event[];
@@ -99,6 +104,7 @@ export default function BotIsland({
   capabilities: Capabilities | null;
   onBotChange: (bot: Bot) => void;
   onArchive: (id: string) => void;
+  node?: NodeInfo;
 }) {
   const [desktop, setDesktop] = useState(() =>
     typeof window !== "undefined" && typeof window.matchMedia === "function"
@@ -127,7 +133,7 @@ export default function BotIsland({
     if (!desktop) return;
     const focused = document.activeElement;
     if (focused === triggerRef.current || focused?.classList.contains("bot-island-close")) {
-      dialog.current?.querySelector<HTMLButtonElement>(".bot-island-action")?.focus();
+      focusWithoutScroll(dialog.current?.querySelector<HTMLButtonElement>(".bot-island-action"));
     }
   }, [desktop, triggerRef]);
 
@@ -143,19 +149,19 @@ export default function BotIsland({
     if (!desktop && dialog.current) dialog.current.inert = true;
     setSettingsOpen(false);
     onClose();
-    window.setTimeout(() => triggerRef.current?.focus(), 0);
+    window.setTimeout(() => focusWithoutScroll(triggerRef.current), 0);
   }, [desktop, onClose, triggerRef]);
 
   const closeSettings = useCallback(() => {
     setSettingsOpen(false);
-    window.requestAnimationFrame(() => settingsTrigger.current?.focus());
+    window.requestAnimationFrame(() => focusWithoutScroll(settingsTrigger.current));
   }, []);
 
   const openSettings = useCallback(() => {
     if (!desktop && !open) onOpen();
     setSettingsOpen(true);
     window.requestAnimationFrame(() => {
-      dialog.current?.querySelector<HTMLButtonElement>(".cb-settings-icon-button")?.focus();
+      focusWithoutScroll(dialog.current?.querySelector<HTMLButtonElement>(".cb-settings-icon-button"));
     });
   }, [desktop, open, onOpen]);
 
@@ -179,7 +185,7 @@ export default function BotIsland({
     onClose();
     // Let the island's trap finish before the next dialog captures its return target.
     window.setTimeout(() => {
-      triggerRef.current?.focus();
+      focusWithoutScroll(triggerRef.current);
       action();
     }, 0);
   }
@@ -198,7 +204,7 @@ export default function BotIsland({
         transition={{ layout: motionSpring.layout }} style={{ transformOrigin: "top right" }}
         role={overlay ? "dialog" : undefined} aria-modal={overlay || undefined}
         aria-label={overlay ? settingsOpen ? "Bot settings" : "Bot details" : undefined}>
-        <AnimatePresence initial={false} mode="popLayout">
+        <AnimatePresence initial={false} mode="popLayout" anchorX="right">
         {settingsOpen ? (
           <IslandPane key="settings" className="bot-island-settings">
           <BotSettingsPanel key={bot.id} bot={bot} capabilities={capabilities}
@@ -218,6 +224,9 @@ export default function BotIsland({
                 </span>
               </div>
             </div>
+            {node && <div className="bot-island-host" title={[node.name, node.hostname, node.os || node.platform].filter(Boolean).join(' · ')}>
+              <Monitor size={13} aria-hidden="true" /><span>{node.name}</span>{!node.online && <small>Offline</small>}
+            </div>}
             {bot.role && <p className="bot-island-role" title={bot.role}>{bot.role}</p>}
             <div className="bot-island-actions">
               <m.button {...controlMotion} ref={settingsTrigger} type="button" className="bot-island-action" onClick={openSettings}
@@ -276,3 +285,5 @@ export default function BotIsland({
     </AnimatePresence>
   );
 }
+
+export default memo(BotIsland);

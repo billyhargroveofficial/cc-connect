@@ -1,14 +1,18 @@
 import type { Bot, Event } from "./types";
 export function mergeEvents(current: Event[], incoming: Event[]): Event[] {
   if (!incoming.length) return current;
-  if (
-    incoming.length === 1 &&
-    (!current.length || incoming[0].seq > current[current.length - 1].seq)
-  )
-    return [...current, incoming[0]];
+  if ((!current.length || incoming[0].seq > current[current.length - 1].seq)
+    && incoming.every((event, index) => !index || event.seq > incoming[index - 1].seq))
+    return [...current, ...incoming];
   const map = new Map(current.map((event) => [event.seq, event]));
-  for (const event of incoming) map.set(event.seq, event);
-  return [...map.values()].sort((a, b) => a.seq - b.seq);
+  let changed = false;
+  for (const event of incoming) {
+    const previous = map.get(event.seq);
+    if (previous === event || previous && JSON.stringify(previous) === JSON.stringify(event)) continue;
+    changed = true;
+    map.set(event.seq, event);
+  }
+  return changed ? [...map.values()].sort((a, b) => a.seq - b.seq) : current;
 }
 export function eventBot(event: Event): Bot | null {
   if (event.type !== "bot") return null;
@@ -102,9 +106,10 @@ export function mergeBots(current: Bot[], incoming: Bot[]): Bot[] {
       !previous.updatedAt ||
       compareUpdatedAt(bot.updatedAt, previous.updatedAt) >= 0
     )
-      result.set(bot.id, bot);
+      if (!previous || previous !== bot && JSON.stringify(previous) !== JSON.stringify(bot)) result.set(bot.id, bot);
   }
-  return [...result.values()];
+  const next = [...result.values()];
+  return next.length === current.length && next.every((bot, index) => bot === current[index]) ? current : next;
 }
 export function telegramLabel(binding: Bot["telegram"]): string {
   if (!binding?.enabled) return "Telegram disabled";

@@ -88,7 +88,7 @@ test('shared Settings opens a modal instead of a side drawer and keeps shared in
   assert.equal(view.all(node => typeof node.props?.className === 'string' && node.props.className.includes('--drawer')).length, 0,
     'Desktop Shared settings must not use the slide-out drawer presentation');
   assert.deepEqual(view.all(node => node.props?.role === 'tab').map(tabTitle), [
-    'Instructions', 'Skills', 'Maintenance',
+    'Instructions', 'Skills', 'Maintenance', 'Hosts',
   ]);
   assert.equal(view.pane().type.name, 'InstructionsPane');
   assert.equal(view.pane().props.id, undefined, 'Instructions use shared scope');
@@ -98,6 +98,8 @@ test('shared Settings opens a modal instead of a side drawer and keeps shared in
   view.tab('Maintenance').props.onClick();
   assert.equal(view.pane().type.name, 'MaintenancePane');
   assert.equal(view.pane().props.bots, view.props.bots);
+  view.tab('Hosts').props.onClick();
+  assert.equal(view.pane().type.name, 'HostsPane');
 
   const overlay = view.find(node => node.type === 'div' && node.props?.className?.split(' ').includes('cb-settings-overlay'));
   const target = {};

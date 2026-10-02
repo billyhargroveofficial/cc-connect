@@ -53,9 +53,9 @@ export function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : 'Could not complete the action. Please try again.'
 }
 
-export function ModalShell({ title, subtitle, onClose, children, footer, drawer = false }: {
+export function ModalShell({ title, subtitle, onClose, children, footer, drawer = false, wide = false }: {
   title: string; subtitle?: string; onClose: () => void; children: ReactNode;
-  footer?: ReactNode; drawer?: boolean;
+  footer?: ReactNode; drawer?: boolean; wide?: boolean;
 }) {
   const panel = useRef<HTMLDivElement>(null)
   const close = useRef(onClose)
@@ -90,7 +90,7 @@ export function ModalShell({ title, subtitle, onClose, children, footer, drawer 
   return createPortal(
     <div className={`cb-settings-overlay ${drawer ? 'cb-settings-overlay--drawer' : ''}`}
       onClick={(event) => { if (event.target === event.currentTarget) onClose() }}>
-      <div className={`cb-settings-panel ${drawer ? 'cb-settings-panel--drawer' : ''}`}
+      <div className={`cb-settings-panel${drawer ? ' cb-settings-panel--drawer' : ''}${wide ? ' cb-settings-panel--wide' : ''}`}
         ref={panel} tabIndex={-1} role="dialog" aria-modal="true" aria-label={title}>
         <header className="cb-settings-header">
           <div><h2>{title}</h2>{subtitle && <p>{subtitle}</p>}</div>

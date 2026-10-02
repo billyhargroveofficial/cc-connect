@@ -19,7 +19,8 @@ interface SettingsDrawerProps {
 export function SettingsDrawer({ bot, bots = [], capabilities, onClose, onBotChange, onArchive, initialTab, global = false }: SettingsDrawerProps) {
   if (!global && !bot) return null
   return <ModalShell title={global ? 'Shared settings' : bot!.name}
-    subtitle={global ? 'Instructions and skills for all bots.' : "Your bot's workspace."} onClose={onClose} drawer>
+    subtitle={global ? 'Instructions and skills for all bots.' : "Your bot's workspace."}
+    onClose={onClose} drawer={!global} wide={global}>
     <SettingsContent key={global ? 'shared' : bot!.id} bot={bot} bots={bots} capabilities={capabilities}
       onClose={onClose} onBotChange={onBotChange} onArchive={onArchive} initialTab={initialTab} global={global} />
   </ModalShell>

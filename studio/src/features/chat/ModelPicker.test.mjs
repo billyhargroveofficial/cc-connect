@@ -15,7 +15,7 @@ const standard = { id: 'standard', name: 'Standard', description: 'Standard infe
 
 // Exercise the component's actual controls and PATCH requests. React's rendering
 // machinery is stubbed; model-specific catalog values and handlers are real.
-function picker({ model = {}, bot = {}, disabled = false } = {}) {
+function picker({ model = {}, bot = {}, disabled = false, suspended = false, reducedMotion = false, updateGate, updateError } = {}) {
   let cursor = 0;
   let present = true;
   const values = [], requests = [], errors = [];
@@ -27,6 +27,7 @@ function picker({ model = {}, bot = {}, disabled = false } = {}) {
   const element = (type, props) => ({ type, props });
   const motion = motionTestModule();
   motion.useIsPresent = () => present;
+  motion.useReducedMotion = () => reducedMotion;
   const props = {
     bot: { id: 'bot', backend: 'codex', model: 'current', effort: 'max', serviceTier: '', ...bot },
     capabilities: {
@@ -37,7 +38,7 @@ function picker({ model = {}, bot = {}, disabled = false } = {}) {
       ],
       backends: { codex: { available: true }, pi: { available: true } },
     },
-    disabled, onBotChange: updated => { props.bot = updated; },
+    disabled, suspended, onBotChange: updated => { props.bot = updated; },
     onOpenChange() {}, onError: error => errors.push(error),
   };
   const modules = {
@@ -48,6 +49,8 @@ function picker({ model = {}, bot = {}, disabled = false } = {}) {
     '../../lib/chatStatus': { effortLabel },
     '../../lib/api': { api: { updateBot: async (_, patch) => {
       requests.push(patch);
+      if (updateGate) await updateGate;
+      if (updateError) throw new Error(updateError);
       return { ...props.bot, ...patch };
     } }, errorMessage: error => error.message },
   };
@@ -73,15 +76,19 @@ function picker({ model = {}, bot = {}, disabled = false } = {}) {
     present: next => { present = next; },
     surface: fields => exports.PresenceSurface(fields),
     open: () => find(node => node.props?.className === 'model-trigger').props.onClick(),
-    tier: () => find(node => node.type === 'select' && node.props['aria-label'] === 'Service tier'),
-    changeTier: async value => {
-      find(node => node.type === 'select' && node.props['aria-label'] === 'Service tier').props.onChange({ target: { value } });
+    fastToggle: () => find(node => node.props?.className === 'icon-button inference-fast-toggle'),
+    toggleFast: async () => {
+      find(node => node.props?.className === 'icon-button inference-fast-toggle').props.onClick();
       await settled();
     },
     choose: async name => {
       const switcher = find(node => node.props?.className === 'model-select-current');
       if (switcher) switcher.props.onClick();
-      find(node => node.props?.className === 'model-choice' && node.props.children[0].props.children.props.children[0] === name).props.onClick();
+      find(node => {
+        if (node.props?.className !== 'model-choice') return false;
+        const label = node.props.children[0].props.children.props.children;
+        return (Array.isArray(label) ? label[0] : label) === name;
+      }).props.onClick();
       await settled();
     },
   };
@@ -145,44 +152,99 @@ test('exiting popovers immediately become inert and lose modal semantics', () =>
   assert.equal(exiting.props.style.color, 'red');
 });
 
-test('service tier uses the current model catalog and persists explicit and automatic choices', async () => {
+test('Fast service tier uses one lightning toggle, persists Fast and Auto, and has no separate dropdown', async () => {
   const view = picker();
   view.open();
-  assert.equal(view.tier().props.value, '');
-  assert.deepEqual(view.all(node => node.type === 'option').map(node => node.props.value).slice(-3), ['', 'standard', 'fast']);
-  await view.changeTier('fast');
+  assert.equal(view.find(node => node.type === 'select'), undefined, 'the lightning is the sole tier control');
+  assert.equal(view.fastToggle().type, 'button', 'a native button handles mouse, Enter and Space');
+  assert.equal(view.fastToggle().props['aria-label'], 'Fast mode');
+  assert.equal(view.fastToggle().props['aria-pressed'], false);
+  assert.equal(view.fastToggle().props.disabled, false);
+  assert.equal(view.fastToggle().props.children.type, 'Zap');
+  await view.toggleFast();
   assert.deepEqual(JSON.parse(JSON.stringify(view.requests[0])), { serviceTier: 'fast' });
-  assert.equal(view.tier().props.value, 'fast', 'settings stay open for the next preference');
-  await view.changeTier('');
+  assert.equal(view.fastToggle().props['aria-pressed'], true, 'settings stay open for the next preference');
+  assert.equal(view.fastToggle().props.children.props.fill, 'currentColor', 'active Fast has a visible filled lightning');
+  await view.toggleFast();
   assert.deepEqual(JSON.parse(JSON.stringify(view.requests[1])), { serviceTier: '' });
-  assert.equal(view.tier().props.value, '');
+  assert.equal(view.fastToggle().props['aria-pressed'], false);
+  assert.equal(view.fastToggle().props.children.props.fill, 'none');
 });
 
-test('a model without advertised service tiers has no tier control', () => {
-  const view = picker({ model: { serviceTiers: undefined }, bot: { serviceTier: '' } });
+test('the model heading is the only model-list entry', () => {
+  const view = picker();
   view.open();
-  assert.equal(view.tier(), undefined);
-  assert.equal(view.find(node => node.props?.className === 'model-current-tier'), undefined);
+  assert.equal(view.find(node => node.props?.className === 'model-more-choice'), undefined,
+    'there is no duplicate Choose model action below the slider');
+  const heading = view.find(node => node.props?.className === 'model-select-current');
+  assert.equal(heading.props.children[1].props.children[1].type, 'ChevronRight');
+  heading.props.onClick();
+  assert.equal(view.all(node => node.props?.className === 'model-choice').length, 3);
+});
+
+test('Ultra model rows have no lightning because Fast is an independent tier', () => {
+  const view = picker();
+  view.open();
+  view.find(node => node.props?.className === 'model-select-current').props.onClick();
+  assert.equal(view.all(node => node.type === 'Zap').length, 1,
+    'only the compact inference trigger retains a lightning outside the model list');
+  assert.equal(view.find(node => node.props?.['aria-label'] === 'Supports Ultra'), undefined);
+});
+
+test('Fast toggle uses the advertised Fast tier ID and ignores the automatic default tier', async () => {
+  const view = picker({ model: { serviceTiers: [standard, { ...fast, id: 'priority' }], defaultServiceTier: 'priority' } });
+  view.open();
+  assert.equal(view.fastToggle().props['aria-pressed'], false, 'Auto never masquerades as an explicit Fast override');
+  await view.toggleFast();
+  assert.equal(view.requests[0].serviceTier, 'priority');
+  assert.equal(view.fastToggle().props['aria-pressed'], true);
+  const trigger = view.find(node => node.props?.className === 'model-trigger');
+  assert.equal(trigger.props.children[0].props.fill, 'currentColor');
+  await view.toggleFast();
+  assert.equal(view.requests[1].serviceTier, '');
+});
+
+test('models without advertised Fast cannot enable it even when another tier is supported', async () => {
+  for (const tiers of [undefined, [], [standard]]) {
+    const view = picker({ model: { serviceTiers: tiers }, bot: { serviceTier: '' } });
+    view.open();
+    assert.equal(view.fastToggle().props.disabled, true);
+    assert.match(view.fastToggle().props.title, /unavailable/i);
+    await view.toggleFast();
+    assert.equal(view.requests.length, 0);
+    if (!tiers?.length) assert.equal(view.find(node => node.props?.className === 'model-current-tier'), undefined);
+  }
 });
 
 test('a saved Codex tier can be reset when the model no longer advertises any tiers', async () => {
   const view = picker({ model: { serviceTiers: [] }, bot: { serviceTier: 'fast' } });
   view.open();
-  assert.equal(view.tier().props.value, 'fast');
-  assert.deepEqual(view.all(node => node.type === 'option').map(node => node.props.value).slice(-2), ['', 'fast']);
-  await view.changeTier('');
+  assert.equal(view.fastToggle().props['aria-pressed'], true);
+  assert.equal(view.fastToggle().props.disabled, false, 'an obsolete override can still be cleared');
+  await view.toggleFast();
   assert.deepEqual(JSON.parse(JSON.stringify(view.requests[0])), { serviceTier: '' });
-  assert.equal(view.tier(), undefined, 'after reset the unsupported setting disappears');
+  assert.equal(view.fastToggle().props.disabled, true, 'after reset the unsupported setting cannot be re-enabled');
+  assert.equal(view.find(node => node.props?.className === 'model-current-tier'), undefined);
 });
 
 test('a saved tier removed from the catalog remains visible until the user resets it', async () => {
   const view = picker({ bot: { serviceTier: 'retired-tier' } });
   view.open();
-  assert.equal(view.tier().props.value, 'retired-tier');
-  const unavailable = view.find(node => node.type === 'option' && node.props.value === 'retired-tier');
-  assert.equal(unavailable.props.disabled, true);
-  await view.changeTier('');
-  assert.equal(view.tier().props.value, '');
+  assert.equal(view.find(node => node.props?.className === 'model-current-tier').props.children, 'retired-tier');
+  assert.equal(view.fastToggle().props['aria-pressed'], false);
+  view.find(node => node.props?.className === 'icon-button inference-reset').props.onClick();
+  await settled();
+  assert.equal(view.props.bot.serviceTier, '');
+});
+
+test('an unsupported saved tier can be cleared by the lightning when Fast is unavailable', async () => {
+  const view = picker({ model: { serviceTiers: [] }, bot: { serviceTier: 'retired-tier' } });
+  view.open();
+  assert.equal(view.fastToggle().props.disabled, false);
+  assert.match(view.fastToggle().props['aria-label'], /Clear unavailable service tier/);
+  await view.toggleFast();
+  assert.deepEqual(JSON.parse(JSON.stringify(view.requests[0])), { serviceTier: '' });
+  assert.equal(view.fastToggle().props.disabled, true);
 });
 
 test('switching models keeps an accepted service tier and resets it for an unsupported backend', async () => {
@@ -197,13 +259,46 @@ test('switching models keeps an accepted service tier and resets it for an unsup
   assert.equal(view.requests[1].effort, 'high');
 });
 
-test('disabled settings and values outside the model catalog cannot change service tier', async () => {
-  const disabled = picker({ disabled: true });
-  disabled.open();
-  await disabled.changeTier('fast');
+test('disabled, suspended, exiting and saving inference controls cannot change Fast tier', async () => {
+  const disabled = picker({ disabled: true }); disabled.open();
+  assert.equal(disabled.fastToggle().props.disabled, true);
+  await disabled.toggleFast();
   assert.equal(disabled.requests.length, 0);
-  const view = picker();
+
+  const suspended = picker({ suspended: true }); suspended.open();
+  assert.equal(suspended.fastToggle(), undefined);
+
+  const exiting = picker(); exiting.open();
+  exiting.present(false);
+  assert.equal(exiting.fastToggle(), undefined);
+  assert.equal(exiting.requests.length, 0);
+
+  let release;
+  const view = picker({ updateGate: new Promise(resolve => { release = resolve; }) });
   view.open();
-  await view.changeTier('invented-tier');
-  assert.equal(view.requests.length, 0);
+  const toggle = view.fastToggle();
+  toggle.props.onClick(); toggle.props.onClick();
+  assert.equal(view.fastToggle().props.disabled, true);
+  assert.equal(view.requests.length, 1, 'repeated clicks cannot race a pending preference update');
+  release(); await settled();
+  assert.equal(view.fastToggle().props.disabled, false);
+  assert.equal(view.fastToggle().props['aria-pressed'], true);
+});
+
+test('a failed Fast update retains the confirmed tier and reports the error', async () => {
+  const view = picker({ updateError: 'Cannot update inference' });
+  view.open();
+  await view.toggleFast();
+  assert.equal(view.fastToggle().props['aria-pressed'], false);
+  assert.equal(view.fastToggle().props.disabled, false);
+  assert.deepEqual(view.errors, ['Cannot update inference']);
+});
+
+test('reduced motion keeps the native Fast toggle and disables the trigger-chevron animation', async () => {
+  const view = picker({ reducedMotion: true });
+  view.open();
+  const chevron = view.find(node => node.props?.className === 'model-trigger-chevron');
+  assert.equal(chevron.props.transition.duration, 0);
+  await view.toggleFast();
+  assert.equal(view.fastToggle().props['aria-pressed'], true);
 });

@@ -33,7 +33,20 @@ pnpm test
 
 Microphone capture requires HTTPS or localhost. Audio-file transcription remains available over LAN HTTP. All conversation data comes from the service; reconnect merges events by sequence and never submits a prompt again. Completed turn activity is retained and collapses for reading.
 
-The compact composer keeps attachment, voice, context, overflow and send controls in one toolbar. Open “More actions” (⋯) → “Model settings” to change the model, effort or service tier. For manual compaction, open the context indicator and choose “Compact context” while the bot is idle. Conversation, activity and menu animations respect the browser's reduced-motion preference.
+The compact composer keeps attachment, model and effort, optional voice and send
+controls in one toolbar. Click the model name to open the effort slider and
+service-tier selector; **Choose model** opens the live Codex/Pi model list. The
+status line below the input shows step, turn, tok/s, context, model, effort, tier
+and effective session time. **Working** and the turn timer sit directly above
+the input. Conversation, activity and menu animations respect the browser's
+reduced-motion preference.
+
+Type `$` to filter enabled skills by name or description, then select with
+arrows/Enter or a tap. Selections become removable chips and can be sent without
+other text. Drafts and selections stay bound to the account, host and bot. Normal
+send during an active turn adds the message to the queue above the input;
+**Steer** injects a queued message into the current turn. Finished progress and
+tool batches fold into one expandable history control before the final answer.
 
 The profile header is replaced by a floating bot card on the right. On screens below 1100 px, the panel button opens the same card as an overlay. Settings, goals, recent requests and published files remain available there; mobile has a separate back button for the roster.
 
@@ -46,7 +59,16 @@ rows for the current account session and cannot accept new work.
 
 Models and reasoning levels come from the selected bot's live provider catalog. Codex service tiers use each model's advertised IDs, names and descriptions; the selector is absent when no tiers are advertised and no saved override needs resetting. “Auto” clears the saved tier override. Model, effort and tier changes apply to subsequent turns in the same conversation.
 
-Context usage remains unknown until the service reports it; estimates are marked `≈`. Manual compaction follows its persisted request ID and native completion events. Bot-published files render alongside their caption as authenticated image previews or downloadable document cards.
+Context usage remains unknown until the service reports it; estimates are marked
+`≈`. Click **Context** in the status line below the input to compact while idle.
+Compaction follows its persisted request ID and native completion events; the
+percentage stays visible beside a spinner and send/model gating stays active
+until the provider finishes. Bot-published files
+render alongside their caption as authenticated image previews or downloadable
+document cards.
+
+Current release evidence and remaining native-runtime checks are tracked in
+[release readiness](../docs/connect-bots/release-readiness.md).
 
 ### Performance and stable local publication
 

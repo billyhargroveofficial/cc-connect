@@ -119,8 +119,18 @@ export default function ModelPicker({
   const selectedEffort = efforts.includes(previewEffort) ? previewEffort : confirmedEffort ? bot.effort : efforts[0] || "";
   const serviceTiers = current?.serviceTiers || [];
   const selectedTier = serviceTiers.find(tier => tier.id === bot.serviceTier);
-  const autoTier = serviceTiers.find(tier => tier.id === current?.defaultServiceTier);
-  const tierName = selectedTier?.name || bot.serviceTier || "Auto";
+  // Fast is a service tier, independent of the model's reasoning efforts. Use
+  // the advertised ID: some harness catalogs name the Fast tier "priority".
+  const fastTier = serviceTiers.find(tier => tier.id === "fast")
+    || serviceTiers.find(tier => tier.id === "priority" || tier.name.trim().toLowerCase() === "fast");
+  const isFast = bot.serviceTier === fastTier?.id || bot.serviceTier === "fast" || bot.serviceTier === "priority";
+  const tierName = selectedTier?.name || (isFast ? "Fast" : bot.serviceTier || "Auto");
+  const clearTierOnly = !fastTier && !!bot.serviceTier;
+  const unavailableTier = !!bot.serviceTier && !selectedTier;
+  const fastToggleTitle = clearTierOnly
+    ? `${tierName}${unavailableTier ? " is unavailable." : "."} Use Auto service tier`
+    : !fastTier ? "Fast mode is unavailable for this model"
+    : isFast ? "Use Auto service tier" : fastTier.description || "Use Fast service tier";
   const showServiceTier = serviceTiers.length > 0 || (bot.backend === "codex" && !!bot.serviceTier);
   const modelName = current?.name || bot.model || bot.backend;
   const defaultEffort = efforts.includes("max") ? "max" : efforts.at(-1) || "";
@@ -152,7 +162,7 @@ export default function ModelPicker({
     finally { mutation.current = false; setSaving(false); }
   }
   async function changeServiceTier(serviceTier: string) {
-    if (!canChange || mutation.current || (serviceTier && !serviceTiers.some(tier => tier.id === serviceTier))) return;
+    if (!canChange || mutation.current || serviceTier === bot.serviceTier || (serviceTier && !serviceTiers.some(tier => tier.id === serviceTier))) return;
     mutation.current = true;
     setSaving(true);
     try { onBotChange(await api.updateBot(bot.id, { serviceTier })); }
@@ -177,7 +187,7 @@ export default function ModelPicker({
       aria-expanded={open} aria-haspopup="dialog" aria-controls={open ? popoverId : undefined}
       aria-label={`Model: ${modelName}${confirmedEffort ? `. Reasoning effort: ${effortLabel(bot.effort)}` : ""}${showServiceTier ? `. Service tier: ${tierName}` : ""}`}
       title={disabled ? "You can change inference settings after the turn finishes" : "Model, effort and service tier"}>
-      <Zap size={14} className={bot.serviceTier === "fast" ? "is-fast" : ""} fill={bot.serviceTier === "fast" ? "currentColor" : "none"} />
+      <Zap size={14} className={isFast ? "is-fast" : ""} fill={isFast ? "currentColor" : "none"} />
       <span className="model-current-name">{modelName}</span>
       {confirmedEffort && <span className={`model-current-effort ${bot.effort === "ultra" ? "is-ultra" : ""}`}>{effortLabel(bot.effort)}</span>}
       {showServiceTier && <span className="model-current-tier">{tierName}</span>}
@@ -200,14 +210,20 @@ export default function ModelPicker({
               {choices.map(model => <m.button {...controlMotion} key={`${model.backend}:${model.id}`} className="model-choice"
                 aria-pressed={bot.backend === model.backend && bot.model === model.id} disabled={!available?.available || disabled || saving}
                 onClick={() => void choose(model)}>
-                <span><strong>{model.name || model.id}{model.efforts.includes("ultra") && <Zap size={11} aria-label="Supports Ultra" />}</strong></span>
+                <span><strong>{model.name || model.id}</strong></span>
                 {bot.backend === model.backend && bot.model === model.id && <Check size={15} />}
               </m.button>)}
             </section>;
           })}
         </> : <>
           <div className="inference-heading">
-            <Zap size={19} className={bot.serviceTier === "fast" ? "is-fast" : ""} />
+            <m.button {...controlMotion} type="button" className="icon-button inference-fast-toggle"
+              onClick={() => void changeServiceTier(isFast || clearTierOnly ? "" : fastTier?.id || "")}
+              disabled={!canChange || (!fastTier && !bot.serviceTier)} aria-pressed={isFast}
+              aria-label={clearTierOnly && !isFast ? unavailableTier ? "Clear unavailable service tier" : "Use Auto service tier" : "Fast mode"}
+              title={fastToggleTitle}>
+              <Zap size={19} aria-hidden="true" fill={isFast ? "currentColor" : "none"} />
+            </m.button>
             <m.button {...controlMotion} className="model-select-current" onClick={() => setModelsOpen(true)}>
               <strong>{efforts.length ? effortLabel(selectedEffort) : "Select model"}</strong>
               <span>{modelName}<ChevronRight size={12} /></span>
@@ -226,16 +242,6 @@ export default function ModelPicker({
               onBlur={event => commitRange(event.currentTarget.value)} />
             <div className="effort-slider-labels"><span>{effortLabel(efforts[0])}</span><span>{effortLabel(efforts.at(-1) || "")}</span></div>
           </div>}
-          {showServiceTier && <label className="model-tier-setting"><span><Zap size={12} />Service tier</span>
-            <select aria-label="Service tier" value={bot.serviceTier || ""} disabled={!canChange}
-              title={selectedTier?.description || (autoTier ? `Auto: ${autoTier.name}. ${autoTier.description}` : "Service tier for the next response")}
-              onChange={event => void changeServiceTier(event.target.value)}>
-              <option value="">Auto</option>
-              {bot.serviceTier && !selectedTier && <option value={bot.serviceTier} disabled>{bot.serviceTier} (unavailable)</option>}
-              {serviceTiers.map(tier => <option key={tier.id} value={tier.id} title={tier.description}>{tier.name || tier.id}</option>)}
-            </select>
-          </label>}
-          <m.button {...controlMotion} className="model-more-choice" onClick={() => setModelsOpen(true)}>Choose model<ChevronRight size={14} /></m.button>
         </>}
         <m.button {...controlMotion} className="model-popover-close" onClick={close} aria-label="Close"><X size={14} /></m.button>
       </PresenceSurface>}

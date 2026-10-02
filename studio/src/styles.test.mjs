@@ -72,3 +72,32 @@ test('the effort heading shares one continuous popover surface', () => {
   assert.equal(declarations(composer, '.model-select-current').get('background'), 'transparent',
     'the selected model must not draw a second rectangle inside the effort popover');
 });
+
+test('the composer model trigger keeps its background and color unchanged on hover in both themes', () => {
+  for (const [css, selector] of [[styles, '.model-trigger'], [composer, '.composer-minimal .model-trigger']]) {
+    const resting = declarations(css, selector);
+    const hovered = declarations(css, `${selector}:hover:not(:disabled)`);
+    assert.equal(resting.get('background'), 'transparent');
+    assert.equal(hovered.get('background'), 'transparent', 'hover cannot introduce a filled rectangle');
+    assert.equal(hovered.get('color'), resting.get('color'), 'hover cannot recolor the model text');
+  }
+  for (const theme of [':root', ':root[data-theme="light"]']) {
+    assert.ok(declarations(styles, theme).get('--text'), 'the steady text color comes from each theme');
+  }
+});
+
+test('the Fast lightning keeps a full touch target and no hover fill or recolor', () => {
+  const resting = declarations(composer, '.inference-heading > .inference-fast-toggle');
+  const hovered = declarations(composer, '.inference-heading > .inference-fast-toggle:hover');
+  const active = declarations(composer, '.inference-heading > .inference-fast-toggle[aria-pressed="true"]');
+  const activeHovered = declarations(composer, '.inference-heading > .inference-fast-toggle[aria-pressed="true"]:hover');
+  assert.equal(resting.get('width'), '44px');
+  assert.equal(resting.get('height'), '44px');
+  assert.equal(resting.get('min-width'), '44px');
+  assert.equal(resting.get('min-height'), '44px');
+  assert.equal(resting.get('background'), 'transparent');
+  assert.equal(hovered.get('background'), 'transparent');
+  assert.equal(hovered.get('color'), resting.get('color'));
+  assert.equal(active.get('color'), 'var(--accent)');
+  assert.equal(activeHovered.get('color'), active.get('color'));
+});

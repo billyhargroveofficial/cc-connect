@@ -1,10 +1,11 @@
 import { memo, useEffect, useState } from "react";
 import { CornerDownRight, LoaderCircle, Play, Square, Trash2, Zap } from "lucide-react";
-import type { BotContext, MessageQueueSnapshot } from "../../lib/types";
+import type { MessageQueueSnapshot } from "../../lib/types";
+import type { useBotContext } from "../../hooks/useBotContext";
 import type { ChatStatus } from "../../lib/chatStatus";
 import { effectiveSessionTime, effortLabel, formatElapsed, turnElapsed } from "../../lib/chatStatus";
-import { contextNumbers } from "../../lib/contextState";
 import { m, controlMotion } from "../../lib/motion";
+import ContextControl from "./ContextControl";
 
 function useClock(active: boolean) {
   const [now, setNow] = useState(Date.now);
@@ -55,17 +56,17 @@ export const WorkingStrip = memo(function WorkingStrip({ working, suspended, com
   </div>;
 });
 
-export const SessionStatus = memo(function SessionStatus({ status, working, suspended, offline, context, model, effort, tier }: {
+export const SessionStatus = memo(function SessionStatus({ status, working, suspended, offline, context, model, effort, tier, onError }: {
   status: ChatStatus; working: boolean; suspended: boolean; offline?: boolean;
-  context: BotContext | null; model: string; effort: string; tier: string;
+  context: ReturnType<typeof useBotContext>; model: string; effort: string; tier: string;
+  onError: (message: string) => void;
 }) {
-  const percent = contextNumbers(context).percent;
   const speed = status.tokensPerSecond;
   return <div className="session-statusline" aria-label="Session status">
     <span title="Unique tool, search and subagent calls in this turn">Step <b>{status.step}</b></span>
     <span title="Conversation turns">Turn <b>{status.turn}</b></span>
     <span title="Inference speed from the last completed turn"><b>{working || speed === null ? "—" : speed.toFixed(1)}</b> tok/s</span>
-    <span title={context?.estimated ? "Estimated context usage" : "Context usage"}>Context <b>{percent === undefined ? "—" : `${context?.estimated ? "≈" : ""}${Math.round(percent)}%`}</b></span>
+    <ContextControl state={context} busy={working} suspended={suspended} offline={offline} onError={onError} />
     <span className="statusline-model" title={model}>{model}</span>
     <span>{effortLabel(effort)}</span>
     {tier && <span className="statusline-tier" title="Service tier"><Zap size={9} />{tier}</span>}

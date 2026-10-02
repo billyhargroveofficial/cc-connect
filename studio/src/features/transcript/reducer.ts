@@ -599,13 +599,38 @@ function scopedCodexNative(turn: TranscriptTurn, event: JournalEvent, data: Reco
   if (terminal(child.status)) activity.endedAt = event.time;
 }
 
-interface PiState { messageIndex: number; activeMessage: string; activeCompaction?: string }
+interface PiState { messageIndex: number; activeMessage: string; narration: boolean; activeCompaction?: string }
 
-function piBlock(turn: TranscriptTurn, event: JournalEvent, messageId: string, index: number, value: unknown, complete = false) {
+// Pi has no commentary phase. A tool-call block or toolUse stop reason is
+// provider evidence that this assistant message continues the agent loop.
+// Promote any earlier text deltas without changing their first position or id.
+function piNarration(turn: TranscriptTurn, event: JournalEvent, state: PiState) {
+  if (state.narration) return;
+  state.narration = true;
+  const prefix = `${state.activeMessage}-`;
+  const provisional = turn.responses.filter(response => response.id.startsWith(prefix));
+  for (const response of provisional) {
+    const activity = addActivity(turn, event, response.id, 'commentary');
+    activity.title = 'Progress message'; activity.text = response.content;
+    activity.seq = response.seq ?? activity.seq; activity.position = response.position;
+    activity.startedAt = response.time;
+  }
+  if (provisional.length) turn.responses = turn.responses.filter(response => !response.id.startsWith(prefix));
+}
+
+function piBlock(turn: TranscriptTurn, event: JournalEvent, messageId: string, index: number, value: unknown, complete = false, narration = false) {
   const block = record(value);
   const id = `${messageId}-${index}`;
   switch (block.type) {
     case 'text': {
+      if (narration) {
+        const activity = addActivity(turn, event, id, 'commentary');
+        activity.position = index;
+        activity.title = 'Progress message'; activity.text = string(block.text);
+        activity.status = complete ? 'completed' : 'running';
+        if (complete) activity.endedAt = event.time;
+        break;
+      }
       const response = turn.responses.find(v => v.id === id);
       if (response) response.content = string(block.text);
       else turn.responses.push({ id, role: 'assistant', content: string(block.text), attachments: [], time: event.time, seq: event.seq, position: index });
@@ -639,7 +664,9 @@ function piMessage(turn: TranscriptTurn, event: JournalEvent, params: RecordValu
     activity.data = { ...activity.data, ...msg }; activity.endedAt = event.time; return;
   }
   if (msg.role !== 'assistant') return;
-  array(msg.content).forEach((block, index) => piBlock(turn, event, state.activeMessage, index, block, complete));
+  const content = array(msg.content);
+  if (msg.stopReason === 'toolUse' || content.some(block => record(block).type === 'toolCall')) piNarration(turn, event, state);
+  content.forEach((block, index) => piBlock(turn, event, state.activeMessage, index, block, complete, state.narration));
   if (string(msg.errorMessage)) turn.notices.push(string(msg.errorMessage));
 }
 
@@ -650,6 +677,7 @@ function piNative(turn: TranscriptTurn, event: JournalEvent, data: RecordValue, 
     case 'message_start':
       if (record(params.message).role === 'assistant') {
         state.messageIndex += 1; state.activeMessage = `pi-message-${state.messageIndex}`;
+        state.narration = false;
       }
       piMessage(turn, event, params, state, false); break;
     case 'message_update': {
@@ -657,18 +685,25 @@ function piNative(turn: TranscriptTurn, event: JournalEvent, data: RecordValue, 
       const index = finiteNumber(update.contentIndex) ?? 0;
       const id = `${state.activeMessage}-${index}`;
       if (update.type === 'text_delta') {
-        const response = turn.responses.find(v => v.id === id);
-        if (response) response.content += string(update.delta);
-        else turn.responses.push({ id, role: 'assistant', content: string(update.delta), attachments: [], time: event.time, seq: event.seq, position: index });
+        if (state.narration) {
+          const activity = addActivity(turn, event, id, 'commentary');
+          activity.position = index;
+          activity.title = 'Progress message'; activity.text += string(update.delta);
+        } else {
+          const response = turn.responses.find(v => v.id === id);
+          if (response) response.content += string(update.delta);
+          else turn.responses.push({ id, role: 'assistant', content: string(update.delta), attachments: [], time: event.time, seq: event.seq, position: index });
+        }
       } else if (update.type === 'thinking_delta') {
         const activity = addActivity(turn, event, id, 'thinking');
         activity.title = 'Thinking'; activity.text += string(update.delta);
       } else if (update.type === 'text_end') {
-        piBlock(turn, event, state.activeMessage, index, { type: 'text', text: update.content }, true);
+        piBlock(turn, event, state.activeMessage, index, { type: 'text', text: update.content }, true, state.narration);
       } else if (update.type === 'thinking_end') {
         piBlock(turn, event, state.activeMessage, index, { type: 'thinking', thinking: update.content }, true);
-      } else if (update.type === 'toolcall_end') {
-        piBlock(turn, event, state.activeMessage, index, update.toolCall);
+      } else if (['toolcall_start', 'toolcall_delta', 'toolcall_end'].includes(string(update.type))) {
+        piNarration(turn, event, state);
+        if (update.type === 'toolcall_end') piBlock(turn, event, state.activeMessage, index, update.toolCall);
       }
       break;
     }
@@ -846,18 +881,28 @@ function finalize(turn: TranscriptTurn) {
     return true;
   });
   const nativeResponses = turn.responses.filter(v => !v.id.startsWith('message-') && !v.id.startsWith('fallback-'));
+  const nativeNarration = turn.backend === 'pi' ? nativeActivities.filter(activity => activity.kind === 'commentary') : [];
   const canonicalResponses = turn.responses.filter(v => v.id.startsWith('message-'));
   const hasCanonicalText = canonicalResponses.some(response => !response.artifact && response.content.trim());
   const nativeText = nativeResponses.map(v => v.content.trim()).filter(Boolean);
   const commentaryText = turn.activities.filter(v => v.kind === 'commentary').map(v => v.text.trim()).filter(Boolean);
   if (canonicalResponses.length) {
+    // The Pi adapter can publish one aggregate of every assistant message,
+    // including narration before tools. Compare that aggregate with all native
+    // prose in start order so promoting narration never creates a second answer.
+    const nativeProse = turn.backend === 'pi' ? [
+      ...nativeResponses.map(response => ({ text: response.content.trim(), seq: response.seq ?? 0, position: response.position ?? 0 })),
+      ...nativeNarration
+        .map(activity => ({ text: activity.text.trim(), seq: activity.seq, position: activity.position ?? 0 })),
+    ].sort((left, right) => left.seq - right.seq || left.position - right.position).map(value => value.text).filter(Boolean) : [];
     turn.responses = turn.responses.filter(v => !v.id.startsWith('fallback-'));
     for (const response of canonicalResponses) {
       // Files are separate published artifacts with their own caption and seq.
       // An identical final answer does not make that publication a duplicate.
       if (response.artifact) continue;
       const value = response.content.trim();
-      if (value && (nativeText.includes(value) || nativeText.join('\n\n') === value || nativeText.join('\n') === value || nativeText.join('') === value || commentaryText.includes(value))) {
+      if (value && (nativeText.includes(value) || nativeText.join('\n\n') === value || nativeText.join('\n') === value || nativeText.join('') === value || commentaryText.includes(value)
+        || nativeProse.join('\n\n') === value || nativeProse.join('\n') === value || nativeProse.join('') === value)) {
         turn.responses = turn.responses.filter(v => v.id !== response.id);
         if (response.attachments.length) {
           const last = nativeResponses.at(-1);
@@ -871,8 +916,14 @@ function finalize(turn: TranscriptTurn) {
   // native item or finalized product message exists.
   if (!nativeResponses.length && !hasCanonicalText) {
     const fragments = turn.events.filter(event => event.type === 'agent' && field(record(event.data), 'type') === 'text');
-    if (fragments.length) turn.responses.push({
-      id: `fallback-text-${turn.id}`, role: 'assistant', content: fragments.map(event => string(field(record(event.data), 'content'))).join(''),
+    const content = fragments.map(event => string(field(record(event.data), 'content'))).join('');
+    const narration = nativeNarration.map(activity => activity.text.trim()).filter(Boolean);
+    // Suppress only an exact narration mirror. A mixed/older journal may still
+    // contain a normalized-only final answer, which must remain recoverable.
+    const mirrorsNarration = turn.backend === 'pi' && narration.length > 0
+      && [narration.join(''), narration.join('\n'), narration.join('\n\n')].includes(content.trim());
+    if (fragments.length && !mirrorsNarration) turn.responses.push({
+      id: `fallback-text-${turn.id}`, role: 'assistant', content,
       attachments: [], time: fragments[0].time, seq: fragments[0].seq,
     });
   }
@@ -959,7 +1010,7 @@ export function buildTranscript(events: JournalEvent[], botId?: string, cache?: 
     }
     const first = group[0];
     const turn = newTurn(id, first.time, first.turnId ? 'running' : 'completed');
-    const piState: PiState = { messageIndex: 0, activeMessage: 'pi-message-0' };
+    const piState: PiState = { messageIndex: 0, activeMessage: 'pi-message-0', narration: false };
     const normalizedState: NormalizedState = { pending: new Map() };
     turns.push(turn);
     for (const event of group) {

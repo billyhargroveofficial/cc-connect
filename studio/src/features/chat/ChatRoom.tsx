@@ -276,8 +276,8 @@ function ChatRoom({
         onBotChange={onBotChange}
         onError={onError}
       />
-      <SessionStatus status={runtimeStatus} working={working} suspended={suspended} offline={offline} context={context.context}
-        model={statusModel} effort={statusEffort} tier={serviceTier} />
+      <SessionStatus status={runtimeStatus} working={working} suspended={suspended} offline={offline} context={context}
+        model={statusModel} effort={statusEffort} tier={serviceTier} onError={onError} />
       </div>
       </div>
       </div>

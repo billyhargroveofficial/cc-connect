@@ -164,6 +164,7 @@ function composer({ draftScope = 'user-a', botId = 'bot', storage = new Map(), g
     resumeUploads: async () => { uploadsPaused = false; uploadGate.resolve(); await settled(); },
     rejectUploads: async () => { uploadsPaused = false; uploadGate.reject(new Error('Old upload failed')); await settled(); },
     edit: (value, caret = value.length, end = caret) => find(node => node.type === 'textarea').props.onChange({ target: { value, selectionStart: caret, selectionEnd: end } }),
+    focus: (caret, end = caret) => { const area = find(node => node.type === 'textarea'); area.props.onFocus?.({ currentTarget: { value: area.props.value, selectionStart: caret ?? area.props.value.length, selectionEnd: end ?? caret ?? area.props.value.length } }); },
     select: (caret, end = caret) => { const area = find(node => node.type === 'textarea'); area.props.onSelect({ currentTarget: { value: area.props.value, selectionStart: caret, selectionEnd: end } }); },
     picker: () => find(node => node.type === 'SkillPicker'),
     skillError: () => find(node => node.props?.className === 'composer-skill-error'),
@@ -752,6 +753,36 @@ test('initial dollar catalog errors retry with Enter while Shift+Enter preserves
   assert.equal(view.catalogCalls.length, 2);
   assert.equal(view.draft(), '$');
   view.unmount();
+});
+
+test('initial dollar catalog errors reopen on textarea focus and retry with Enter after Tab or Shift+Tab', async () => {
+  for (const shiftKey of [false, true]) {
+    const first = deferred(), second = deferred();
+    const view = composer({ catalogGate: first });
+    view.edit('Keep this $review'); view.picker();
+    first.reject(new Error('Host unavailable')); await settled();
+    assert.equal(view.picker().props.status, 'error');
+    assert.deepEqual(view.skillNames(), [], 'there is no selected-skill retry outside the picker');
+    assert.equal(view.skillError(), undefined);
+
+    assert.equal(view.key('Tab', { shiftKey }).prevented, false, 'Tab can move focus in either direction');
+    assert.equal(view.picker(), undefined, 'leaving the textarea closes suggestions');
+    view.focus();
+    assert.equal(view.picker()?.props.status, 'error', 'returning focus reopens the cached error');
+    assert.equal(view.catalogCalls.length, 1, 'focus alone never loops a failed catalog request');
+
+    view.catalogGate(second);
+    assert.equal(view.key('Enter').prevented, true, 'the reopened error can be retried from the keyboard');
+    view.picker();
+    assert.equal(view.picker().props.status, 'loading');
+    assert.equal(view.catalogCalls.length, 2, 'Enter retries the failed catalog exactly once');
+    assert.equal(view.requests.length, 0, 'retry cannot submit the draft');
+    second.resolve({ skills: [skill('review')] }); await settled();
+    assert.equal(view.picker().props.status, 'ready');
+    assert.deepEqual(Array.from(view.picker().props.skills, entry => entry.id), ['review']);
+    assert.equal(view.draft(), 'Keep this $review');
+    view.unmount();
+  }
 });
 
 test('successful skill sends clear only submitted references while edits, new selections and reattached IDs survive', async () => {

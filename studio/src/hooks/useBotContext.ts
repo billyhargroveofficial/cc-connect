@@ -10,11 +10,20 @@ export function useBotContext(bot: Bot, events: Event[]) {
   const [error, setError] = useState("");
   const thread = bot.threads?.[bot.backend] || "";
   const identity = `${bot.id}:${bot.backend}:${bot.model}:${thread}`;
+  const supportsCompaction = bot.backend === "codex" || bot.backend === "pi";
   const eventsRef = useRef(events);
   eventsRef.current = events;
+  const snapshotRevision = useRef(0);
   const current = snapshot?.identity === identity ? snapshot : null;
   const revision = contextEventRevision(events, bot.backend, thread);
   const compacting = contextCompacting(current?.context.compacting ?? false, events, bot.backend, thread, current?.cursor ?? events.at(-1)?.seq ?? 0);
+  const operation = useRef({ identity, requesting: false, compacting });
+  if (operation.current.identity !== identity)
+    operation.current = { identity, requesting: false, compacting };
+  operation.current.compacting = compacting;
+  const mounted = useRef(true);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
+  useEffect(() => { setRequesting(false); }, [identity]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -24,13 +33,14 @@ export function useBotContext(bot: Bot, events: Event[]) {
       // Capture a baseline before the request; lifecycle events arriving while
       // it is in flight remain authoritative over this response.
       const cursor = eventsRef.current.at(-1)?.seq ?? 0;
+      const revision = snapshotRevision.current;
       try {
         const context = await api.context(bot.id, controller.signal);
-        if (controller.signal.aborted) return;
+        if (controller.signal.aborted || revision !== snapshotRevision.current) return;
         setSnapshot({ identity, context, cursor });
         if (context.compacting) timer = setTimeout(() => void load(), 1500);
       } catch (cause) {
-        if (controller.signal.aborted) return;
+        if (controller.signal.aborted || revision !== snapshotRevision.current) return;
         setError(cause instanceof Error ? cause.message : "Could not read context.");
         if (compacting) timer = setTimeout(() => void load(), 3000);
       }
@@ -40,14 +50,28 @@ export function useBotContext(bot: Bot, events: Event[]) {
   }, [bot.id, identity, revision, refresh]);
 
   const compact = useCallback(async () => {
+    const pending = operation.current;
+    if (!mounted.current || pending.identity !== identity || !supportsCompaction || !current || pending.requesting || pending.compacting) return;
+    // Repeated clicks before a React commit cannot submit another operation.
+    pending.requesting = true;
+    const cursor = eventsRef.current.at(-1)?.seq ?? 0;
     setRequesting(true);
     try {
       await api.compact(bot.id);
+      if (!mounted.current || operation.current !== pending) return;
+      snapshotRevision.current++;
+      pending.compacting = true;
+      // An accepted receipt owns the native gate before its SSE event or
+      // refreshed snapshot arrives. Keep progress visible across that gap.
+      setSnapshot(value => value?.identity === identity
+        ? { identity, context: { ...value.context, compacting: true }, cursor }
+        : value);
       setRefresh(value => value + 1);
     } finally {
-      setRequesting(false);
+      pending.requesting = false;
+      if (mounted.current && operation.current === pending) setRequesting(false);
     }
-  }, [bot.id]);
-  return useMemo(() => ({ context: current?.context ?? null, compacting, requesting, error, compact }),
-    [current?.context, compacting, requesting, error, compact]);
+  }, [bot.id, identity, supportsCompaction, !!current]);
+  return useMemo(() => ({ context: current?.context ?? null, compacting, requesting, error, compact, supportsCompaction }),
+    [current?.context, compacting, requesting, error, compact, supportsCompaction]);
 }

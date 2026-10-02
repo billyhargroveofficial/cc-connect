@@ -135,7 +135,7 @@ test('empty progress establishes a batch boundary without a blank row and recove
   assert.equal(buildTurnSegments(turn)[0].activity.seq, 1, 'recovered phase retains the first delta position');
 });
 
-test('Pi text and published attachments retain chronological boundaries between tool batches', () => {
+test('Pi narration and published attachments retain chronological boundaries between tool batches', () => {
   const [turn] = buildTranscript([
     native(1, 'message_start', { message: { role: 'assistant', content: [] } }, 'pi'),
     native(2, 'message_end', { message: { role: 'assistant', content: [
@@ -149,12 +149,131 @@ test('Pi text and published attachments retain chronological boundaries between 
     native(7, 'agent_settled', {}, 'pi'),
   ]);
   const segments = buildTurnSegments(turn);
-  assert.deepEqual(segments.map(segment => segment.kind), ['batch', 'message', 'batch', 'message', 'message']);
-  assert.equal(segments[1].message.content, 'I will inspect it.');
+  assert.deepEqual(segments.map(segment => segment.kind), ['batch', 'progress', 'batch', 'message', 'message']);
+  assert.equal(segments[1].activity.text, 'I will inspect it.');
   assert.equal(segments[2].activities[0].output, 'File contents');
   assert.equal(segments[3].message.artifact, true);
   assert.equal(segments[3].message.attachments[0].id, 'preview');
   assert.equal(segments[4].message.content, 'Finished.');
+});
+
+test('Pi tool-use narration collapses before the final answer without duplicating aggregate text or hiding files and steer', () => {
+  for (const separator of ['', '\n', '\n\n']) {
+    const source = [
+      event(1, 'message', { role: 'user', content: 'Check the source.' }),
+      event(2, 'turn', { backend: 'pi', status: 'running' }),
+      native(3, 'message_start', { message: { role: 'assistant', content: [] } }, 'pi'),
+      native(4, 'message_update', { assistantMessageEvent: { type: 'text_delta', contentIndex: 0, delta: 'Checking the source.' } }, 'pi'),
+      native(5, 'message_update', { assistantMessageEvent: { type: 'toolcall_end', contentIndex: 1,
+        toolCall: { type: 'toolCall', id: 'read', name: 'read', arguments: { path: 'source.txt' } } } }, 'pi'),
+      native(6, 'message_end', { message: { role: 'assistant', stopReason: 'toolUse', content: [
+        { type: 'text', text: 'Checking the source.' }, { type: 'toolCall', id: 'read', name: 'read', arguments: { path: 'source.txt' } },
+      ] } }, 'pi'),
+      event(7, 'agent', { type: 'tool_use', toolName: 'read', toolUseId: 'read', toolInputRaw: { path: 'source.txt' } }),
+      native(8, 'tool_execution_end', { toolCallId: 'read', toolName: 'read', result: 'Verified source.' }, 'pi'),
+      event(9, 'message', { role: 'user', content: 'Keep the source file.', source: 'steer' }),
+      event(10, 'message', { role: 'assistant', content: 'Checking the source.', source: 'files', artifact: true,
+        attachments: [{ id: 'source', name: 'source.txt', mimeType: 'text/plain' }] }),
+      native(11, 'message_start', { message: { role: 'assistant', content: [] } }, 'pi'),
+      native(12, 'message_end', { message: { role: 'assistant', stopReason: 'stop', content: [{ type: 'text', text: 'Done.' }] } }, 'pi'),
+      event(13, 'message', { role: 'assistant', content: ['Checking the source.', 'Done.'].join(separator) }),
+      event(14, 'turn', { backend: 'pi', status: 'completed' }),
+    ];
+    const original = JSON.stringify(source);
+    const [turn] = buildTranscript([...source.slice().reverse(), source[5]], 'bot-1');
+    const segments = buildTurnSegments(turn);
+    assert.deepEqual(segments.map(segment => segment.kind), ['progress', 'batch', 'message', 'message']);
+    assert.equal(segments[0].activity.id, 'pi-message-1-0');
+    assert.equal(segments[0].activity.seq, 4, 'promotion retains the first text delta position');
+    assert.equal(segments[1].activities.length, 1, 'native and normalized tools still deduplicate by call ID');
+    assert.equal(segments[1].activities[0].output, 'Verified source.');
+    assert.deepEqual(turn.responses.map(response => response.content), ['Checking the source.', 'Done.'], 'only the artifact and final answer remain responses');
+    assert.equal(turn.responses[0].artifact, true, 'an identical publication caption is separate from narration');
+    assert.equal(turn.responses[0].attachments[0].id, 'source');
+    assert.equal(turn.users[1].source, 'steer');
+    assert.equal(turn.users[1].content, 'Keep the source file.');
+    const visible = collapseTurnActivity(turn, segments);
+    assert.deepEqual(visible.map(segment => segment.kind), ['message', 'history', 'message']);
+    assert.equal(visible[0].message.artifact, true);
+    assert.deepEqual(visible[1].segments.map(segment => segment.kind), ['progress', 'batch']);
+    assert.equal(visible[1].segments[0].activity.text, 'Checking the source.');
+    assert.equal(visible[2].message.content, 'Done.');
+    assert.equal(turn.events.length, source.length);
+    assert.equal(turn.events[5], source[5], 'the authoritative toolUse snapshot remains in the raw journal');
+    assert.equal(JSON.stringify(source), original, 'projection never rewrites native events');
+  }
+});
+
+test('Pi tool-call evidence promotes streaming text once and final snapshots retain narration chronology', () => {
+  for (const type of ['toolcall_start', 'toolcall_delta', 'toolcall_end']) {
+    const source = [
+      native(1, 'message_start', { message: { role: 'assistant', content: [] } }, 'pi'),
+      native(2, 'message_update', { assistantMessageEvent: { type: 'text_delta', contentIndex: 0, delta: 'Inspect' } }, 'pi'),
+      native(3, 'message_update', { assistantMessageEvent: { type, contentIndex: 1,
+        toolCall: { type: 'toolCall', id: 'read', name: 'read', arguments: {} } } }, 'pi'),
+      native(4, 'message_update', { assistantMessageEvent: { type: 'text_delta', contentIndex: 0, delta: 'ing.' } }, 'pi'),
+      native(5, 'message_update', { assistantMessageEvent: { type: 'text_end', contentIndex: 0, content: 'Inspecting sources.' } }, 'pi'),
+      native(6, 'message_end', { message: { role: 'assistant', stopReason: 'toolUse', content: [
+        { type: 'text', text: 'Checked the source.' }, { type: 'toolCall', id: 'read', name: 'read', arguments: {} },
+      ] } }, 'pi'),
+      native(7, 'message_start', { message: { role: 'assistant', content: [] } }, 'pi'),
+      native(8, 'message_update', { assistantMessageEvent: { type: 'text_delta', contentIndex: 0, delta: 'Result' } }, 'pi'),
+      native(9, 'message_end', { message: { role: 'assistant', stopReason: 'stop', content: [{ type: 'text', text: 'Result.' }] } }, 'pi'),
+    ];
+    const project = createTranscriptProjector();
+    const [before] = project(source.slice(0, 2), 'bot-1');
+    assert.equal(before.responses[0].content, 'Inspect', 'without provider proof a possible final answer stays a response');
+    const [promoted] = project(source.slice(0, 4), 'bot-1');
+    assert.equal(promoted.responses.length, 0);
+    assert.equal(promoted.activities.filter(activity => activity.kind === 'commentary').length, 1);
+    assert.equal(promoted.activities.find(activity => activity.kind === 'commentary').text, 'Inspecting.');
+    const [mirrored] = buildTranscript([...source.slice(0, 4), event(10, 'agent', { type: 'text', content: 'Inspecting.' })], 'bot-1');
+    assert.equal(mirrored.responses.length, 0, 'normalized text mirrors cannot turn native narration into a duplicate answer during the loop');
+    const [completed] = project(source, 'bot-1');
+    assert.deepEqual(completed.responses.map(response => response.content), ['Result.'], 'a new assistant message resets narration classification');
+    const narration = completed.activities.find(activity => activity.kind === 'commentary');
+    assert.equal(narration.text, 'Checked the source.', 'message_end is authoritative over text deltas and text_end');
+    assert.equal(narration.seq, 2);
+    assert.equal(narration.position, 0);
+    assert.equal(narration.startedAt, source[1].time);
+    assert.equal(narration.endedAt, source[5].time);
+    assert.deepEqual(completed, buildTranscript(source, 'bot-1')[0], 'streaming promotion and complete replay agree');
+  }
+});
+
+test('Pi toolUse stop reason alone identifies narration while failed final text and errors remain visible', () => {
+  const source = [
+    native(1, 'message_start', { message: { role: 'assistant', content: [] } }, 'pi'),
+    native(2, 'message_update', { assistantMessageEvent: { type: 'text_delta', contentIndex: 0, delta: 'Trying the source.' } }, 'pi'),
+    native(3, 'message_end', { message: { role: 'assistant', stopReason: 'toolUse' } }, 'pi'),
+    native(4, 'message_start', { message: { role: 'assistant', content: [] } }, 'pi'),
+    native(5, 'message_end', { message: { role: 'assistant', stopReason: 'error', errorMessage: 'Provider disconnected.',
+      content: [{ type: 'text', text: 'Partial final answer.' }] } }, 'pi'),
+    event(6, 'turn', { backend: 'pi', status: 'failed', error: 'Provider disconnected.' }),
+  ];
+  const [turn] = buildTranscript(source);
+  assert.equal(turn.activities.find(activity => activity.kind === 'commentary').text, 'Trying the source.');
+  assert.deepEqual(turn.responses.map(response => response.content), ['Partial final answer.']);
+  assert.equal(turn.error, 'Provider disconnected.');
+  assert.deepEqual(turn.notices, ['Provider disconnected.']);
+  const segments = buildTurnSegments(turn);
+  assert.deepEqual(segments.map(segment => segment.kind), ['progress', 'message']);
+  assert.equal(collapseTurnActivity(turn, segments), segments, 'failed work stays inline and inspectable');
+  assert.equal(turn.events.length, source.length);
+});
+
+test('Pi narration does not swallow a normalized-only final answer from an incomplete native journal', () => {
+  const source = [
+    native(1, 'message_start', { message: { role: 'assistant', content: [] } }, 'pi'),
+    native(2, 'message_end', { message: { role: 'assistant', stopReason: 'toolUse', content: [{ type: 'text', text: 'Checking.' }] } }, 'pi'),
+    event(3, 'agent', { type: 'text', content: 'Recovered final answer.' }),
+    event(4, 'turn', { backend: 'pi', status: 'completed' }),
+  ];
+  const [turn] = buildTranscript(source);
+  assert.equal(turn.activities.find(activity => activity.kind === 'commentary').text, 'Checking.');
+  assert.deepEqual(turn.responses.map(response => response.content), ['Recovered final answer.']);
+  assert.deepEqual(collapseTurnActivity(turn, buildTurnSegments(turn)).map(segment => segment.kind), ['history', 'message']);
+  assert.equal(turn.events.length, source.length);
 });
 
 test('consecutive narration stays inline, service details stay batched, and pending approvals stay outside batches', () => {

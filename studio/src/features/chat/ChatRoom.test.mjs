@@ -70,6 +70,9 @@ test('Working is outside history and directly adjacent above composer with statu
   const stack = view.find(node => node.props?.className === 'chat-input-stack');
   assert.deepEqual(Array.from(stack.props.children, child => child.type), ['QueuePanel', 'WorkingStrip', 'Composer', 'SessionStatus']);
   const composer = view.find(node => node.type === 'Composer');
+  const statusline = stack.props.children[3];
+  assert.equal(statusline.props.context, stack.props.children[2].props.context, 'statusline receives the action and native progress, not just the percentage');
+  assert.equal(statusline.props.onError, view.props.onError);
   assert.equal(composer.props.busy, true);
   assert.equal(composer.props.onStop, undefined, 'the working strip owns stop while send queues');
   const css = readFileSync(new URL('./minimal-composer.css', import.meta.url), 'utf8');

@@ -452,6 +452,7 @@ function Composer({
                 void send();
               }
             }}
+            onFocus={(event) => skills.update(event.currentTarget.value, event.currentTarget.selectionStart, event.currentTarget.selectionEnd)}
             onSelect={(event) => skills.update(event.currentTarget.value, event.currentTarget.selectionStart, event.currentTarget.selectionEnd)}
             onCompositionStart={() => { composing.current = true; skills.close(); }}
             onCompositionEnd={(event) => { composing.current = false; skills.update(event.currentTarget.value, event.currentTarget.selectionStart, event.currentTarget.selectionEnd); }}

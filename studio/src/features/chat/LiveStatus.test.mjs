@@ -11,7 +11,7 @@ const source = ts.transpileModule(readFileSync(new URL('./LiveStatus.tsx', impor
 function queue(skills) {
   const element = (type, props) => ({ type, props });
   const modules = { react: { memo: component => component }, 'react/jsx-runtime': { jsx: element, jsxs: element },
-    'lucide-react': new Proxy({}, { get: (_, name) => name }), '../../lib/chatStatus': {}, '../../lib/contextState': {}, '../../lib/motion': motionTestModule() };
+    'lucide-react': new Proxy({}, { get: (_, name) => name }), '../../lib/chatStatus': {}, './ContextControl': { default: 'ContextControl' }, '../../lib/motion': motionTestModule() };
   const exports = {};
   runInNewContext(source, { exports, require: name => { assert.ok(name in modules); return modules[name]; } });
   const steered = [], removed = [];
@@ -31,6 +31,23 @@ test('queued skill-only messages retain compact names and accessible steer/remov
   nodes.find(node => node.props?.className === 'queue-remove').props.onClick();
   assert.deepEqual(steered, ['q']); assert.deepEqual(removed, ['q']);
   assert.ok(nodes.find(node => node.props?.['aria-label'] === 'Steer queued message: review'));
+});
+
+test('session statusline mounts the native context control with progress and availability state', () => {
+  const element = (type, props) => ({ type, props });
+  const modules = { react: { memo: component => component }, 'react/jsx-runtime': { jsx: element, jsxs: element },
+    'lucide-react': new Proxy({}, { get: (_, name) => name }), '../../lib/chatStatus': { effortLabel: effort => effort },
+    './ContextControl': { default: 'ContextControl' }, '../../lib/motion': motionTestModule() };
+  const exports = {};
+  runInNewContext(source, { exports, require: name => { assert.ok(name in modules); return modules[name]; } });
+  const context = { context: { percent: 25 }, compacting: true, requesting: false, supportsCompaction: true, compact() {} };
+  const onError = () => {};
+  const tree = exports.SessionStatus({ status: { step: 2, turn: 3, tokensPerSecond: 10 }, working: true, suspended: true, offline: true,
+    context, model: 'Model', effort: 'max', tier: '', onError });
+  const control = tree.props.children[3];
+  assert.equal(control.type, 'ContextControl', 'manual compaction remains reachable in the statusline');
+  assert.equal(control.props.state, context); assert.equal(control.props.busy, true);
+  assert.equal(control.props.suspended, true); assert.equal(control.props.offline, true); assert.equal(control.props.onError, onError);
 });
 
 test('mobile queue rows bound many skills to one shrinking chip and an accessible remainder count', () => {

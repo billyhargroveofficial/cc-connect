@@ -1303,7 +1303,7 @@ html.is-resizing-sidebar * {
   min-width: 0;
 }
 .model-trigger {
-  background: var(--surface-control);
+  background: transparent;
   display: flex;
   align-items: center;
   gap: 7px;
@@ -1315,7 +1315,7 @@ html.is-resizing-sidebar * {
   border: 0;
   border-radius: 18px;
 }
-.model-trigger:hover:not(:disabled) { background: var(--surface-hover); }
+.model-trigger:hover:not(:disabled) { background: transparent; color: var(--text); }
 .model-trigger > span:nth-child(2) {
   overflow: hidden;
   text-overflow: ellipsis;

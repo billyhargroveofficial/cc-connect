@@ -59,16 +59,6 @@ export default function BotRoster({
   );
   return (
     <aside className="roster">
-      <header className="roster-toolbar">
-        <button
-          className="icon-button"
-          onClick={onCreate}
-          aria-label="Create bot"
-          title="Create bot"
-        >
-          <Plus size={19} />
-        </button>
-      </header>
       <nav aria-label="Bots" className="roster-list">
         {sortedBots.map((bot) => {
           const busy = isWorking(bot.status);
@@ -126,9 +116,18 @@ export default function BotRoster({
             : "Reconnecting"}
         </div>
         <div className="roster-footer-actions">
-          <button onClick={onSettings} className="footer-settings">
+          <button type="button" onClick={onSettings} className="footer-settings">
             <Settings2 size={16} />
             <span>Settings</span>
+          </button>
+          <button
+            type="button"
+            className="icon-button"
+            onClick={onCreate}
+            aria-label="Create bot"
+            title="Create bot"
+          >
+            <Plus size={19} />
           </button>
           <ThemePicker value={theme} onChange={onTheme} />
           <button

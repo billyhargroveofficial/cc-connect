@@ -562,17 +562,10 @@ svg {
   height: 100%;
   padding: 0 12px;
 }
-.roster-toolbar {
-  height: 48px;
-  padding: 0 7px;
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  flex-shrink: 0;
-}
 .roster-list {
   flex: 1;
   min-height: 0;
+  padding-top: 8px;
   overflow-y: auto;
 }
 .bot-row {
@@ -671,6 +664,10 @@ svg {
 .roster-footer-actions {
   display: flex;
   align-items: center;
+}
+.roster-footer-actions > .icon-button,
+.roster-footer-actions > .theme-picker {
+  flex-shrink: 0;
 }
 .theme-picker {
   position: relative;
@@ -1500,13 +1497,8 @@ svg {
   .workspace.is-chat > .workspace-content {
     display: block;
   }
-  .roster-toolbar {
-    height: 56px;
-    padding: 0 6px;
-  }
-  .roster-toolbar .icon-button {
-    width: 44px;
-    height: 44px;
+  .roster-list {
+    padding-top: max(10px, env(safe-area-inset-top));
   }
   .bot-row {
     padding: 14px 10px;
@@ -1527,8 +1519,8 @@ svg {
     padding-bottom: calc(18px + env(safe-area-inset-bottom));
   }
   .roster-footer .icon-button {
-    height: 42px;
-    min-width: 42px;
+    height: 44px;
+    min-width: 44px;
   }
   .theme-menu button {
     min-height: 44px;
@@ -1538,6 +1530,7 @@ svg {
   }
   .footer-settings {
     font-size: 14px;
+    min-height: 44px;
   }
   .roster-connection {
     font-size: 10px;

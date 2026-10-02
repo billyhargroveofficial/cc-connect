@@ -673,11 +673,6 @@ svg {
   display: flex;
   position: relative;
   min-width: 0;
-  animation: chat-room-enter 180ms cubic-bezier(.2,.8,.2,1) both;
-}
-@keyframes chat-room-enter {
-  from { opacity: 0; }
-  to { opacity: 1; }
 }
 .chat-dialog {
   display: flex;

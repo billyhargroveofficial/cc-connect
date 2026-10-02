@@ -21,6 +21,7 @@ function renderRoster(bots, onCreate, overrides = {}) {
       telegramTitle: () => 'Connected',
     },
     './Avatar': { default: 'Avatar' },
+    './SidebarResizeHandle': { default: 'SidebarResizeHandle' },
     './ThemePicker': { default: 'ThemePicker' },
     '../lib/motion': { ...motionTestModule(), useIsPresent: () => overrides.present !== false },
   };

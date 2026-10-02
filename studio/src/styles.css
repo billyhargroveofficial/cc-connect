@@ -562,6 +562,8 @@ svg {
 }
 /* Roster and shell */
 .workspace {
+  --roster-width: 284px;
+  --roster-half-width: 142px;
   height: 100dvh;
   width: 100%;
   display: flex;
@@ -569,7 +571,7 @@ svg {
   position: relative;
 }
 .roster {
-  width: 284px;
+  width: var(--roster-width);
   flex-shrink: 0;
   background: var(--sidebar-bg);
   border-right: 1px solid var(--border);
@@ -577,6 +579,43 @@ svg {
   flex-direction: column;
   height: 100%;
   padding: 0 12px;
+  position: relative;
+}
+.roster-resizer {
+  position: absolute;
+  z-index: 15;
+  top: 0;
+  right: -5px;
+  bottom: 0;
+  width: 10px;
+  padding: 0;
+  cursor: col-resize;
+  touch-action: none;
+  outline: none;
+}
+.roster-resizer::after {
+  content: "";
+  position: absolute;
+  top: 8px;
+  right: 4px;
+  bottom: 8px;
+  width: 2px;
+  border-radius: 2px;
+  background: var(--accent);
+  opacity: 0;
+  transform: scaleY(0.985);
+  transition: opacity 140ms ease, transform 180ms ease;
+}
+.roster-resizer:hover::after,
+.roster-resizer:focus-visible::after,
+.roster-resizer.is-resizing::after {
+  opacity: 0.72;
+  transform: scaleY(1);
+}
+html.is-resizing-sidebar,
+html.is-resizing-sidebar * {
+  cursor: col-resize !important;
+  user-select: none !important;
 }
 .roster-list {
   flex: 1;
@@ -825,11 +864,11 @@ svg {
 .global-toast-position {
   position: fixed;
   bottom: 26px;
-  left: calc(50% + 130px);
+  left: calc(50% + var(--roster-half-width));
   transform: translateX(-50%);
   z-index: 60;
   width: max-content;
-  max-width: min(580px, calc(100vw - 32px));
+  max-width: min(580px, calc(100vw - var(--roster-width) - 32px));
   pointer-events: none;
 }
 .global-toast {
@@ -1505,8 +1544,9 @@ svg {
   font-size: 10px;
 }
 @media (min-width: 1500px) {
-  .roster {
-    width: 300px;
+  .workspace {
+    --roster-width: 300px;
+    --roster-half-width: 150px;
   }
   .composer-wrap {
     padding-bottom: 26px;
@@ -1516,8 +1556,9 @@ svg {
   }
 }
 @media (max-width: 1050px) {
-  .roster {
-    width: 258px;
+  .workspace {
+    --roster-width: 258px;
+    --roster-half-width: 129px;
   }
   .composer-wrap {
     width: calc(100% - 46px);
@@ -1554,6 +1595,9 @@ svg {
     padding: 0 15px;
     position: absolute;
     inset: 0;
+  }
+  .roster-resizer {
+    display: none;
   }
   .workspace.is-chat > .roster {
     pointer-events: none;
@@ -1685,6 +1729,7 @@ svg {
     bottom: calc(18px + env(safe-area-inset-bottom));
     left: 50%;
     width: calc(100% - 28px);
+    max-width: calc(100vw - 28px);
   }
   .global-toast { width: 100%; }
   .chat-empty {
@@ -1788,6 +1833,9 @@ svg {
   }
 }
 @media (prefers-reduced-motion: reduce) {
+  .roster-resizer::after {
+    transition: none;
+  }
   *,
   *::before,
   *::after {

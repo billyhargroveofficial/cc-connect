@@ -8,6 +8,7 @@ import {
   telegramTitle,
 } from "../lib/events";
 import Avatar from "./Avatar";
+import SidebarResizeHandle from "./SidebarResizeHandle";
 import ThemePicker from "./ThemePicker";
 import {
   AnimatePresence,
@@ -159,6 +160,7 @@ export default function BotRoster({
   const layoutDependency = JSON.stringify([sortedBots.map((bot) => bot.id), selectedId]);
   return (
     <m.aside
+      id="bot-roster"
       className="roster"
       initial={false}
       animate={{ opacity: mobileHidden ? 0 : 1 }}
@@ -249,6 +251,7 @@ export default function BotRoster({
           </m.button>
         </div>
       </footer>
+      <SidebarResizeHandle />
     </m.aside>
   );
 }

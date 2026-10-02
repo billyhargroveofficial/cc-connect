@@ -35,7 +35,7 @@
 }
 
 .bot-island-shell.is-settings .bot-island-card {
-  width: min(520px, calc(100vw - 316px));
+  width: min(520px, calc(100vw - var(--roster-width, 284px) - 32px));
   height: 100%;
   padding: 0;
   overflow: hidden;

@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState } from "react";
 import type { ComponentProps, CSSProperties, RefObject } from "react";
-import { ArrowLeft, ChevronDown, ChevronRight, Check, Zap, X, RotateCcw } from "lucide-react";
+import { ArrowLeft, ChevronDown, ChevronRight, Check, Zap, X, RotateCcw, LoaderCircle } from "lucide-react";
 import { effortLabel } from "../../lib/chatStatus";
 import type { Bot, Capabilities, Model } from "../../lib/types";
 import { api, errorMessage } from "../../lib/api";
@@ -75,10 +75,14 @@ export function useDialogFocus(
 }
 
 export default function ModelPicker({
-  bot, capabilities, disabled, suspended = false, onBotChange, onOpenChange, onError,
+  bot, capabilities, capabilitiesLoading = false, capabilitiesError = "", onRetryCapabilities,
+  disabled, suspended = false, onBotChange, onOpenChange, onError,
 }: {
   bot: Bot;
   capabilities: Capabilities | null;
+  capabilitiesLoading?: boolean;
+  capabilitiesError?: string;
+  onRetryCapabilities?: () => void;
   disabled: boolean;
   suspended?: boolean;
   onBotChange: (bot: Bot) => void;
@@ -123,7 +127,7 @@ export default function ModelPicker({
   // the advertised ID: some harness catalogs name the Fast tier "priority".
   const fastTier = serviceTiers.find(tier => tier.id === "fast")
     || serviceTiers.find(tier => tier.id === "priority" || tier.name.trim().toLowerCase() === "fast");
-  const isFast = bot.serviceTier === fastTier?.id || bot.serviceTier === "fast" || bot.serviceTier === "priority";
+  const isFast = !!bot.serviceTier && (bot.serviceTier === fastTier?.id || bot.serviceTier === "fast" || bot.serviceTier === "priority");
   const tierName = selectedTier?.name || (isFast ? "Fast" : bot.serviceTier || "Auto");
   const clearTierOnly = !fastTier && !!bot.serviceTier;
   const unavailableTier = !!bot.serviceTier && !selectedTier;
@@ -135,9 +139,18 @@ export default function ModelPicker({
   const modelName = current?.name || bot.model || bot.backend;
   const defaultEffort = efforts.includes("max") ? "max" : efforts.at(-1) || "";
   const effortIndex = Math.max(0, efforts.indexOf(selectedEffort));
-  const canChange = !disabled && !saving && present && !suspended;
+  const canInteract = !disabled && !saving && present && !suspended;
+  const canChange = canInteract && !!current && capabilities?.backends[bot.backend]?.available === true;
+  const catalogUnavailable = !models.length;
+  const showCatalogNotice = catalogUnavailable || capabilitiesLoading || !!capabilitiesError;
+  const catalogNotice = <div className="model-catalog-status" role="status" aria-live="polite">
+    <span>{capabilitiesLoading ? <><LoaderCircle size={14} className="spin" />Loading model settings…</>
+      : capabilitiesError || "Model settings are unavailable on this host."}</span>
+    {onRetryCapabilities && !capabilitiesLoading && <button type="button" className="model-catalog-retry"
+      onClick={onRetryCapabilities} disabled={!canInteract}>Retry</button>}
+  </div>;
   async function choose(model: Model) {
-    if (!capabilities?.backends[model.backend]?.available || !canChange || mutation.current) return;
+    if (!capabilities?.backends[model.backend]?.available || !canInteract || mutation.current) return;
     mutation.current = true;
     setSaving(true);
     try {
@@ -185,11 +198,11 @@ export default function ModelPicker({
     <m.button {...controlMotion} className="model-trigger" ref={trigger}
       onClick={() => updateOpen(!open)} disabled={saving || disabled || suspended}
       aria-expanded={open} aria-haspopup="dialog" aria-controls={open ? popoverId : undefined}
-      aria-label={`Model: ${modelName}${confirmedEffort ? `. Reasoning effort: ${effortLabel(bot.effort)}` : ""}${showServiceTier ? `. Service tier: ${tierName}` : ""}`}
+      aria-label={`Model: ${modelName}${bot.effort ? `. Reasoning effort: ${effortLabel(bot.effort)}` : ""}${showServiceTier ? `. Service tier: ${tierName}` : ""}`}
       title={disabled ? "You can change inference settings after the turn finishes" : "Model, effort and service tier"}>
-      <Zap size={14} className={isFast ? "is-fast" : ""} fill={isFast ? "currentColor" : "none"} />
+      {isFast && <Zap size={14} className="is-fast" fill="currentColor" />}
       <span className="model-current-name">{modelName}</span>
-      {confirmedEffort && <span className={`model-current-effort ${bot.effort === "ultra" ? "is-ultra" : ""}`}>{effortLabel(bot.effort)}</span>}
+      {bot.effort && <span className={`model-current-effort ${bot.effort === "ultra" ? "is-ultra" : ""}`}>{effortLabel(bot.effort)}</span>}
       {showServiceTier && <span className="model-current-tier">{tierName}</span>}
       <m.span className="model-trigger-chevron" animate={{ rotate: open ? 180 : 0 }} transition={reducedMotion ? { duration: 0 } : motionTransition.quick}><ChevronDown size={12} /></m.span>
     </m.button>
@@ -200,6 +213,7 @@ export default function ModelPicker({
         ref={dialog} tabIndex={-1} id={popoverId} role="dialog" modal aria-label="Model, effort and service tier">
         {modelsOpen ? <>
           <header><span>Select model</span><m.button {...controlMotion} className="icon-button" onClick={() => setModelsOpen(false)} aria-label="Back to effort"><ArrowLeft size={16} /></m.button></header>
+          {showCatalogNotice && catalogNotice}
           {["codex", "pi", ...new Set(models.map(model => model.backend).filter(backend => backend !== "codex" && backend !== "pi"))].map(backend => {
             const available = capabilities?.backends[backend];
             const choices = models.filter(model => model.backend === backend);
@@ -225,12 +239,13 @@ export default function ModelPicker({
               <Zap size={19} aria-hidden="true" fill={isFast ? "currentColor" : "none"} />
             </m.button>
             <m.button {...controlMotion} className="model-select-current" onClick={() => setModelsOpen(true)}>
-              <strong>{efforts.length ? effortLabel(selectedEffort) : "Select model"}</strong>
+              <strong>{efforts.length ? effortLabel(selectedEffort) : bot.effort ? effortLabel(bot.effort) : "Model settings"}</strong>
               <span>{modelName}<ChevronRight size={12} /></span>
             </m.button>
             <m.button {...controlMotion} className="icon-button inference-reset" onClick={() => void reset()} disabled={!canChange}
               aria-label="Reset effort and service tier" title="Reset inference preferences"><RotateCcw size={17} /></m.button>
           </div>
+          {showCatalogNotice && catalogNotice}
           {efforts.length > 0 && <div className="effort-slider-control">
             <div className="effort-slider-ticks" aria-hidden="true">{efforts.map(effort => <span key={effort} className={effort === selectedEffort ? "is-current" : ""} />)}</div>
             <input type="range" min={0} max={Math.max(0, efforts.length - 1)} step={1} value={effortIndex}
@@ -243,6 +258,9 @@ export default function ModelPicker({
             <div className="effort-slider-labels"><span>{effortLabel(efforts[0])}</span><span>{effortLabel(efforts.at(-1) || "")}</span></div>
           </div>}
         </>}
+        {saving && <div className="model-catalog-status" role="status" aria-live="polite">
+          <span><LoaderCircle size={14} className="spin" />Saving inference settings…</span>
+        </div>}
         <m.button {...controlMotion} className="model-popover-close" onClick={close} aria-label="Close"><X size={14} /></m.button>
       </PresenceSurface>}
     </AnimatePresence>

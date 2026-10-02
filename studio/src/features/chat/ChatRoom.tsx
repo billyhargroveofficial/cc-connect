@@ -14,6 +14,7 @@ import { GoalDialog, useGoal } from "./GoalPanel";
 import { useBotContext } from "../../hooks/useBotContext";
 import BotIsland from "./BotIsland";
 import { createChatStatusProjector } from "../../lib/chatStatus";
+import { emptyJournal } from "../../lib/eventJournal";
 import { QueuePanel, SessionStatus, WorkingStrip } from "./LiveStatus";
 import { useMessageQueue } from "./useMessageQueue";
 import { skillMentionText } from "./skillMentions";
@@ -46,7 +47,11 @@ function ChatRoom({
   draftScope,
   events,
   messages,
+  history = emptyJournal,
   capabilities,
+  capabilitiesLoading,
+  capabilitiesError,
+  onRetryCapabilities,
   loading,
   suspended,
   onBack,
@@ -61,7 +66,11 @@ function ChatRoom({
   draftScope: string;
   events: Event[];
   messages: Event[];
+  history?: Event[];
   capabilities: Capabilities | null;
+  capabilitiesLoading?: boolean;
+  capabilitiesError?: string;
+  onRetryCapabilities?: () => void;
   loading: boolean;
   suspended: boolean;
   onBack: () => void;
@@ -270,6 +279,9 @@ function ChatRoom({
         offline={offline}
         bot={bot}
         capabilities={capabilities}
+        capabilitiesLoading={capabilitiesLoading}
+        capabilitiesError={capabilitiesError}
+        onRetryCapabilities={onRetryCapabilities}
         busy={working}
         context={context}
         onSend={send}
@@ -284,6 +296,7 @@ function ChatRoom({
       <BotIsland
         bot={bot}
         events={messages}
+        history={history}
         status={status}
         working={working}
         supportsGoal={supportsGoal}

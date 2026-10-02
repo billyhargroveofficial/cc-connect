@@ -643,6 +643,25 @@ test('session connected and history saved boilerplate stay raw only while meanin
   assert.deepEqual(turns.flatMap(turn => turn.events), events, 'boilerplate payloads must stay inspectable in the journal');
 });
 
+test('session configuration notices stay in the journal instead of creating transcript rows while owner and permission content remain visible', () => {
+  const updated = 'Instructions or skills were updated. A new Codex session was created with the conversation history carried over.';
+  const recovered = "The Pi session has not been saved yet, or its file is missing. A new session was created while preserving the bot's visible history.";
+  const events = [
+    event(1, 'system', { content: updated, backend: 'codex', threadId: 'new', previousThreadId: 'old' }, ''),
+    event(2, 'system', { content: 'Настройки инструкций или навыков обновлены. Создана новая сессия Codex с переносом истории разговора.' }, ''),
+    event(3, 'system', { content: recovered, backend: 'pi' }),
+    event(4, 'system', { content: 'Сессия Pi ещё не была записана или её файл отсутствует. Создана новая сессия с сохранением видимой истории бота.' }),
+    event(5, 'system', { content: 'Connection lost; retry required.' }),
+    event(6, 'message', { role: 'user', content: updated }),
+    event(7, 'permission', { content: updated }),
+  ];
+  const turns = buildTranscript(events);
+  assert.deepEqual(turns.flatMap(turn => turn.notices), ['Connection lost; retry required.', updated]);
+  assert.deepEqual(turns.flatMap(turn => turn.users).map(message => message.content), [updated]);
+  assert.equal(turns.flatMap(turn => turn.activities).length, 0, 'configuration receipts do not replace the notice with an action row');
+  assert.deepEqual(turns.flatMap(turn => turn.events), events, 'hidden lifecycle notices and all their raw metadata survive replay');
+});
+
 test('goal_context source collapses internal context while preserving identical owner text and the native acknowledgement', () => {
   const content = 'Previous user message\nPrevious assistant answer\n\n'.repeat(500);
   const internal = event(1, 'message', { role: 'user', source: 'goal_context', content, backend: 'codex' });

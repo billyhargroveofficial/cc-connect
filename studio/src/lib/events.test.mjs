@@ -11,6 +11,17 @@ test('Go nanosecond timestamps preserve order across variable fractional precisi
 test('trusted bot handoff renders a sender label while preserving user text and mismatched metadata',()=>{const content='Message from bot Руководитель (chief-id):\nВычисли 7×8\nБез инструментов.';assert.deepEqual(botMessagePresentation(content,'bot:chief-id'),{sender:'Руководитель',content:'Вычисли 7×8\nБез инструментов.'});assert.equal(botMessagePresentation(content,'web'),null);assert.equal(botMessagePresentation(content,'bot:other'),null);assert.equal(botMessagePresentation('Unchanged text','bot:chief-id'),null);});
 test('service context and persistence metadata never replace a real roster message preview',()=>{const answer={seq:1,type:'message',data:{role:'assistant',content:'Готово',source:'codex'}};const internal={seq:2,type:'message',data:{role:'user',content:'Internal bounded context acknowledgement',source:'goal_context'}};const saved={seq:3,type:'system',data:{content:'Session history saved.'}};assert.equal(messagePreview([answer,internal,saved]),'Готово');assert.equal(messagePreview([internal,saved]),'');assert.equal(messagePreview([{...internal,data:{...internal.data,source:'web'}}]),internal.data.content);});
 
+test('bot lifecycle change history never replaces a roster conversation preview while real errors remain visible', () => {
+  const content = 'Instructions or skills were updated. A new Codex session was created with the conversation history carried over.';
+  const answer = { seq: 1, type: 'message', data: { role: 'assistant', content: 'The file is ready.' } };
+  const updated = { seq: 2, type: 'system', data: { content } };
+  const recovered = { seq: 3, type: 'system', data: { content: "The Pi session has not been saved yet, or its file is missing. A new session was created while preserving the bot's visible history." } };
+  assert.equal(messagePreview([answer, updated, recovered]), 'The file is ready.');
+  assert.equal(messagePreview([updated, recovered]), '');
+  assert.equal(messagePreview([{ ...updated, type: 'message', data: { role: 'user', content } }]), content.slice(0, 100));
+  assert.equal(messagePreview([answer, { ...updated, data: { content: 'Connection lost; retry required.' } }]), 'Connection lost; retry required.');
+});
+
 test('identical replay and snapshots preserve journal and bot references', () => {
   const events = [{ seq: 1, data: { content: 'one' } }, { seq: 2, data: { content: 'two' } }];
   assert.equal(mergeEvents(events, structuredClone(events)), events);

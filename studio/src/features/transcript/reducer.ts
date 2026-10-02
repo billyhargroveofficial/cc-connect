@@ -1,4 +1,5 @@
 import type { Event as JournalEvent } from '../../lib/types';
+import { isSilentSessionNotice } from '../../lib/botHistory.ts';
 
 export type RecordValue = Record<string, unknown>;
 export type ActivityKind = 'thinking' | 'commentary' | 'tool' | 'search' | 'subagent' | 'plan' | 'goal' | 'event';
@@ -1083,7 +1084,7 @@ export function buildTranscript(events: JournalEvent[], botId?: string, cache?: 
         case 'system':
         case 'permission': {
           const content = string(data.content);
-          if (content && content !== 'Session connected.' && content !== 'Session history saved.') turn.notices.push(content);
+          if (content && !isSilentSessionNotice(event)) turn.notices.push(content);
           const requestId = string(data.requestId);
           const request = turn.requests.find(v => v.id === requestId);
           if (request && (data.behavior || data.status === 'resolved')) {

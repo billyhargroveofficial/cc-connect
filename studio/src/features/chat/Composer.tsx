@@ -39,6 +39,9 @@ function Composer({
   bot,
   draftScope,
   capabilities,
+  capabilitiesLoading,
+  capabilitiesError,
+  onRetryCapabilities,
   busy,
   onSend,
   onBotChange,
@@ -50,6 +53,9 @@ function Composer({
   bot: Bot;
   draftScope: string;
   capabilities: Capabilities | null;
+  capabilitiesLoading?: boolean;
+  capabilitiesError?: string;
+  onRetryCapabilities?: () => void;
   busy: boolean;
   onSend: (text: string, attachments: Attachment[], skills?: SkillReference[]) => Promise<void>;
   onBotChange: (bot: Bot) => void;
@@ -509,6 +515,9 @@ function Composer({
             <ModelPicker
               bot={bot}
               capabilities={capabilities}
+              capabilitiesLoading={capabilitiesLoading}
+              capabilitiesError={capabilitiesError}
+              onRetryCapabilities={onRetryCapabilities}
               disabled={offline || suspended || busy || sending || context.compacting || context.requesting}
               suspended={suspended || actionsOpen}
               onBotChange={onBotChange}

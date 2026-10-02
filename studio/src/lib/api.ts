@@ -163,11 +163,11 @@ export const api = {
   updateBot: (id: string, fields: Partial<Bot>) =>
     json<Bot>(botPath(id), "PATCH", fields),
   archiveBot: (id: string) => json<void>(botPath(id), "DELETE"),
-  capabilities: (botId?: string, signal?: AbortSignal, nodeId?: string) =>
+  capabilities: (botId?: string, signal?: AbortSignal, nodeId?: string, expectedAccount?: string) =>
     request<Capabilities>(
       `/capabilities${botId ? `?botId=${encodeURIComponent(botId)}` : ""}`,
       { signal },
-      undefined,
+      expectedAccount,
       nodeId,
     ),
   events: (id: string, after = 0) =>

@@ -786,7 +786,7 @@ function Turn({ bot, turn, onPermission, onQuestion, onRetry }: Omit<TranscriptP
   const needsStatus = !hasBatch && !turn.error
     && (isFailed(turn.status) || ['stopped', 'interrupted', 'cancelled', 'canceled'].includes(turn.status));
   const service = !turn.users.length && !turn.responses.length && !turn.requests.length && !running && !turn.error;
-  const hasBotContent = Boolean(turn.responses.length || turn.activities.length || turn.requests.length || running || turn.error || hasDetails || needsStatus);
+  const hasBotContent = Boolean(turn.responses.length || turn.activities.length || turn.requests.length || running || turn.error || needsStatus);
   return <m.section variants={fadeUp} initial="hidden" animate="visible" exit="exit"
     className={`transcript-turn${service ? ' is-service' : ''}`} data-turn-id={turn.id} data-turn-status={turn.status} aria-hidden={!present} inert={!present}>
     <AnimatePresence presenceAffectsLayout={false} initial={false}>{turn.users.map(message => <Message key={message.id} message={message} botId={bot.id} />)}</AnimatePresence>
@@ -813,8 +813,6 @@ function Turn({ bot, turn, onPermission, onQuestion, onRetry }: Omit<TranscriptP
             onPermission={onPermission} onQuestion={onQuestion} />;
         })}</AnimatePresence>
         {needsStatus && <TurnActivity turn={turn} onPermission={onPermission} onQuestion={onQuestion} />}
-        {hasDetails && !detailsMessageId && !detailsProgressId && !hasBatch && !needsStatus
-          && <div className="transcript-message-actions"><ResponseDetails turn={turn} /></div>}
         <AnimatePresence presenceAffectsLayout={false} initial={false}>{childRequests.map(request => <RequestCard key={request.id} request={request} onPermission={onPermission} onQuestion={onQuestion} />)}</AnimatePresence>
         <AnimatePresence presenceAffectsLayout={false} initial={false}>{turn.error && <m.div key="error" variants={fadeUp} initial="hidden" animate="visible" exit="exit"
           className="transcript-turn-error" role="alert"><CircleAlert size={16} /><div><strong>Unable to finish work</strong><p>{turn.error}</p>

@@ -1,4 +1,5 @@
 import type { Bot, Event } from "./types";
+import { isSilentSessionNotice } from "./botHistory.ts";
 export function mergeEvents(current: Event[], incoming: Event[]): Event[] {
   if (!incoming.length) return current;
   if ((!current.length || incoming[0].seq > current[current.length - 1].seq)
@@ -34,7 +35,7 @@ export function messagePreview(events: Event[]): string {
         .replace(/[#*_`]/g, "").slice(0, 100);
     }
     if (event.type === "system" && typeof event.data.content === "string"
-      && !["Session connected.", "Session history saved."].includes(event.data.content))
+      && !isSilentSessionNotice(event))
       return event.data.content.slice(0, 100);
   }
   return "";

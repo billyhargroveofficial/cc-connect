@@ -117,9 +117,10 @@ const ConversationPane = memo(function ConversationPane({
   journal: EventJournal;
   loadHistory: (id: string, force?: boolean) => Promise<void>;
   onError: (message: string) => void;
-} & Omit<React.ComponentProps<typeof ChatRoom>, "events" | "messages" | "loading" | "onHistory" | "onError">) {
+} & Omit<React.ComponentProps<typeof ChatRoom>, "events" | "messages" | "history" | "loading" | "onHistory" | "onError">) {
   const events = useBotEvents(journal, props.bot.id);
   const messages = journal.messagesFor(props.bot.id);
+  const history = journal.historyFor(props.bot.id);
   const [loading, setLoading] = useState(true);
   useEffect(() => {
     let alive = true;
@@ -136,7 +137,7 @@ const ConversationPane = memo(function ConversationPane({
   }, [props.bot.id, props.node?.id, props.draftScope, loadHistory, onError]);
   return (
     <FadingSurface className="workspace-conversation">
-      <ChatRoom {...props} events={events} messages={messages} loading={loading} onError={onError} onHistory={reload} />
+      <ChatRoom {...props} events={events} messages={messages} history={history} loading={loading} onError={onError} onHistory={reload} />
     </FadingSurface>
   );
 });
@@ -381,6 +382,9 @@ function AccountWorkspace({
                       node={workspace.activeNode}
                       offline={!workspace.activeNode.online}
                       capabilities={workspace.capabilities}
+                      capabilitiesLoading={workspace.capabilitiesLoading}
+                      capabilitiesError={workspace.capabilitiesError}
+                      onRetryCapabilities={workspace.refreshCapabilities}
                       suspended={Boolean(globalSettings) || creating || (mobileViewport && !mobileChat)}
                       onBack={backToBots}
                       onBotChange={workspace.updateBot}

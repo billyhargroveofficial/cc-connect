@@ -519,7 +519,7 @@ test('empty live turns leave the sole Working strip to the composer while termin
   }
 });
 
-test('progress-only and notice-only completed turns keep a compact local stats and journal action', () => {
+test('progress-only completed turns retain local details without adding standalone ellipsis to notice-only turns', () => {
   const turn = {
     id: 'turn-1', status: 'completed', backend: 'codex', model: 'gpt-test', effort: 'max', serviceTier: '',
     users: [], requests: [], responses: [], notices: [], events: [{ seq: 1 }],
@@ -539,9 +539,33 @@ test('progress-only and notice-only completed turns keep a compact local stats a
 
   const noticeTurn = { ...turn, activities: [], notices: ['Session resumed.'] };
   view.update({ turn: noticeTurn });
-  assert.equal(view.find(node => node.type?.name === 'ResponseDetails').props.turn, noticeTurn,
-    'service notices retain their own journal even without an answer or action batch');
+  assert.equal(view.find(node => node.type?.name === 'ResponseDetails'), undefined,
+    'service-only notices do not add an orphan details button to the dialogue');
+  assert.equal(view.find(node => node.props?.className === 'transcript-message-actions'), undefined);
+  assert.ok(view.find(node => node.type?.name === 'Markdown' && node.props.content === 'Session resumed.'),
+    'meaningful notices remain visible');
+  assert.equal(view.find(node => node.props?.className === 'transcript-bot-response'), undefined);
   assert.equal(view.find(node => node.type?.name === 'TurnActivity'), undefined);
+});
+
+test('session configuration history does not mount a notice or standalone ellipsis in the conversation', () => {
+  const events = [
+    { seq: 1, botId: 'bot-1', turnId: '', type: 'system', time: '', data: {
+      content: 'Instructions or skills were updated. A new Codex session was created with the conversation history carried over.',
+      backend: 'codex', threadId: 'new', previousThreadId: 'old',
+    } },
+    { seq: 2, botId: 'bot-1', turnId: '', type: 'system', time: '', data: { content: 'Connection lost; retry required.' } },
+  ];
+  const view = disclosure('Transcript', { bot: { id: 'bot-1', name: 'Assistant' }, events, onPermission() {} });
+  const turns = view.findAll(node => node.type?.name === 'Turn');
+  assert.equal(turns.length, 1, 'history-only events do not produce a visible chat turn');
+  assert.deepEqual(turns[0].props.turn.notices, ['Connection lost; retry required.']);
+  const notice = disclosure('Turn', turns[0].props);
+  assert.equal(notice.find(node => node.type?.name === 'ResponseDetails'), undefined);
+  assert.equal(notice.find(node => node.props?.className === 'transcript-message-actions'), undefined);
+  assert.ok(notice.find(node => node.type?.name === 'Markdown' && node.props.content === 'Connection lost; retry required.'));
+  const raw = reducer.buildTranscript(events, 'bot-1');
+  assert.deepEqual(raw.flatMap(turn => turn.events), events, 'hidden history remains available to the bot island');
 });
 
 test('response details prefer the last ordinary answer while artifact-only turns remain inspectable', () => {

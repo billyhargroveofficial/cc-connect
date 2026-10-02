@@ -90,10 +90,13 @@ function fixture({ root = false, conversation = false, loadHistory = async () =>
     phase: 'ready', user: { id: 'account-a', username: 'alice' }, accountVersion: 1, workspaceVersion: 1,
     activeNodeId: 'local', activeNode: { id: 'local', name: 'This server', online: true, local: true },
     nodes: [{ id: 'local', name: 'This server', online: true, local: true }],
-    bots: [{ id: 'bot-a', chief: false }], allBots: [], events: {}, rosterEvents: {}, capabilities: null,
+    bots: [{ id: 'bot-a', chief: false }], allBots: [], events: {}, historyEvents: {}, rosterEvents: {}, capabilities: null,
     catalogBots: [], hostFilters: { server: true, mac: true }, setHostFilter() {},
     loaded: true, error: '', connection: 'connected',
-    eventJournal: { messagesFor: id => workspace.events[id]?.filter(event => event.type === 'message') || emptyEvents },
+    eventJournal: {
+      messagesFor: id => workspace.events[id]?.filter(event => event.type === 'message') || emptyEvents,
+      historyFor: id => workspace.historyEvents[id] || emptyEvents,
+    },
     updateBot: bot => changes.push(bot), archiveBot() {}, selectCatalogBot() {},
     loadHistory: (id, force) => {
       historyLoads.push({ nodeId: workspace.activeNodeId, id, force });
@@ -286,9 +289,21 @@ test('conversation history follows a replaced journal but ignores idle node meta
   view.find(node => node.type === 'Lazy1');
   assert.equal(view.historyLoads.length, initialLoads);
   const messages = [{ seq: 2, type: 'message', data: { text: 'New journal' } }];
-  view.workspace.eventJournal = { messagesFor: () => messages };
+  view.workspace.eventJournal = { messagesFor: () => messages, historyFor: () => [] };
   assert.equal(view.find(node => node.type === 'Lazy1').props.messages, messages);
   assert.equal(view.historyLoads.length, initialLoads + 1, 'A cleared/replaced store must load its own history');
+  view.dispose();
+});
+
+test('conversation passes the stable lifecycle slice independently of token history', () => {
+  const view = fixture({ conversation: true });
+  const history = [{ seq: 1, botId: 'bot-a', type: 'system', data: { content: 'Instructions updated.' } }];
+  view.workspace.historyEvents['bot-a'] = history;
+  assert.equal(view.find(node => node.type === 'Lazy1').props.history, history);
+  view.workspace.events['bot-a'] = [...history, { seq: 2, botId: 'bot-a', type: 'native', data: {} }];
+  const chat = view.find(node => node.type === 'Lazy1');
+  assert.equal(chat.props.history, history);
+  assert.equal(chat.props.events, view.workspace.events['bot-a']);
   view.dispose();
 });
 

@@ -236,6 +236,90 @@
   white-space: nowrap;
 }
 
+.bot-change-history {
+  margin-top: 20px;
+}
+
+.bot-history-toggle {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-height: 32px;
+  gap: 7px;
+  padding: 0;
+  color: var(--muted);
+  background: transparent;
+  text-align: left;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.bot-history-toggle > small {
+  margin-left: auto;
+  font-size: 10px;
+  color: var(--faint);
+}
+
+.bot-history-toggle > span:last-child {
+  display: inline-flex;
+}
+
+.bot-history-toggle:hover,
+.bot-history-more:hover {
+  color: var(--text);
+}
+
+.bot-history-disclosure {
+  display: grid;
+}
+
+.bot-history-disclosure-inner {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.bot-history-list {
+  display: grid;
+  gap: 14px;
+  list-style: none;
+  margin: 0;
+  padding: 6px 0 0;
+}
+
+.bot-history-entry {
+  min-width: 0;
+  font-size: 11px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.bot-history-entry > strong {
+  display: block;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.bot-history-entry > time {
+  display: block;
+  margin-top: 2px;
+  color: var(--faint);
+  font-size: 10px;
+}
+
+.bot-history-entry > p {
+  margin: 5px 0 0;
+  color: var(--muted);
+}
+
+.bot-history-more {
+  min-height: 32px;
+  margin-top: 4px;
+  padding: 4px 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 11px;
+}
+
 @media (max-width: 1099px) {
   .bot-island-shell {
     display: none;
@@ -296,6 +380,11 @@
   .bot-island-file {
     min-height: 44px;
     align-items: center;
+  }
+
+  .bot-history-toggle,
+  .bot-history-more {
+    min-height: 44px;
   }
 }
 

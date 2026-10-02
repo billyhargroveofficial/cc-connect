@@ -15,10 +15,10 @@ const standard = { id: 'standard', name: 'Standard', description: 'Standard infe
 
 // Exercise the component's actual controls and PATCH requests. React's rendering
 // machinery is stubbed; model-specific catalog values and handlers are real.
-function picker({ model = {}, bot = {}, disabled = false, suspended = false, reducedMotion = false, updateGate, updateError } = {}) {
+function picker({ model = {}, bot = {}, disabled = false, suspended = false, reducedMotion = false, updateGate, updateError, catalog, capabilitiesLoading = false, capabilitiesError = '' } = {}) {
   let cursor = 0;
   let present = true;
-  const values = [], requests = [], errors = [];
+  const values = [], requests = [], errors = [], retries = [];
   const state = initial => {
     const index = cursor++;
     if (!(index in values)) values[index] = typeof initial === 'function' ? initial() : initial;
@@ -38,9 +38,11 @@ function picker({ model = {}, bot = {}, disabled = false, suspended = false, red
       ],
       backends: { codex: { available: true }, pi: { available: true } },
     },
-    disabled, suspended, onBotChange: updated => { props.bot = updated; },
+    disabled, suspended, capabilitiesLoading, capabilitiesError, onRetryCapabilities: () => retries.push(true),
+    onBotChange: updated => { props.bot = updated; },
     onOpenChange() {}, onError: error => errors.push(error),
   };
+  if (catalog !== undefined) props.capabilities = catalog;
   const modules = {
     react: { useState: state, useRef: initial => state(() => ({ current: initial }))[0], useId: () => state('model-test')[0], useEffect() {}, createElement: (type, props, ...children) => element(type, { ...props, children }) },
     'react/jsx-runtime': { jsx: element, jsxs: element, Fragment: 'fragment' },
@@ -72,7 +74,7 @@ function picker({ model = {}, bot = {}, disabled = false, suspended = false, red
   }
   const find = match => all(match)[0];
   return {
-    props, requests, errors, find, all,
+    props, requests, errors, retries, find, all,
     present: next => { present = next; },
     surface: fields => exports.PresenceSurface(fields),
     open: () => find(node => node.props?.className === 'model-trigger').props.onClick(),
@@ -107,6 +109,48 @@ test('compact picker exposes model, effort and tier directly, then opens a discr
   assert.equal(slider.props.max, 2);
   assert.equal(slider.props['aria-valuetext'], 'Max');
   assert.equal(view.find(node => node.type === 'select' && node.props['aria-label'] === 'Reasoning effort'), undefined);
+});
+
+test('an unloaded picker preserves the configured model and effort without offering a destructive reset', async () => {
+  const view = picker({ catalog: null, capabilitiesLoading: true });
+  assert.match(view.find(node => node.props?.className === 'model-trigger').props['aria-label'], /Model: current.*Reasoning effort: Max/);
+  view.open();
+  assert.equal(view.find(node => node.props?.className === 'model-select-current').props.children[0].props.children, 'Max');
+  assert.ok(view.find(node => node.props?.className === 'model-catalog-status'));
+  assert.equal(view.find(node => node.props?.className === 'model-catalog-retry'), undefined, 'a pending request does not offer duplicate retries');
+  const reset = view.find(node => node.props?.className === 'icon-button inference-reset');
+  assert.equal(reset.props.disabled, true);
+  reset.props.onClick();
+  await settled();
+  assert.equal(view.requests.length, 0, 'missing capabilities cannot PATCH an empty effort');
+  view.find(node => node.props?.className === 'model-select-current').props.onClick();
+  assert.ok(view.find(node => node.props?.className === 'model-catalog-status'), 'the empty model list shows discovery state');
+  assert.equal(view.all(node => node.props?.className === 'model-choice').length, 0);
+});
+
+test('failed initial discovery offers a retry inside both picker views without inventing model choices', () => {
+  const view = picker({ catalog: null, capabilitiesError: 'Model settings could not be refreshed. Try again.' });
+  view.open();
+  view.find(node => node.props?.className === 'model-catalog-retry').props.onClick();
+  assert.equal(view.retries.length, 1);
+  view.find(node => node.props?.className === 'model-select-current').props.onClick();
+  assert.ok(view.find(node => node.props?.className === 'model-catalog-status'));
+  view.find(node => node.props?.className === 'model-catalog-retry').props.onClick();
+  assert.equal(view.retries.length, 2);
+  assert.equal(view.all(node => node.props?.className === 'model-choice').length, 0);
+});
+
+test('a retained model catalog shows refresh and error feedback in both picker views', () => {
+  const view = picker({ capabilitiesLoading: true });
+  view.open();
+  assert.ok(view.find(node => node.props?.className === 'model-catalog-status'));
+  assert.ok(view.find(node => node.type === 'input' && node.props.type === 'range'), 'known efforts remain visible during refresh');
+  view.props.capabilitiesLoading = false;
+  view.props.capabilitiesError = 'Some model settings are temporarily unavailable. Try again.';
+  assert.ok(view.find(node => node.props?.className === 'model-catalog-retry'));
+  view.find(node => node.props?.className === 'model-select-current').props.onClick();
+  assert.ok(view.find(node => node.props?.className === 'model-catalog-retry'));
+  assert.equal(view.all(node => node.props?.className === 'model-choice').length, 3);
 });
 
 test('range pointer-up plus blur commits one effort change while model list retains supported tiers', async () => {
@@ -186,9 +230,45 @@ test('Ultra model rows have no lightning because Fast is an independent tier', (
   const view = picker();
   view.open();
   view.find(node => node.props?.className === 'model-select-current').props.onClick();
-  assert.equal(view.all(node => node.type === 'Zap').length, 1,
-    'only the compact inference trigger retains a lightning outside the model list');
+  assert.equal(view.all(node => node.type === 'Zap').length, 0,
+    'Auto inference has no lightning in either the trigger or model list');
   assert.equal(view.find(node => node.props?.['aria-label'] === 'Supports Ultra'), undefined);
+});
+
+test('the compact trigger shows lightning only for Fast while the effort view retains its tier toggle', async () => {
+  const view = picker();
+  assert.equal(view.all(node => node.type === 'Zap').length, 0);
+  view.open();
+  assert.equal(view.all(node => node.type === 'Zap').length, 1, 'the inactive toggle can still enable Fast');
+  await view.toggleFast();
+  assert.equal(view.all(node => node.type === 'Zap').length, 2);
+  await view.toggleFast();
+  assert.equal(view.all(node => node.type === 'Zap').length, 1);
+});
+
+test('a missing service tier and unloaded catalog never imply Fast mode', () => {
+  const view = picker({ catalog: null });
+  delete view.props.bot.serviceTier;
+  assert.equal(view.all(node => node.type === 'Zap').length, 0, 'the compact trigger has no lightning without an explicit Fast tier');
+  view.open();
+  assert.equal(view.fastToggle().props['aria-pressed'], false);
+  assert.equal(view.fastToggle().props.disabled, true);
+});
+
+test('a pending model switch announces saving progress and prevents duplicate requests', async () => {
+  let release;
+  const view = picker({ updateGate: new Promise(resolve => { release = resolve; }) });
+  view.open();
+  view.find(node => node.props?.className === 'model-select-current').props.onClick();
+  const choice = view.all(node => node.props?.className === 'model-choice')[1];
+  choice.props.onClick();
+  choice.props.onClick();
+  assert.equal(view.requests.length, 1);
+  assert.ok(view.find(node => node.props?.className === 'model-catalog-status' && node.props.children.props.children[1] === 'Saving inference settings…'));
+  assert.equal(view.all(node => node.props?.className === 'model-choice').every(node => node.props.disabled), true);
+  release();
+  await settled();
+  assert.equal(view.props.bot.model, 'compatible');
 });
 
 test('Fast toggle uses the advertised Fast tier ID and ignores the automatic default tier', async () => {

@@ -28,6 +28,7 @@ function chat({ receipt = { status: 'queued', turnId: 'active', queueId: 'q' } }
     'lucide-react': new Proxy({}, { get: (_, name) => name }),
     '../../lib/api': { api: { send: async (...args) => { calls.push(args); return receipt; }, stop: async () => {} }, errorMessage: error => error.message },
     '../../lib/events': { isWorking, statusLabel }, '../../lib/chatStatus': { createChatStatusProjector },
+    '../../lib/eventJournal': { emptyJournal: [] },
     '../../lib/motion': motionTestModule(), '../../components/Avatar': { default: 'Avatar' },
     './Composer': { default: 'Composer' }, './GoalPanel': { GoalDialog: 'GoalDialog', useGoal: () => ({ goal: null, setGoal() {} }) },
     '../../hooks/useBotContext': { useBotContext: () => ({ context: { percent: 25 }, compacting: false, requesting: false }) },
@@ -79,6 +80,17 @@ test('Working is outside history and directly adjacent above composer with statu
   assert.match(css, /\.working-strip\s*\{[^}]*margin:\s*0;/);
   assert.match(css, /\.chat-input-stack \.composer-wrap\.composer-minimal\s*\{[^}]*padding-bottom:\s*0;/);
   assert.match(css, /\.session-statusline\s*\{[^}]*flex-wrap:\s*nowrap;[^}]*overflow-x:\s*auto;/);
+});
+
+test('bot island receives the lifecycle slice separately from raw transcript events', () => {
+  const view = chat();
+  const history = [{ seq: 2, botId: 'bot', type: 'system', data: { content: 'Instructions updated.' } }];
+  view.props.history = history;
+  const island = view.find(node => node.type === 'BotIsland');
+  assert.equal(island.props.history, history);
+  assert.equal(island.props.events, view.props.messages);
+  view.props.events = [...view.props.events, { seq: 3, botId: 'bot', type: 'native', data: {} }];
+  assert.equal(view.find(node => node.type === 'BotIsland').props.history, history);
 });
 
 test('native skill attachments retain identity through the queue while older hosts get text mentions', async () => {

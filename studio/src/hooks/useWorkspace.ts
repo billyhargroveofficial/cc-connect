@@ -7,6 +7,7 @@ import { createSessionProbe } from "../lib/sessionProbe";
 import { catalogRows } from "../lib/hostCatalog";
 import type { HostCategory, HostFilters } from "../lib/hostCatalog";
 import { EventJournal } from "../lib/eventJournal";
+import { hasTransientDiscoveryFailure, retainCapabilityCatalog } from "../lib/capabilityCatalog";
 const localNode: NodeInfo = {
   id: "local", name: "This server", status: "online", online: true, local: true,
 };
@@ -22,11 +23,14 @@ function rememberNode(accountId: string, nodeId: string) {
 interface WorkspaceState {
   bots: Bot[];
   capabilities: Capabilities | null;
+  capabilitiesScope: string;
+  capabilitiesLoading: boolean;
+  capabilitiesError: string;
   loaded: boolean;
 }
 type Action =
   | { type: "bots"; bots: Bot[] }
-  | { type: "capabilities"; capabilities: Capabilities }
+  | { type: "capabilities"; capabilities: Capabilities | null; scope: string; loading: boolean; error: string }
   | { type: "update"; bot: Bot }
   | { type: "updates"; bots: Bot[] }
   | { type: "archive"; id: string }
@@ -34,6 +38,9 @@ type Action =
 const initial: WorkspaceState = {
   bots: [],
   capabilities: null,
+  capabilitiesScope: "",
+  capabilitiesLoading: false,
+  capabilitiesError: "",
   loaded: false,
 };
 function reducer(state: WorkspaceState, action: Action): WorkspaceState {
@@ -56,7 +63,8 @@ function reducer(state: WorkspaceState, action: Action): WorkspaceState {
           : bot),
       };
     case "capabilities":
-      return { ...state, capabilities: action.capabilities };
+      return { ...state, capabilities: action.capabilities, capabilitiesScope: action.scope,
+        capabilitiesLoading: action.loading, capabilitiesError: action.error };
   }
 }
 
@@ -77,6 +85,7 @@ export function useWorkspace() {
   const [revision, setRevision] = useState(0);
   const [accountVersion, setAccountVersion] = useState(0);
   const [workspaceVersion, setWorkspaceVersion] = useState(0);
+  const [capabilitiesRevision, setCapabilitiesRevision] = useState(0);
   const [nodes, setNodes] = useState<NodeInfo[]>([]);
   const [activeNodeId, setActiveNodeId] = useState("local");
   const [catalogs, setCatalogs] = useState<Record<string, Bot[]>>({});
@@ -91,6 +100,7 @@ export function useWorkspace() {
   const nodesRef = useRef<NodeInfo[]>([]);
   const activeNodeRef = useRef("local");
   const catalogsRef = useRef<Record<string, Bot[]>>({});
+  const capabilityCatalogs = useRef(new Map<string, Capabilities>());
   const historyRequests = useRef(new Map<string, Promise<void>>());
   const stopStream = useRef<(() => void) | null>(null);
 
@@ -143,6 +153,7 @@ export function useWorkspace() {
     nodesRef.current = [];
     setNodes([]);
     catalogsRef.current = {};
+    capabilityCatalogs.current.clear();
     setCatalogs({});
     setHostFilters({ server: true, mac: true });
     setUser(nextUser);
@@ -406,10 +417,9 @@ export function useWorkspace() {
   }, [phase, user?.id, activeNodeId, revision, accountVersion, workspaceVersion, applySession, expired, updateCatalog, publishEvents]);
 
   const selectedBot = state.bots.find((bot) => bot.id === selectedId);
-  const catalogScope = selectedBot ? JSON.stringify([
-    activeNodeId, selectedBot.id, selectedBot.backend, selectedBot.model,
-    selectedBot.threads?.[selectedBot.backend] || "",
-  ]) : "";
+  const catalogScope = JSON.stringify([
+    activeNodeId, selectedBot?.id || "", selectedBot?.backend || "", selectedBot?.model || "",
+  ]);
   const hasBots = state.bots.some((bot) => bot.status !== "archived");
   useEffect(() => {
     if (phase !== "ready" || !sessionVerified || !state.loaded || (hasBots && !selectedBot)) return;
@@ -417,16 +427,37 @@ export function useWorkspace() {
     let alive = true;
     const owner = generation.current;
     const connectionOwner = connectionEpoch.current;
-    api.capabilities(selectedBot?.id, controller.signal, activeNodeId).then((capabilities) => {
-      if (alive && owner === generation.current && verifiedGeneration.current === owner && connectionOwner === connectionEpoch.current)
-        dispatch({ type: "capabilities", capabilities });
-    }).catch((error) => {
-      if (!alive || owner !== generation.current || connectionOwner !== connectionEpoch.current) return;
-      if (error instanceof ApiError && error.status === 401) expired();
-      else setError(errorMessage(error));
-    });
-    return () => { alive = false; controller.abort(); };
-  }, [phase, sessionVerified, connectionVersion, revision, accountVersion, workspaceVersion, activeNodeId, state.loaded, hasBots, catalogScope, expired]);
+    const accountId = userRef.current?.id;
+    const current = () => alive && owner === generation.current && verifiedGeneration.current === owner &&
+      connectionOwner === connectionEpoch.current && accountId === userRef.current?.id;
+    let retryTimer: ReturnType<typeof setTimeout> | undefined;
+    const publish = (loading: boolean, error = "") => dispatch({ type: "capabilities", scope: catalogScope,
+      capabilities: capabilityCatalogs.current.get(catalogScope) || null, loading, error });
+    const schedule = (attempt: number) => {
+      retryTimer = setTimeout(() => { retryTimer = undefined; if (current()) void load(attempt + 1); }, [1000, 3000][attempt]);
+    };
+    const load = async (attempt: number) => {
+      try {
+        const capabilities = await api.capabilities(selectedBot?.id, controller.signal, activeNodeId, accountId);
+        if (!current()) return;
+        capabilityCatalogs.current.set(catalogScope,
+          retainCapabilityCatalog(capabilityCatalogs.current.get(catalogScope), capabilities));
+        const transientFailure = hasTransientDiscoveryFailure(capabilities);
+        const retry = attempt < 2 && transientFailure;
+        publish(retry, transientFailure ? "Some model settings are temporarily unavailable. Try again." : "");
+        if (retry) schedule(attempt);
+      } catch (error) {
+        if (!current()) return;
+        if (error instanceof ApiError && error.status === 401) { expired(); return; }
+        const retry = attempt < 2 && (!(error instanceof ApiError) || error.status >= 500 || [408, 429].includes(error.status));
+        publish(retry, "Model settings could not be refreshed. Try again.");
+        if (retry) schedule(attempt);
+      }
+    };
+    publish(true);
+    void load(0);
+    return () => { alive = false; controller.abort(); if (retryTimer !== undefined) clearTimeout(retryTimer); };
+  }, [phase, sessionVerified, connectionVersion, revision, accountVersion, workspaceVersion, activeNodeId, state.loaded, hasBots, catalogScope, capabilitiesRevision, expired]);
 
   const authenticate = useCallback(async (credentials: AccountCredentials, register: boolean) => {
     const owner = resetAccount(null);
@@ -464,6 +495,9 @@ export function useWorkspace() {
 
   // Callbacks held by an exiting chat or dialog belong to one workspace.
   const owner = generation.current;
+  const refreshCapabilities = useCallback(() => {
+    if (owner === generation.current && userRef.current) setCapabilitiesRevision(value => value + 1);
+  }, [owner]);
   const loadHistory = useCallback((id: string, force = false): Promise<void> => {
     if (owner !== generation.current || verifiedGeneration.current !== owner || !userRef.current) return Promise.resolve();
     if (nodesRef.current.find(node => node.id === activeNodeRef.current)?.online === false) return Promise.resolve();
@@ -522,6 +556,10 @@ export function useWorkspace() {
   const catalogBots = useMemo(() => catalogRows(available, catalogs), [nodes, catalogs]);
   return {
     ...state,
+    capabilities: state.capabilitiesScope === catalogScope ? state.capabilities : capabilityCatalogs.current.get(catalogScope) || null,
+    capabilitiesLoading: state.capabilitiesScope === catalogScope ? state.capabilitiesLoading : phase === "ready",
+    capabilitiesError: state.capabilitiesScope === catalogScope ? state.capabilitiesError : "",
+    refreshCapabilities,
     // Snapshots remain available to diagnostics/tests. Renderers subscribe to
     // eventJournal directly and therefore do not wake the app shell.
     events: eventJournal.all(),

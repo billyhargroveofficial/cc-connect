@@ -4,7 +4,9 @@ import test from 'node:test';
 import { runInNewContext } from 'node:vm';
 import ts from 'typescript';
 import * as hostCatalog from '../lib/hostCatalog.ts';
+import * as capabilityCatalog from '../lib/capabilityCatalog.ts';
 import { mergeEvents as realMergeEvents } from '../lib/events.ts';
+import { botHistoryEntry } from '../lib/botHistory.ts';
 
 const source = ts.transpileModule(readFileSync(new URL('./useWorkspace.ts', import.meta.url), 'utf8'), {
   compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },
@@ -13,7 +15,7 @@ const journalSource = ts.transpileModule(readFileSync(new URL('../lib/eventJourn
   compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },
 }).outputText;
 const journalModule = {};
-runInNewContext(journalSource, { exports: journalModule, require: name => name === './events' ? { mergeEvents: realMergeEvents } : undefined });
+runInNewContext(journalSource, { exports: journalModule, require: name => ({ './events': { mergeEvents: realMergeEvents }, './botHistory': { botHistoryEntry } })[name] });
 const session = id => ({ authenticated: true, user: { id, username: id.toLowerCase() }, registrationAllowed: true });
 const bot = (id, name) => ({ id, name, status: 'idle', backend: 'codex', model: 'model', createdAt: '2026-10-02T10:00:00Z' });
 function deferred() {
@@ -124,13 +126,14 @@ function fixture(initialSession = session('account-a'), storage = new Map()) {
       },
     },
     '../lib/hostCatalog': hostCatalog,
+    '../lib/capabilityCatalog': capabilityCatalog,
     '../lib/eventJournal': journalModule,
   };
   const exports = {};
   runInNewContext(source, {
     exports, EventSource: FakeEventSource, AbortController, require: name => modules[name],
     localStorage: { getItem: key => storage.get(key) || null, setItem: (key, value) => storage.set(key, value) },
-    setTimeout: callback => { const id = ++timerId; timers.set(id, callback); return id; },
+    setTimeout: (callback, delay) => { const id = ++timerId; callback.delay = delay; timers.set(id, callback); return id; },
     clearTimeout: id => timers.delete(id),
   }, { filename: 'useWorkspace.ts' });
   function render() {
@@ -158,6 +161,132 @@ function fixture(initialSession = session('account-a'), storage = new Map()) {
 
 const event = (seq, botId = 'shared') => ({ seq, botId, type: 'message', time: '2026-10-02T10:00:00Z', data: { text: 'Private account history' } });
 const node = (id, name = id) => ({ id, name, status: 'online', online: true, local: id === 'local' });
+const modelCatalog = (id = 'model') => ({ models: [{ id, name: id, backend: 'codex', efforts: ['max'] }],
+  backends: { codex: { available: true }, pi: { available: false, reason: 'Not installed' } }, voice: false });
+async function openCatalog(view, nodeId = 'local') {
+  view.botRequest(nodeId).resolve({ bots: [bot('shared', 'Bot')] });
+  await view.flush();
+  view.value.selectCatalogBot('shared');
+  await view.flush();
+  return view.requests.capabilities.at(-1);
+}
+function tickCatalogRetry(view) {
+  const [id, tick] = [...view.timers].find(([, callback]) => callback.delay < 10000);
+  view.timers.delete(id);
+  tick();
+}
+
+test('model catalog survives a timed-out refresh with bounded retries and no chat toast', async () => {
+  const view = fixture();
+  await view.flush();
+  const first = await openCatalog(view);
+  const catalog = modelCatalog();
+  first.resolve(catalog);
+  await view.flush();
+  assert.equal(view.value.capabilities, catalog);
+  view.value.refreshCapabilities();
+  await view.flush();
+  assert.equal(view.value.capabilities, catalog, 'refreshing never clears the advertised efforts');
+  for (let attempt = 0; attempt < 3; attempt++) {
+    view.requests.capabilities.at(-1).reject(new ApiError('context deadline exceeded', 504));
+    await view.flush();
+    assert.equal(view.value.capabilities, catalog);
+    assert.equal(view.value.error, '', 'discovery errors stay inside the picker');
+    if (attempt < 2) { assert.equal(view.value.capabilitiesLoading, true); tickCatalogRetry(view); }
+  }
+  assert.equal(view.value.capabilitiesLoading, false);
+  assert.match(view.value.capabilitiesError, /Try again/);
+  assert.equal(view.requests.capabilities.length, 4, 'a refresh performs at most three attempts');
+  view.value.refreshCapabilities();
+  await view.flush();
+  view.requests.capabilities.at(-1).resolve(modelCatalog('recovered'));
+  await view.flush();
+  assert.equal(view.value.capabilities.models[0].id, 'recovered');
+  assert.equal(view.value.capabilitiesError, '');
+  view.dispose();
+});
+
+test('initial model discovery retries and a degraded response retains only known unavailable model metadata', async () => {
+  const view = fixture();
+  await view.flush();
+  (await openCatalog(view)).reject(new ApiError('context deadline exceeded', 504));
+  await view.flush();
+  assert.equal(view.value.capabilities, null, 'an unknown host never receives invented fallback models');
+  assert.equal(view.value.capabilitiesLoading, true);
+  assert.equal(view.value.error, '');
+  tickCatalogRetry(view);
+  view.requests.capabilities.at(-1).resolve(modelCatalog());
+  await view.flush();
+  view.value.refreshCapabilities();
+  await view.flush();
+  view.requests.capabilities.at(-1).resolve({ models: [], voice: false,
+    backends: { codex: { available: false, reason: 'context deadline exceeded' }, pi: { available: false, reason: 'Not installed' } } });
+  await view.flush();
+  assert.equal(view.value.capabilities.models[0].id, 'model');
+  assert.equal(view.value.capabilities.backends.codex.available, false, 'stale metadata cannot enable unavailable inference');
+  assert.equal(view.value.capabilitiesLoading, true);
+  view.dispose();
+  assert.equal(view.timers.size, 0, 'automatic discovery retries are cancelled on unmount');
+});
+
+test('an instructions-driven thread replacement preserves the successful model catalog through a timeout', async () => {
+  const view = fixture();
+  await view.flush();
+  const first = await openCatalog(view);
+  const catalog = modelCatalog();
+  first.resolve(catalog);
+  await view.flush();
+  view.value.updateBot({ ...view.value.bots[0], threads: { codex: 'new-thread-after-instructions-change' } });
+  await view.flush();
+  assert.equal(view.value.capabilities, catalog, 'model settings belong to the configured model rather than one session');
+  assert.equal(view.requests.capabilities.length, 1, 'a thread rollover does not rediscover unchanged model settings');
+  view.value.refreshCapabilities();
+  await view.flush();
+  view.requests.capabilities.at(-1).reject(new ApiError('context deadline exceeded', 504));
+  await view.flush();
+  assert.equal(view.value.capabilities, catalog, 'a subsequent timeout retains the pre-rollover catalog');
+  assert.equal(view.value.error, '');
+  view.dispose();
+});
+
+test('cached model catalogs stay isolated by account and host and reject late retry results', async () => {
+  const view = fixture();
+  await view.flush();
+  view.requests.nodes[0].resolve({ nodes: [node('local'), node('mac-a')] });
+  (await openCatalog(view)).resolve(modelCatalog('private-local'));
+  await view.flush();
+  view.value.selectNode('mac-a');
+  await view.flush();
+  const remote = await openCatalog(view, 'mac-a');
+  assert.equal(view.value.capabilities, null, 'another host cannot inherit the local catalog');
+  assert.equal(remote.args[2], 'mac-a');
+  assert.equal(remote.args[3], 'account-a');
+  remote.resolve(modelCatalog('private-mac'));
+  await view.flush();
+  view.value.selectNode('local');
+  await view.flush();
+  const refresh = await openCatalog(view);
+  assert.equal(view.value.capabilities.models[0].id, 'private-local', 'returning to a host restores only its exact catalog scope');
+  refresh.reject(new ApiError('context deadline exceeded', 504));
+  await view.flush();
+  tickCatalogRetry(view);
+  const late = view.requests.capabilities.at(-1);
+  const old = view.value;
+  await old.logout();
+  await view.value.login({ username: 'account-b', password: 'password' });
+  await view.flush();
+  const fresh = await openCatalog(view);
+  assert.equal(view.value.capabilities, null, 'a new account has no cached model metadata');
+  assert.equal(late.args[1].aborted, true);
+  late.resolve(modelCatalog('leaked-a'));
+  old.refreshCapabilities();
+  await view.flush();
+  assert.equal(view.value.capabilities, null);
+  fresh.resolve(modelCatalog('account-b'));
+  await view.flush();
+  assert.equal(view.value.capabilities.models[0].id, 'account-b');
+  view.dispose();
+});
 
 test('switching nodes resets duplicate bot IDs and event cursors and rejects every late workspace result', async () => {
   const view = fixture();

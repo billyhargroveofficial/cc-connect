@@ -8,6 +8,7 @@ import type { Attachment, Bot, Capabilities, Event, NodeInfo } from "../../lib/t
 import { AnimatePresence, m, useIsPresent, useReducedMotion, fade, popoverMotion, controlMotion, motionSpring } from "../../lib/motion";
 import { BotSettingsPanel } from "../settings/SettingsDrawer";
 import { useDialogFocus } from "./ModelPicker";
+import BotChangeHistory from "./BotChangeHistory";
 import "./bot-island.css";
 
 const desktopQuery = "(min-width: 1100px)";
@@ -86,11 +87,12 @@ function botIslandContent(events: Event[], botId: string) {
 }
 
 function BotIsland({
-  bot, events, status, working, supportsGoal, hasGoal, onGoal,
+  bot, events, history, status, working, supportsGoal, hasGoal, onGoal,
   open, suspended, onOpen, onClose, triggerRef, capabilities, onBotChange, onArchive, node,
 }: {
   bot: Bot;
   events: Event[];
+  history: Event[];
   status: string;
   working: boolean;
   supportsGoal: boolean;
@@ -277,6 +279,7 @@ function BotIsland({
                 </ul>
               </section>
             )}
+            <BotChangeHistory key={bot.id} botId={bot.id} events={history} />
           </IslandPane>
         )}
         </AnimatePresence>

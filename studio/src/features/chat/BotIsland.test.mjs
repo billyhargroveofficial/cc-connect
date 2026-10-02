@@ -55,6 +55,7 @@ function island({ desktop = true, shellPresent = true, panePresent = true } = {}
     },
     '../settings/SettingsDrawer': { BotSettingsPanel: 'BotSettingsPanel' },
     './ModelPicker': { useDialogFocus: (active, dialog, onClose) => { focusTrap = { active, dialog, onClose }; } },
+    './BotChangeHistory': { default: 'BotChangeHistory' },
     './bot-island.css': {},
   };
   const exports = {};
@@ -74,7 +75,7 @@ function island({ desktop = true, shellPresent = true, panePresent = true } = {}
   }, { filename: 'BotIsland.tsx' });
   const props = {
     bot: { id: 'bot-1', name: 'Researcher', status: 'idle', role: 'Find primary sources.' },
-    events: [], status: 'Ready', working: false,
+    events: [], history: [], status: 'Ready', working: false,
     supportsGoal: false, hasGoal: false,
     open: !desktop,
     suspended: false,
@@ -171,6 +172,20 @@ test('bot overview identifies its host in one muted line', () => {
   assert.equal(findIn(line, node => node.type === 'small').props.children, 'Offline');
   view.props.node.online = true;
   assert.equal(findIn(view.card(), node => node.type === 'small' && node.props?.children === 'Offline'), undefined);
+});
+
+test('lifecycle history belongs to the existing bot island overview', () => {
+  const view = island();
+  const history = [{ seq: 1, botId: 'bot-1', type: 'system', data: {} }];
+  view.props.history = history;
+  const section = findIn(view.card(), node => node.type === 'BotChangeHistory');
+  assert.ok(section);
+  assert.equal(section.props.events, history);
+  assert.equal(section.props.botId, view.props.bot.id);
+  view.settings();
+  assert.equal(findIn(view.card(), node => node.type === 'BotChangeHistory'), undefined);
+  view.panel().props.onClose();
+  assert.equal(findIn(view.card(), node => node.type === 'BotChangeHistory').props.events, history);
 });
 
 test('mobile Escape first returns from bot settings to details, then closes details', () => {

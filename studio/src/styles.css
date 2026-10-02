@@ -672,6 +672,59 @@ svg {
   display: flex;
   align-items: center;
 }
+.theme-picker {
+  position: relative;
+  display: inline-flex;
+}
+.theme-trigger.is-open {
+  color: var(--text);
+  background: var(--surface-hover);
+}
+.theme-menu {
+  position: absolute;
+  z-index: 20;
+  right: 0;
+  bottom: calc(100% + 9px);
+  width: 154px;
+  padding: 5px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface-raised);
+  box-shadow: 0 14px 40px rgb(0 0 0 / 0.24);
+  animation: theme-menu-enter 140ms cubic-bezier(.2,.8,.2,1);
+}
+.theme-menu button {
+  width: 100%;
+  min-height: 38px;
+  display: grid;
+  grid-template-columns: 20px 1fr 20px;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 9px;
+  border-radius: 8px;
+  color: var(--muted);
+  background: transparent;
+  text-align: left;
+  font-size: 12px;
+  transition: color 120ms, background 120ms;
+}
+.theme-menu button:hover,
+.theme-menu button:focus-visible,
+.theme-menu button.is-selected {
+  color: var(--text);
+  background: var(--surface-hover);
+}
+.theme-menu button:focus-visible {
+  outline-offset: -2px;
+}
+.theme-check {
+  justify-self: end;
+  color: var(--accent);
+}
+@keyframes theme-menu-enter {
+  from { opacity: 0; transform: translateY(4px) scale(.98); }
+  to { opacity: 1; transform: none; }
+}
 .footer-settings {
   display: flex;
   align-items: center;
@@ -1470,6 +1523,9 @@ svg {
   .roster-footer .icon-button {
     height: 42px;
     min-width: 42px;
+  }
+  .theme-menu button {
+    min-height: 44px;
   }
   .roster-footer-actions {
     height: 44px;

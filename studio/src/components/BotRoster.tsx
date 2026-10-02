@@ -1,13 +1,12 @@
 import {
   Plus,
   Settings2,
-  Sun,
-  Moon,
   LogOut,
   Crown,
   Send,
 } from "lucide-react";
 import type { Bot, Event } from "../lib/types";
+import type { ThemePreference } from "../lib/theme";
 import {
   isWorking,
   messagePreview,
@@ -15,6 +14,7 @@ import {
   telegramTitle,
 } from "../lib/events";
 import Avatar from "./Avatar";
+import ThemePicker from "./ThemePicker";
 function lastMessageTime(events: Event[]) {
   const event = [...events].reverse().find(event => event.type === "message" && event.data.source !== "goal_context");
   if (!event) return null;
@@ -47,8 +47,8 @@ export default function BotRoster({
   onSelect: (id: string) => void;
   onCreate: () => void;
   onSettings: () => void;
-  onTheme: () => void;
-  theme: "light" | "dark";
+  onTheme: (theme: ThemePreference) => void;
+  theme: ThemePreference;
   onLogout: () => void;
   connection: string;
 }) {
@@ -130,14 +130,7 @@ export default function BotRoster({
             <Settings2 size={16} />
             <span>Settings</span>
           </button>
-          <button
-            className="icon-button"
-            onClick={onTheme}
-            aria-label={theme === "dark" ? "Light theme" : "Dark theme"}
-            title={theme === "dark" ? "Light theme" : "Dark theme"}
-          >
-            {theme === "dark" ? <Sun size={17} /> : <Moon size={17} />}
-          </button>
+          <ThemePicker value={theme} onChange={onTheme} />
           <button
             className="icon-button"
             onClick={onLogout}

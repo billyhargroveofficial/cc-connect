@@ -6,6 +6,7 @@ import { errorMessage } from "./lib/api";
 import Login from "./components/Login";
 import Avatar from "./components/Avatar";
 import BotRoster from "./components/BotRoster";
+import { useTheme } from "./hooks/useTheme";
 const ChatRoom = lazy(() => import("./features/chat/ChatRoom"));
 const SettingsDrawer = lazy(() =>
   import("./features/settings/SettingsDrawer").then((module) => ({
@@ -25,30 +26,15 @@ function currentBot() {
     return "";
   }
 }
-function initialTheme(): "light" | "dark" {
-  try {
-    const saved = localStorage.getItem("connect-bots:theme");
-    return saved === "light" ? "light" : "dark";
-  } catch {
-    return "dark";
-  }
-}
 export default function App() {
   const [selectedId, setSelectedId] = useState(currentBot);
   const workspace = useWorkspace(selectedId);
   const [mobileChat, setMobileChat] = useState(() => !!currentBot());
-  const [theme, setTheme] = useState(initialTheme);
+  const { preference: theme, setPreference: setTheme } = useTheme();
   const [settings, setSettings] = useState<"bot" | "global" | null>(null);
   const [creating, setCreating] = useState(false);
   const [historyLoading, setHistoryLoading] = useState(false);
   const bot = workspace.bots.find((bot) => bot.id === selectedId) || null;
-  useEffect(() => {
-    document.documentElement.dataset.theme = theme;
-    document.documentElement.classList.toggle("dark", theme === "dark");
-    try {
-      localStorage.setItem("connect-bots:theme", theme);
-    } catch {}
-  }, [theme]);
   useEffect(() => {
     const onHash = () => {
       const id = currentBot();
@@ -126,9 +112,7 @@ export default function App() {
         onSelect={select}
         onCreate={() => setCreating(true)}
         onSettings={() => setSettings("global")}
-        onTheme={() =>
-          setTheme((current) => (current === "dark" ? "light" : "dark"))
-        }
+        onTheme={setTheme}
         theme={theme}
         onLogout={() =>
           void workspace

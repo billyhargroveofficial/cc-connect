@@ -7,7 +7,7 @@ import * as reducer from './reducer.ts';
 import { motionTestModule } from '../../lib/motion-stub.mjs';
 
 const source = ts.transpileModule(
-  `${readFileSync(new URL('./Transcript.tsx', import.meta.url), 'utf8')}\nexport { ActivityItem, TurnActivity, Attachments, Message, RawDetails, JournalItem, RawJournal, RequestCard, Goal };`,
+  `${readFileSync(new URL('./Transcript.tsx', import.meta.url), 'utf8')}\nexport { ActivityItem, TurnActivity, TurnStats, ResponseDetails, Turn, Attachments, Message, RawDetails, JournalItem, RawJournal, RequestCard, Goal };`,
   { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX } },
 ).outputText;
 
@@ -189,17 +189,183 @@ test('a completed turn collapses its expanded history and can reopen the same ac
   assert.ok(view.find(node => node.props?.events === turn.events), 'the raw journal remains available after completion');
 });
 
-test('completed turn details show the recorded service tier beside model and effort', () => {
+test('completed tool history retains the Activity disclosure, resolved requests, and recorded metadata', () => {
+  const events = [{ seq: 1, type: 'native', time: '2026-10-02T12:00:00Z', data: { method: 'item/completed' } }];
+  const request = { id: 'request-1', title: 'Allow command', method: 'permission', questions: [], resolved: true };
   const turn = {
     id: 'turn-1', status: 'completed', backend: 'codex', model: 'gpt-test', effort: 'max', serviceTier: 'priority',
-    users: [], responses: [], requests: [], activities: [], events: [], notices: [],
+    outputTokens: 1234, tokensPerSecond: 45.67, generationMs: 2500,
+    users: [{ id: 'user-1' }], responses: [{ id: 'response-1' }], requests: [request],
+    activities: [{ ...activity, status: 'completed', output: '/workspace' }], events, notices: [],
+  };
+  const onPermission = () => {};
+  const onQuestion = () => {};
+  const view = disclosure('TurnActivity', { turn, onPermission, onQuestion });
+  const toggle = view.find(node => node.type === 'button' && node.props['aria-controls']);
+  assert.equal(toggle.props['aria-expanded'], false);
+  assert.equal(toggle.props['aria-controls'], view.panel().props.id);
+  assert.ok(view.find(node => node.type === 'span' && node.props.children === 'Activity'));
+  assert.ok(view.find(node => node.props?.['aria-label'] === 'Action count: 1'));
+  assert.equal(view.find(node => node.type?.name === 'TurnStats'), undefined, 'recorded data stays lazy');
+
+  view.toggle();
+  const tool = view.find(node => node.props?.activity?.id === 'tool-1');
+  assert.equal(tool.props.activity.output, '/workspace');
+  assert.equal(tool.props.onPermission, onPermission);
+  assert.equal(tool.props.onQuestion, onQuestion);
+  const resolved = view.find(node => node.props?.request?.id === request.id);
+  assert.equal(resolved.props.request, request);
+  assert.equal(resolved.props.onPermission, onPermission);
+  assert.equal(resolved.props.onQuestion, onQuestion);
+  const metadata = view.find(node => node.type?.name === 'TurnStats');
+  assert.equal(metadata.props.turn, turn);
+  const stats = disclosure('TurnStats', metadata.props);
+  assert.ok(stats.find(node => node.type === 'span' && node.props.children === 'Codex · gpt-test · max · Fast'));
+  assert.ok(stats.find(node => node.type === 'span' && node.props.children?.[0] === '≈ 45.7'));
+  assert.ok(stats.find(node => node.type === 'span' && node.props.children?.[0] === '1,234'));
+  assert.ok(stats.find(node => node.type === 'span' && node.props.children?.[0] === '2.5 s'));
+  assert.equal(view.find(node => node.type?.name === 'RawJournal').props.events, events);
+});
+
+test('running activity retains its live status while response metadata stays deferred', () => {
+  const turn = {
+    id: 'turn-1', status: 'running', backend: 'codex', model: 'gpt-test', effort: 'max', serviceTier: 'priority',
+    outputTokens: 100, tokensPerSecond: 25, generationMs: 4000,
+    users: [], responses: [], requests: [], activities: [activity], events: [], notices: [],
   };
   const view = disclosure('TurnActivity', { turn, onPermission() {} });
+  const status = view.find(node => node.props?.role === 'status');
+  assert.equal(status.props['aria-live'], 'polite');
+  assert.equal(status.props.title, 'Running command');
   view.toggle();
-  assert.ok(view.find(node => node.type === 'span' && node.props.children === 'Codex · gpt-test · max · Fast'));
+  assert.ok(view.find(node => node.props?.activity?.id === activity.id));
+  assert.equal(view.find(node => node.type?.name === 'TurnStats'), undefined);
+});
+
+test('the compact response details action exposes the recorded stats and journal without losing disclosure accessibility', () => {
+  const events = [{ seq: 1, type: 'native', time: '2026-10-02T12:00:00Z', data: { method: 'turn/completed' } }];
+  const turn = {
+    id: 'turn-1', status: 'completed', backend: 'codex', model: 'gpt-test', effort: 'max', serviceTier: 'priority',
+    outputTokens: 1234, tokensPerSecond: 45.67, generationMs: 2500,
+    users: [], responses: [], requests: [], activities: [], events, notices: [],
+  };
+  const view = disclosure('ResponseDetails', { turn });
+  const action = () => view.find(node => node.type === 'button' && node.props['aria-label'] === 'Response details');
+  const contentId = action().props['aria-controls'];
+  const panel = () => view.find(node => node.props?.id === contentId);
+  const stats = () => view.find(node => node.type?.name === 'TurnStats');
+  const journal = () => view.find(node => node.type?.name === 'RawJournal');
+  assert.equal(action().props.type, 'button');
+  assert.equal(action().props.title, 'Response details');
+  assert.ok(contentId, 'the icon action names the panel that it controls');
+  assert.equal(action().props['aria-expanded'], false);
+  assert.equal(panel().props['aria-hidden'], true);
+  assert.equal(panel().props.inert, true);
+  assert.equal(stats(), undefined);
+  assert.equal(journal(), undefined);
+
+  view.toggle();
+  assert.equal(action().props['aria-expanded'], true);
+  assert.equal(action().props['aria-controls'], contentId);
+  assert.equal(panel().props['aria-hidden'], false);
+  assert.equal(panel().props.inert, false);
+  assert.equal(stats().props.turn, turn);
+  const metadata = disclosure('TurnStats', stats().props);
+  assert.ok(metadata.find(node => node.type === 'span' && node.props.children === 'Codex · gpt-test · max · Fast'));
+  assert.ok(metadata.find(node => node.type === 'span' && node.props.children?.[0] === '≈ 45.7'));
+  assert.ok(metadata.find(node => node.type === 'span' && node.props.children?.[0] === '1,234'));
+  assert.ok(metadata.find(node => node.type === 'span' && node.props.children?.[0] === '2.5 s'));
+  assert.equal(journal().props.events, events);
+
+  view.toggle();
+  assert.equal(action().props['aria-expanded'], false);
+  assert.equal(panel().props['aria-hidden'], true);
+  assert.equal(panel().props.inert, true, 'closing details immediately leave the keyboard tab order');
+  assert.ok(stats(), 'metadata remains mounted for the closing animation');
+  assert.equal(journal().props.events, events);
+  view.finishExit();
+  assert.equal(stats(), undefined);
+  assert.equal(journal(), undefined);
+  view.toggle();
+  assert.ok(stats());
+  assert.equal(journal().props.events, events, 'reopening preserves the complete turn journal');
 
   view.update({ turn: { ...turn, serviceTier: 'custom-tier' } });
-  assert.ok(view.find(node => node.type === 'span' && node.props.children === 'Codex · gpt-test · max · custom-tier'));
+  const updatedMetadata = disclosure('TurnStats', stats().props);
+  assert.ok(updatedMetadata.find(node => node.type === 'span' && node.props.children === 'Codex · gpt-test · max · custom-tier'));
+});
+
+test('response details collapse immediately for reduced motion', () => {
+  const turn = {
+    id: 'turn-1', status: 'completed', backend: 'codex', model: 'gpt-test', effort: 'max', serviceTier: '',
+    users: [], responses: [], requests: [], activities: [], events: [], notices: [],
+  };
+  const view = disclosure('ResponseDetails', { turn }, { useReducedMotion: () => true });
+  const contentId = view.find(node => node.type === 'button' && node.props['aria-label'] === 'Response details').props['aria-controls'];
+  const panel = () => view.find(node => node.props?.id === contentId);
+  view.toggle();
+  assert.equal(panel().props.animate.height, 'auto');
+  assert.equal(panel().props.transition.duration, 0);
+  view.toggle();
+  assert.equal(panel().props.animate.height, 0);
+  assert.equal(panel().props.inert, true);
+  assert.deepEqual(view.timerDelays(), [0]);
+  view.finishExit();
+  assert.equal(view.find(node => node.type?.name === 'TurnStats'), undefined);
+});
+
+test('assistant response actions retain Copy and place optional details beside it', () => {
+  const details = { type: 'details-test', props: { children: 'Recorded turn' } };
+  const message = { id: 'response-1', role: 'assistant', content: 'The response', attachments: [], time: '2026-10-02T12:00:00Z' };
+  const view = disclosure('Message', { botId: 'bot-1', message, details });
+  const actions = view.find(node => node.props?.className === 'transcript-message-actions');
+  assert.ok(actions);
+  assert.ok([actions.props.children].flat(Infinity).includes(details), 'details share the existing response action row');
+  const copy = view.find(node => node.type?.name === 'CopyButton');
+  assert.equal(copy.props.content, message.content);
+  assert.equal(copy.props.label, 'Copy response');
+  assert.ok(view.find(node => node.type?.name === 'Markdown' && node.props.content === message.content));
+
+  const attachmentOnly = disclosure('Message', {
+    botId: 'bot-1', details,
+    message: { ...message, content: '', attachments: [{ id: 'file-1', name: 'result.txt', mimeType: 'text/plain' }] },
+  });
+  assert.ok(attachmentOnly.find(node => node.props?.className === 'transcript-message-actions'),
+    'attachment-only answers still expose their turn details');
+  assert.equal(attachmentOnly.find(node => node.type?.name === 'CopyButton'), undefined);
+});
+
+test('only the last response of a completed metadata-only turn receives compact details', () => {
+  const messages = [
+    { id: 'response-1', role: 'assistant', content: 'First', attachments: [], time: '2026-10-02T12:00:00Z' },
+    { id: 'response-2', role: 'assistant', content: 'Final', attachments: [], time: '2026-10-02T12:00:01Z' },
+  ];
+  const turn = {
+    id: 'turn-1', status: 'completed', backend: 'codex', model: 'gpt-test', effort: 'max', serviceTier: 'priority',
+    users: [], responses: messages, requests: [], activities: [], events: [], notices: [],
+  };
+  const view = disclosure('Turn', { bot: { id: 'bot-1' }, turn, onPermission() {} });
+  const responses = () => view.findAll(node => node.type?.name === 'Message' && node.props.message.role === 'assistant');
+  assert.equal(responses().length, 2);
+  assert.equal(responses()[0].props.details, undefined);
+  assert.equal(responses()[1].props.details?.type.name, 'ResponseDetails');
+  assert.equal(responses()[1].props.details.props.turn, turn);
+  const activityView = disclosure('TurnActivity', view.find(node => node.type?.name === 'TurnActivity').props);
+  assert.equal(activityView.find(node => node.props?.className?.startsWith('transcript-turn-activity')), undefined,
+    'a completed response without actions does not retain a standalone details row');
+
+  for (const changes of [
+    { activities: [{ ...activity, status: 'completed' }] },
+    { requests: [{ id: 'request-1', title: 'Allow command', method: 'permission', questions: [], resolved: true }] },
+    { status: 'running' },
+    { status: 'failed' },
+    { status: 'stopped' },
+  ]) {
+    const nextTurn = { ...turn, ...changes };
+    view.update({ turn: nextTurn });
+    assert.ok(responses().every(message => !message.props.details), 'running work and real history keep their Activity disclosure');
+    assert.equal(view.find(node => node.type?.name === 'TurnActivity').props.turn, nextTurn);
+  }
 });
 
 test('disclosure motion measures open content and collapses immediately for reduced motion', () => {

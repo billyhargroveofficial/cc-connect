@@ -2,7 +2,7 @@ import { useEffect, useId, useMemo, useState } from 'react';
 import type { FormEvent, ReactNode } from 'react';
 import {
   ArrowUpRight, Check, CheckCheck, ChevronDown, Code2, Copy, Download,
-  File, FilePenLine, Globe2, LoaderCircle, MessageSquare, Search,
+  File, FilePenLine, Globe2, LoaderCircle, MessageSquare, MoreHorizontal, Search,
   ShieldCheck, Sparkles, Target, Terminal, Users, X, CircleAlert,
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
@@ -167,7 +167,7 @@ function Attachments({ botId, attachments }: { botId: string; attachments: Trans
   })}</AnimatePresence></div>;
 }
 
-function Message({ message, botId }: { message: TranscriptMessage; botId: string }) {
+function Message({ message, botId, details }: { message: TranscriptMessage; botId: string; details?: ReactNode }) {
   const user = message.role === 'user';
   const delegated = user ? botMessagePresentation(message.content, message.source || '') : null;
   const content = delegated?.content ?? message.content;
@@ -181,7 +181,9 @@ function Message({ message, botId }: { message: TranscriptMessage; botId: string
       {delegated && <span>From bot {delegated.sender}</span>}{message.source === 'telegram' && <span>Telegram</span>}
       <time className="transcript-message-time" dateTime={message.time}>{dateTime(message.time)}</time>
     </div>
-      : message.content && <div className="transcript-message-actions"><CopyButton content={message.content} label="Copy response" /></div>}
+      : (message.content || details) && <div className="transcript-message-actions">
+        {message.content && <CopyButton content={message.content} label="Copy response" />}{details}
+      </div>}
   </m.article>;
 }
 
@@ -433,6 +435,21 @@ function currentActivityLabel(turn: TranscriptTurn) {
   return activity.title.replace(/_/g, ' ') || 'Working';
 }
 
+function hasTurnStats(turn: TranscriptTurn) {
+  return Boolean(turn.model || turn.serviceTier || turn.outputTokens !== undefined || turn.tokensPerSecond !== undefined);
+}
+
+function TurnStats({ turn }: { turn: TranscriptTurn }) {
+  if (!hasTurnStats(turn)) return null;
+  return <div className="transcript-turn-stats">
+    <span>{[turn.backend === 'pi' ? 'Pi' : turn.backend === 'codex' ? 'Codex' : turn.backend, turn.model, turn.effort,
+      ['priority', 'fast'].includes(turn.serviceTier) ? 'Fast' : turn.serviceTier].filter(Boolean).join(' · ')}</span>
+    <span title="Estimated from generation time. Tool execution time is excluded when reported by the runtime.">{turn.tokensPerSecond !== undefined && turn.tokensPerSecond > 0 ? `≈ ${turn.tokensPerSecond.toFixed(1)}` : '—'} tok/s</span>
+    {turn.outputTokens !== undefined && turn.outputTokens > 0 && <span>{turn.outputTokens.toLocaleString('en')} tokens</span>}
+    {duration(turn.generationMs) && <span>{duration(turn.generationMs)} generation</span>}
+  </div>;
+}
+
 function TurnActivity({ turn, onPermission, onQuestion }: { turn: TranscriptTurn; onPermission: PermissionHandler; onQuestion?: PermissionHandler }) {
   const contentId = useId();
   const [override, setOverride] = useState<{ running: boolean; open: boolean } | null>(null);
@@ -441,8 +458,8 @@ function TurnActivity({ turn, onPermission, onQuestion }: { turn: TranscriptTurn
   const renderContent = useDisclosureContent(open);
   const disclosureMotion = useDisclosureMotion(open);
   const resolvedRequests = turn.requests.filter(request => request.resolved);
-  const hasStats = Boolean(turn.model || turn.serviceTier || turn.outputTokens !== undefined || turn.tokensPerSecond !== undefined);
-  if (!turn.activities.length && !running && !resolvedRequests.length && !hasStats) return null;
+  const terminalStatus = isFailed(turn.status) || ['stopped', 'interrupted', 'cancelled', 'canceled'].includes(turn.status);
+  if (!turn.activities.length && !running && !resolvedRequests.length && !terminalStatus) return null;
   const serviceTitle = !turn.users.length && !turn.responses.length && turn.activities.length === 1
     && turn.activities[0].kind === 'event' ? turn.activities[0].title : '';
   const label = running ? currentActivityLabel(turn) : serviceTitle || (isFailed(turn.status) ? 'Execution failed'
@@ -469,13 +486,7 @@ function TurnActivity({ turn, onPermission, onQuestion }: { turn: TranscriptTurn
       <div className="transcript-disclosure-inner">{renderContent && <div className="transcript-activity-list">
       <AnimatePresence initial={false}>{turn.activities.map(activity => <ActivityItem key={activity.id} activity={activity} onPermission={onPermission} onQuestion={onQuestion} />)}</AnimatePresence>
       <AnimatePresence initial={false}>{resolvedRequests.map(request => <RequestCard key={request.id} request={request} onPermission={onPermission} onQuestion={onQuestion} />)}</AnimatePresence>
-      {!running && hasStats && <div className="transcript-turn-stats">
-        <span>{[turn.backend === 'pi' ? 'Pi' : turn.backend === 'codex' ? 'Codex' : turn.backend, turn.model, turn.effort,
-          ['priority', 'fast'].includes(turn.serviceTier) ? 'Fast' : turn.serviceTier].filter(Boolean).join(' · ')}</span>
-        <span title="Estimated from generation time. Tool execution time is excluded when reported by the runtime.">{turn.tokensPerSecond !== undefined && turn.tokensPerSecond > 0 ? `≈ ${turn.tokensPerSecond.toFixed(1)}` : '—'} tok/s</span>
-        {turn.outputTokens !== undefined && turn.outputTokens > 0 && <span>{turn.outputTokens.toLocaleString('en')} tokens</span>}
-        {duration(turn.generationMs) && <span>{duration(turn.generationMs)} generation</span>}
-      </div>}
+      {!running && <TurnStats turn={turn} />}
       <RawJournal events={turn.events} />
       </div>}</div>
     </m.div>
@@ -608,9 +619,37 @@ function RawJournal({ events, title }: { events: JournalEvent[]; title?: string 
   </div>;
 }
 
+function ResponseDetails({ turn }: { turn: TranscriptTurn }) {
+  const contentId = useId();
+  const [open, setOpen] = useState(false);
+  const renderContent = useDisclosureContent(open);
+  const disclosureMotion = useDisclosureMotion(open);
+  if (!hasTurnStats(turn) && !turn.events.length) return null;
+  return <>
+    <m.button {...controlMotion} type="button"
+      className={`transcript-icon-button transcript-response-details-toggle${open ? ' is-open' : ''}`}
+      aria-label="Response details" title="Response details" aria-expanded={open} aria-controls={contentId}
+      onClick={() => setOpen(value => !value)}>
+      <m.span className="transcript-motion-icon" animate={{ rotate: open ? 90 : 0 }} transition={motionTransition.quick} aria-hidden="true">
+        <MoreHorizontal size={15} />
+      </m.span>
+    </m.button>
+    <m.div {...disclosureMotion} className={`transcript-disclosure transcript-response-details-panel${open ? ' is-open' : ''}`}
+      id={contentId} aria-hidden={!open} inert={!open}>
+      <div className="transcript-disclosure-inner">{renderContent && <div className="transcript-response-details-content">
+        <TurnStats turn={turn} />
+        <RawJournal events={turn.events} />
+      </div>}</div>
+    </m.div>
+  </>;
+}
+
 function Turn({ bot, turn, onPermission, onQuestion, onRetry }: TranscriptProps & { turn: TranscriptTurn }) {
   const present = useIsPresent();
   const running = isRunning(turn.status);
+  const resolvedRequests = turn.requests.filter(request => request.resolved);
+  const detailsMessageId = ['completed', 'complete'].includes(turn.status) && !turn.activities.length && !resolvedRequests.length
+    && (hasTurnStats(turn) || turn.events.length) ? turn.responses.at(-1)?.id : undefined;
   const service = !turn.users.length && !turn.responses.length && !turn.requests.length && !running && !turn.error;
   const hasBotContent = Boolean(turn.responses.length || turn.activities.length || turn.requests.length || running || turn.error);
   return <m.section variants={fadeUp} initial="hidden" animate="visible" exit="exit"
@@ -622,7 +661,8 @@ function Turn({ bot, turn, onPermission, onQuestion, onRetry }: TranscriptProps 
       <div className="transcript-response-body">
         <TurnActivity turn={turn} onPermission={onPermission} onQuestion={onQuestion} />
         <AnimatePresence initial={false}>{pendingRequests(turn).map(request => <RequestCard key={request.id} request={request} onPermission={onPermission} onQuestion={onQuestion} />)}</AnimatePresence>
-        <AnimatePresence initial={false}>{turn.responses.map(message => <Message key={message.id} message={message} botId={bot.id} />)}</AnimatePresence>
+        <AnimatePresence initial={false}>{turn.responses.map(message => <Message key={message.id} message={message} botId={bot.id}
+          details={message.id === detailsMessageId ? <ResponseDetails turn={turn} /> : undefined} />)}</AnimatePresence>
         <AnimatePresence initial={false}>{turn.error && <m.div key="error" variants={fadeUp} initial="hidden" animate="visible" exit="exit"
           className="transcript-turn-error" role="alert"><CircleAlert size={16} /><div><strong>Unable to finish work</strong><p>{turn.error}</p>
           {onRetry && <m.button {...softControlMotion} type="button" className="transcript-button" onClick={() => void onRetry(turn.id)}>Refresh status</m.button>}

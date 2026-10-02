@@ -164,8 +164,8 @@ test('duplicate bot IDs have separate selection and device labels and do not bor
   assert.equal(rowFor(mac.name).props['aria-current'], 'page');
   assert.equal(allIn(rowFor(local.name), node => node.props?.className === 'bot-row-device')[0].props.children[1], 'Server');
   assert.equal(allIn(rowFor(mac.name), node => node.props?.className === 'bot-row-device')[0].props.children[1], 'MacBook');
-  assert.equal(allIn(rowFor(local.name), node => node.props?.className?.startsWith('bot-row-preview'))[0].props.children[1], 'Private server preview');
-  assert.equal(allIn(rowFor(mac.name), node => node.props?.className?.startsWith('bot-row-preview'))[0].props.children[1], 'Own role');
+  assert.equal(allIn(rowFor(local.name), node => node.props?.className === 'bot-row-preview-label')[0].props.children, 'Private server preview');
+  assert.equal(allIn(rowFor(mac.name), node => node.props?.className === 'bot-row-preview-label')[0].props.children, 'Own role');
 });
 
 test('roster layout measurements follow ordering and selection instead of streaming updates', () => {

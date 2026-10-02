@@ -754,15 +754,26 @@ html.is-resizing-sidebar * {
   color: #78b7df;
 }
 .bot-row-preview {
+  display: flex;
+  align-items: center;
+  min-width: 0;
   font-size: 11px;
   line-height: 1.35;
   color: var(--muted);
   white-space: nowrap;
   overflow: hidden;
+}
+.bot-row-preview-label {
+  min-width: 0;
+  overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .bot-row-preview.is-working {
   color: var(--accent);
+}
+.bot-row-preview .live-pip {
+  flex: 0 0 auto;
 }
 .row-working-dot {
   display: none;

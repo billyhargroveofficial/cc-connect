@@ -129,8 +129,8 @@ function RosterRow({
           )}
         </span>
         <span className={`bot-row-preview ${busy ? "is-working" : ""}`}>
-          {busy && <span className="live-pip" />}
-          {preview}
+          {busy && <span className="live-pip" aria-hidden="true" />}
+          <span className="bot-row-preview-label">{preview}</span>
         </span>
       </span>
       {busy && <span className="row-working-dot" />}

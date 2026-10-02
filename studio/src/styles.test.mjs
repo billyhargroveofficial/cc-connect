@@ -55,3 +55,14 @@ test('goal modal keeps a fixed scrim without backdrop blur in either theme', () 
     assert.ok(tokens.get('--surface-control'));
   }
 });
+
+test('the animated roster status dot is optically centered with its label', () => {
+  const preview = declarations(styles, '.bot-row-preview');
+  const pip = declarations(styles, '.live-pip');
+  const label = declarations(styles, '.bot-row-preview-label');
+  assert.equal(preview.get('display'), 'flex');
+  assert.equal(preview.get('align-items'), 'center');
+  assert.equal(pip.get('display'), 'inline-block');
+  assert.equal(label.get('text-overflow'), 'ellipsis',
+    'centering the status dot must preserve truncation for long status labels');
+});

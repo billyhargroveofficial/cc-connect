@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { RefObject } from "react";
 import { FileText, Image, MessageSquare, Send, Settings2, Target, X } from "lucide-react";
 import Avatar from "../../components/Avatar";
 import { fileURL } from "../../lib/api";
 import { botMessagePresentation, telegramLabel, telegramTitle } from "../../lib/events";
-import type { Attachment, Bot, Event } from "../../lib/types";
+import type { Attachment, Bot, Capabilities, Event } from "../../lib/types";
+import { BotSettingsPanel } from "../settings/SettingsDrawer";
 import { useDialogFocus } from "./ModelPicker";
 import "./bot-island.css";
 
@@ -65,8 +66,8 @@ function botIslandContent(events: Event[], botId: string) {
 }
 
 export default function BotIsland({
-  bot, events, status, working, supportsGoal, hasGoal, onGoal, onSettings,
-  open, onClose, triggerRef,
+  bot, events, status, working, supportsGoal, hasGoal, onGoal,
+  open, suspended, onOpen, onClose, triggerRef, capabilities, onBotChange, onArchive,
 }: {
   bot: Bot;
   events: Event[];
@@ -75,17 +76,25 @@ export default function BotIsland({
   supportsGoal: boolean;
   hasGoal: boolean;
   onGoal: () => void;
-  onSettings: () => void;
   open: boolean;
+  suspended: boolean;
+  onOpen: () => void;
   onClose: () => void;
   triggerRef: RefObject<HTMLButtonElement | null>;
+  capabilities: Capabilities | null;
+  onBotChange: (bot: Bot) => void;
+  onArchive: (id: string) => void;
 }) {
   const [desktop, setDesktop] = useState(() =>
     typeof window !== "undefined" && typeof window.matchMedia === "function"
       ? window.matchMedia(desktopQuery).matches : false,
   );
   const dialog = useRef<HTMLDivElement>(null);
-  const overlay = open && !desktop;
+  const settingsTrigger = useRef<HTMLButtonElement>(null);
+  const collapseTimer = useRef<number | undefined>(undefined);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const visible = open || settingsOpen;
+  const overlay = visible && !desktop && !suspended;
   const { requests, files } = useMemo(() => botIslandContent(events, bot.id), [events, bot.id]);
   const avatarStatus = avatarPriorityStatuses.has(bot.status)
     ? bot.status
@@ -107,10 +116,52 @@ export default function BotIsland({
     }
   }, [desktop, triggerRef]);
 
-  function close() {
+  useEffect(() => () => window.clearTimeout(collapseTimer.current), []);
+
+  const close = useCallback(() => {
+    window.clearTimeout(collapseTimer.current);
+    dialog.current?.style.removeProperty("--bot-island-compact-height");
+    setSettingsOpen(false);
     onClose();
     window.setTimeout(() => triggerRef.current?.focus(), 0);
-  }
+  }, [onClose, triggerRef]);
+
+  const closeSettings = useCallback(() => {
+    setSettingsOpen(false);
+    window.clearTimeout(collapseTimer.current);
+    collapseTimer.current = window.setTimeout(() => {
+      dialog.current?.style.removeProperty("--bot-island-compact-height");
+    }, 300);
+    window.requestAnimationFrame(() => settingsTrigger.current?.focus());
+  }, []);
+
+  const openSettings = useCallback(() => {
+    window.clearTimeout(collapseTimer.current);
+    const card = dialog.current;
+    if (card) {
+      card.style.setProperty(
+        "--bot-island-compact-height",
+        `${Math.round(card.getBoundingClientRect().height)}px`,
+      );
+      void card.offsetHeight;
+    }
+    if (!open) onOpen();
+    setSettingsOpen(true);
+    window.requestAnimationFrame(() => {
+      dialog.current?.querySelector<HTMLButtonElement>(".cb-settings-icon-button")?.focus();
+    });
+  }, [open, onOpen]);
+
+  useEffect(() => {
+    if (!desktop || !settingsOpen || suspended) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      closeSettings();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [desktop, settingsOpen, suspended, closeSettings]);
 
   function openAction(action: () => void) {
     if (!overlay) {
@@ -125,76 +176,83 @@ export default function BotIsland({
     }, 0);
   }
 
-  useDialogFocus(overlay, dialog, close);
+  useDialogFocus(overlay, dialog, settingsOpen ? closeSettings : close);
 
   return (
-    <aside className={`bot-island-shell${open ? " is-open" : ""}`}
-      aria-label="Bot details" inert={!desktop && !open}>
+    <aside className={`bot-island-shell${visible ? " is-open" : ""}${settingsOpen ? " is-settings" : ""}`}
+      aria-label={settingsOpen ? "Bot settings" : "Bot details"} inert={suspended || (!desktop && !visible)}>
       <div className="bot-island-backdrop" onClick={close} aria-hidden="true" />
       <div className="bot-island-card" ref={dialog} tabIndex={-1}
         role={overlay ? "dialog" : undefined} aria-modal={overlay || undefined}
-        aria-label={overlay ? "Bot details" : undefined}>
-        <button type="button" className="icon-button bot-island-close" onClick={close}
-          aria-label="Close bot details"><X size={18} /></button>
-        <div className="bot-island-profile">
-          <Avatar bot={bot} size={52} status={avatarStatus} />
-          <div className="bot-island-identity">
-            <strong>{bot.name}</strong>
-            <span className={`bot-island-status${working ? " is-working" : ""}`}>
-              {working && <span className="bot-island-live-dot" aria-hidden="true" />}
-              {status}
-            </span>
+        aria-label={overlay ? settingsOpen ? "Bot settings" : "Bot details" : undefined}>
+        {settingsOpen ? (
+          <BotSettingsPanel key={bot.id} bot={bot} capabilities={capabilities}
+            onClose={closeSettings} onBotChange={onBotChange} onArchive={onArchive} />
+        ) : (
+          <div className="bot-island-overview">
+            <button type="button" className="icon-button bot-island-close" onClick={close}
+              aria-label="Close bot details"><X size={18} /></button>
+            <div className="bot-island-profile">
+              <Avatar bot={bot} size={52} status={avatarStatus} />
+              <div className="bot-island-identity">
+                <strong>{bot.name}</strong>
+                <span className={`bot-island-status${working ? " is-working" : ""}`}>
+                  {working && <span className="bot-island-live-dot" aria-hidden="true" />}
+                  {status}
+                </span>
+              </div>
+            </div>
+            {bot.role && <p className="bot-island-role" title={bot.role}>{bot.role}</p>}
+            <div className="bot-island-actions">
+              <button ref={settingsTrigger} type="button" className="bot-island-action" onClick={openSettings}
+                aria-label="Bot settings"><Settings2 size={16} />Settings</button>
+              {supportsGoal && (
+                <button type="button" className={`bot-island-action${hasGoal ? " has-goal" : ""}`}
+                  onClick={() => openAction(onGoal)} aria-label="Bot goal"
+                  title={hasGoal ? "View bot goal" : "Set bot goal"}>
+                  <Target size={16} />Goal{hasGoal && <span className="bot-island-goal-dot" aria-hidden="true" />}
+                </button>
+              )}
+            </div>
+            {bot.telegram?.enabled && (
+              <div className={`bot-island-telegram telegram-status-${bot.telegram.status || "configured"}`}
+                title={telegramTitle(bot.telegram)}>
+                <Send size={15} aria-hidden="true" />
+                <span>{telegramLabel(bot.telegram)}
+                  {bot.telegram.username && <small>@{bot.telegram.username}</small>}
+                </span>
+              </div>
+            )}
+            {requests.length > 0 && (
+              <section className="bot-island-section" aria-label="Recent tasks">
+                <h2>Recent tasks</h2>
+                <ul className="bot-island-list">
+                  {requests.map(request => (
+                    <li key={request.seq} className="bot-island-request">
+                      <MessageSquare size={15} aria-hidden="true" />
+                      <span title={request.label}>{request.label}</span>
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            )}
+            {files.length > 0 && (
+              <section className="bot-island-section" aria-label="Outputs">
+                <h2>Outputs</h2>
+                <ul className="bot-island-list">
+                  {files.map(file => (
+                    <li key={file.id || file.url}>
+                      <a className="bot-island-file" href={fileURL(bot.id, file)}
+                        target="_blank" rel="noreferrer noopener" title={file.name}>
+                        {file.mimeType.startsWith("image/") ? <Image size={16} aria-hidden="true" /> : <FileText size={16} aria-hidden="true" />}
+                        <span>{file.name}</span>
+                      </a>
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            )}
           </div>
-        </div>
-        {bot.role && <p className="bot-island-role" title={bot.role}>{bot.role}</p>}
-        <div className="bot-island-actions">
-          <button type="button" className="bot-island-action" onClick={() => openAction(onSettings)}
-            aria-label="Bot settings"><Settings2 size={16} />Settings</button>
-          {supportsGoal && (
-            <button type="button" className={`bot-island-action${hasGoal ? " has-goal" : ""}`}
-              onClick={() => openAction(onGoal)} aria-label="Bot goal"
-              title={hasGoal ? "View bot goal" : "Set bot goal"}>
-              <Target size={16} />Goal{hasGoal && <span className="bot-island-goal-dot" aria-hidden="true" />}
-            </button>
-          )}
-        </div>
-        {bot.telegram?.enabled && (
-          <div className={`bot-island-telegram telegram-status-${bot.telegram.status || "configured"}`}
-            title={telegramTitle(bot.telegram)}>
-            <Send size={15} aria-hidden="true" />
-            <span>{telegramLabel(bot.telegram)}
-              {bot.telegram.username && <small>@{bot.telegram.username}</small>}
-            </span>
-          </div>
-        )}
-        {requests.length > 0 && (
-          <section className="bot-island-section" aria-label="Recent tasks">
-            <h2>Recent tasks</h2>
-            <ul className="bot-island-list">
-              {requests.map(request => (
-                <li key={request.seq} className="bot-island-request">
-                  <MessageSquare size={15} aria-hidden="true" />
-                  <span title={request.label}>{request.label}</span>
-                </li>
-              ))}
-            </ul>
-          </section>
-        )}
-        {files.length > 0 && (
-          <section className="bot-island-section" aria-label="Outputs">
-            <h2>Outputs</h2>
-            <ul className="bot-island-list">
-              {files.map(file => (
-                <li key={file.id || file.url}>
-                  <a className="bot-island-file" href={fileURL(bot.id, file)}
-                    target="_blank" rel="noreferrer noopener" title={file.name}>
-                    {file.mimeType.startsWith("image/") ? <Image size={16} aria-hidden="true" /> : <FileText size={16} aria-hidden="true" />}
-                    <span>{file.name}</span>
-                  </a>
-                </li>
-              ))}
-            </ul>
-          </section>
         )}
       </div>
     </aside>

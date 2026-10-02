@@ -1,9 +1,9 @@
-import { useEffect, useState, type FormEvent } from 'react'
-import { Archive, ArrowLeft, Check, Clock3, FileText, FolderOpen, LoaderCircle, Plus, RefreshCw, Search, Shield, Wrench } from 'lucide-react'
+import { useEffect, useId, useRef, useState, type FormEvent } from 'react'
+import { Archive, ArrowLeft, Check, Clock3, FileText, FolderOpen, LoaderCircle, Plus, RefreshCw, Search, Shield, Wrench, X } from 'lucide-react'
 import type { Bot, Capabilities, Maintenance, MaintenanceRun, Skill } from '../../lib/types'
 import { api } from '../../lib/api'
 import { isWorking,telegramLabel } from '../../lib/events'
-import { BotFields, botPayload, draftFromBot, errorMessage, MarkdownEditor, ModalShell, Notice, RuntimeFields, SaveButton } from './shared'
+import { BotFields, botPayload, draftFromBot, errorMessage, MarkdownEditor, ModalShell, Notice, RuntimeFields, SaveButton, type BotDraft } from './shared'
 
 interface SettingsDrawerProps {
   bot: Bot | null
@@ -17,38 +17,68 @@ interface SettingsDrawerProps {
 }
 
 export function SettingsDrawer({ bot, bots = [], capabilities, onClose, onBotChange, onArchive, initialTab, global = false }: SettingsDrawerProps) {
+  if (!global && !bot) return null
+  return <ModalShell title={global ? 'Shared settings' : bot!.name}
+    subtitle={global ? 'Instructions and skills for all bots.' : "Your bot's workspace."} onClose={onClose} drawer>
+    <SettingsContent key={global ? 'shared' : bot!.id} bot={bot} bots={bots} capabilities={capabilities}
+      onClose={onClose} onBotChange={onBotChange} onArchive={onArchive} initialTab={initialTab} global={global} />
+  </ModalShell>
+}
+
+export function BotSettingsPanel({ bot, capabilities, onClose, onBotChange, onArchive }: {
+  bot: Bot; capabilities: Capabilities | null; onClose: () => void;
+  onBotChange: (bot: Bot) => void; onArchive: (id: string) => void;
+}) {
+  return <div className="cb-settings-embedded">
+    <header className="cb-settings-header">
+      <div><h2>{bot.name}</h2><p>Your bot's workspace.</p></div>
+      <button type="button" className="cb-settings-icon-button" onClick={onClose} aria-label="Close bot settings"><X size={20} /></button>
+    </header>
+    <SettingsContent key={bot.id} bot={bot} capabilities={capabilities} onClose={onClose}
+      onBotChange={onBotChange} onArchive={onArchive} />
+  </div>
+}
+
+function SettingsContent({ bot, bots = [], capabilities, onClose, onBotChange, onArchive, initialTab, global = false }: SettingsDrawerProps) {
   const tabs = global
     ? [{ id: 'instructions', title: 'Instructions' }, { id: 'skills', title: 'Skills' }, { id: 'maintenance', title: 'Maintenance' }]
     : [{ id: 'profile', title: 'Profile' }, { id: 'instructions', title: 'Instructions' }, { id: 'skills', title: 'Skills' }]
   const [tab, setTab] = useState(() => tabs.some((entry) => entry.id === initialTab) ? initialTab! : tabs[0].id)
+  const tabsId = useId()
   const scopeId = global ? undefined : bot?.id
-  if (!global && !bot) return null
-  return <ModalShell title={global ? 'Shared settings' : bot!.name}
-    subtitle={global ? 'Instructions and skills for all bots.' : "Your bot's workspace."} onClose={onClose} drawer>
+  return <>
     <nav className="cb-settings-tabs" role="tablist" aria-label="Settings sections">
       {tabs.map((entry) => <button key={entry.id} type="button" role="tab" aria-selected={tab === entry.id}
-        aria-controls={`cb-settings-tab-${entry.id}`} id={`cb-settings-tab-button-${entry.id}`}
+        aria-controls={`${tabsId}-tab-${entry.id}`} id={`${tabsId}-tab-button-${entry.id}`}
         className={tab === entry.id ? 'is-active' : ''} onClick={() => setTab(entry.id)}>{entry.title}</button>)}
     </nav>
-    <div className="cb-settings-tab-content" role="tabpanel" id={`cb-settings-tab-${tab}`}
-      aria-labelledby={`cb-settings-tab-button-${tab}`}>
+    <div className="cb-settings-tab-content" role="tabpanel" id={`${tabsId}-tab-${tab}`}
+      aria-labelledby={`${tabsId}-tab-button-${tab}`}>
       {tab === 'profile' && bot && <ProfilePane key={bot.id} bot={bot} capabilities={capabilities} onBotChange={onBotChange}
         onArchive={(id) => { onArchive(id); onClose() }} />}
       {tab === 'instructions' && <InstructionsPane key={scopeId ?? 'shared'} id={scopeId} />}
       {tab === 'skills' && <SkillsPane key={scopeId ?? 'shared'} bot={global ? null : bot} onBotChange={onBotChange} />}
       {tab === 'maintenance' && <MaintenancePane capabilities={capabilities} bots={bots} />}
     </div>
-  </ModalShell>
+  </>
 }
 
 function ProfilePane({ bot, capabilities, onBotChange, onArchive }: {
   bot: Bot; capabilities: Capabilities | null; onBotChange: (bot: Bot) => void; onArchive: (id: string) => void;
 }) {
-  const [draft, setDraft] = useState(() => draftFromBot(bot, capabilities))
+  const initialDraft = draftFromBot(bot, capabilities)
+  const sourceDraft = useRef(initialDraft)
+  const [draft, setDraft] = useState(initialDraft)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
   const [confirmArchive, setConfirmArchive] = useState(false)
+  useEffect(() => {
+    const next = draftFromBot(bot, capabilities)
+    const previous = sourceDraft.current
+    sourceDraft.current = next
+    setDraft((current) => reconcileBotDraft(current, previous, next))
+  }, [bot, capabilities])
   async function save(event: FormEvent) {
     event.preventDefault()
     if (busy) return
@@ -89,6 +119,30 @@ function ProfilePane({ bot, capabilities, onBotChange, onArchive }: {
     </div>
     <footer className="cb-settings-footer"><span /><SaveButton busy={busy} disabled={!draft.name.trim()} /></footer>
   </form>
+}
+
+export function reconcileBotDraft(current: BotDraft, previous: BotDraft, next: BotDraft): BotDraft {
+  let changed = false
+  const merged = { ...current }
+  const runtimeKeys = ['backend', 'model', 'effort'] as const
+  const runtimeDirty = runtimeKeys.some((key) => current[key] !== previous[key])
+  if (!runtimeDirty) {
+    for (const key of runtimeKeys) {
+      if (current[key] !== next[key]) {
+        merged[key] = next[key]
+        changed = true
+      }
+    }
+  }
+  const independentKeys = (Object.keys(next) as (keyof BotDraft)[])
+    .filter((key) => !runtimeKeys.includes(key as typeof runtimeKeys[number]))
+  for (const key of independentKeys) {
+    if (current[key] === previous[key] && current[key] !== next[key]) {
+      Object.assign(merged, { [key]: next[key] })
+      changed = true
+    }
+  }
+  return changed ? merged : current
 }
 
 function InstructionsPane({ id }: { id?: string }) {

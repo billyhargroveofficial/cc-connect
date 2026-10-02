@@ -1,10 +1,14 @@
-.cb-settings-overlay {
+.cb-settings-overlay,
+.cb-settings-embedded {
   --settings-surface: var(--surface, #191919);
   --settings-raised: var(--surface-raised, #222);
   --settings-text: var(--text, #eee);
   --settings-muted: var(--muted, #929292);
   --settings-border: var(--border, #2b2b2b);
   --settings-accent: var(--accent, #b19aff);
+  color: var(--settings-text);
+}
+.cb-settings-overlay {
   position: fixed;
   inset: 0;
   z-index: 80;
@@ -12,7 +16,6 @@
   align-items: center;
   justify-content: center;
   padding: 24px;
-  color: var(--settings-text);
   background: rgba(0, 0, 0, .48);
   backdrop-filter: blur(5px);
 }
@@ -38,6 +41,23 @@
   border-radius: 0;
   animation-name: cb-settings-drawer-enter;
 }
+.cb-settings-embedded {
+  --settings-surface: var(--surface-raised, #222);
+  --settings-raised: var(--surface, #191919);
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--settings-surface);
+  animation: cb-settings-inline-enter 180ms 70ms cubic-bezier(.2,.8,.2,1) both;
+}
+.cb-settings-embedded .cb-settings-header { padding: 20px 22px 16px; }
+.cb-settings-embedded .cb-settings-tabs { margin: 0 22px; }
+.cb-settings-embedded .cb-settings-scroll { padding: 22px 22px 26px; }
+.cb-settings-embedded .cb-settings-footer { padding: 15px 22px; }
 .cb-settings-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 26px 28px 20px; flex-shrink: 0; }
 .cb-settings-header h2 { margin: 0; font-size: 20px; line-height: 1.4; letter-spacing: -.4px; font-weight: 650; overflow-wrap: anywhere; }
 .cb-settings-header p { margin: 4px 0 0; color: var(--settings-muted); font-size: 13px; line-height: 1.5; }
@@ -170,10 +190,11 @@
 .cb-settings-report-details ul { padding-left: 18px; }
 .cb-settings-report-error { color: var(--danger, #d65b5b); }
 .cb-settings-spin { animation: cb-settings-spin 1s linear infinite; }
-.cb-settings-panel button:focus-visible, .cb-settings-switch:focus-visible { outline: 2px solid var(--settings-accent); outline-offset: 3px; }
+.cb-settings-panel button:focus-visible, .cb-settings-embedded button:focus-visible, .cb-settings-switch:focus-visible { outline: 2px solid var(--settings-accent); outline-offset: 3px; }
 @keyframes cb-settings-spin { to { transform: rotate(360deg); } }
 @keyframes cb-settings-enter { from { opacity: 0; transform: translateY(8px) scale(.99); } to { opacity: 1; transform: none; } }
 @keyframes cb-settings-drawer-enter { from { opacity: 0; transform: translateX(30px); } to { opacity: 1; transform: none; } }
+@keyframes cb-settings-inline-enter { from { opacity: 0; transform: translateX(8px); } to { opacity: 1; transform: none; } }
 @media (max-width: 640px) {
   .cb-settings-overlay { padding: 0; align-items: stretch; }
   .cb-settings-panel { width: 100%; height: 100dvh; max-height: 100dvh; border: none; border-radius: 0; }
@@ -190,6 +211,6 @@
   .cb-settings-skill-toolbar .cb-settings-button { padding: 10px 12px; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .cb-settings-panel { animation: none; }
+  .cb-settings-panel, .cb-settings-embedded { animation: none; }
   .cb-settings-avatar-option, .cb-settings-switch, .cb-settings-switch::before { transition: none; }
 }

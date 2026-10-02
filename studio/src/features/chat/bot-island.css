@@ -1,4 +1,6 @@
 .bot-island-shell {
+  position: relative;
+  z-index: 2;
   width: 280px;
   flex: 0 0 280px;
   min-width: 0;
@@ -11,7 +13,10 @@
 
 .bot-island-card {
   position: relative;
+  align-self: flex-end;
+  flex: 0 0 auto;
   width: 100%;
+  height: var(--bot-island-compact-height, auto);
   min-height: 0;
   max-height: 100%;
   padding: 22px 18px;
@@ -22,6 +27,28 @@
   border-radius: 21px;
   background: var(--surface-raised);
   box-shadow: 0 3px 20px #00000012;
+  transition:
+    width 280ms cubic-bezier(.2,.8,.2,1),
+    height 280ms cubic-bezier(.2,.8,.2,1),
+    padding 220ms cubic-bezier(.2,.8,.2,1),
+    box-shadow 220ms ease;
+}
+
+.bot-island-shell.is-settings {
+  z-index: 12;
+}
+
+.bot-island-shell.is-settings .bot-island-card {
+  width: min(520px, calc(100vw - 316px));
+  height: 100%;
+  padding: 0;
+  overflow: hidden;
+  box-shadow: 0 12px 44px #00000024;
+}
+
+.bot-island-overview {
+  min-width: 0;
+  animation: bot-island-overview-enter 160ms cubic-bezier(.2,.8,.2,1) both;
 }
 
 .bot-island-backdrop,
@@ -242,6 +269,12 @@
     animation: bot-island-enter 180ms cubic-bezier(.2,.8,.2,1) both;
   }
 
+  .bot-island-shell.is-open.is-settings .bot-island-card {
+    width: min(520px, calc(100vw - 24px));
+    max-width: none;
+    height: 100%;
+  }
+
   .bot-island-close {
     display: inline-flex;
     position: absolute;
@@ -275,10 +308,16 @@
   to { opacity: 1; }
 }
 
+@keyframes bot-island-overview-enter {
+  from { opacity: 0; transform: translateX(-5px); }
+  to { opacity: 1; transform: none; }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .bot-island-card,
   .bot-island-backdrop,
-  .bot-island-action {
+  .bot-island-action,
+  .bot-island-overview {
     animation: none;
     transition: none;
   }

@@ -31,7 +31,7 @@ export default function App() {
   const workspace = useWorkspace(selectedId);
   const [mobileChat, setMobileChat] = useState(() => !!currentBot());
   const { preference: theme, setPreference: setTheme } = useTheme();
-  const [settings, setSettings] = useState<"bot" | "global" | null>(null);
+  const [globalSettings, setGlobalSettings] = useState(false);
   const [creating, setCreating] = useState(false);
   const [historyLoading, setHistoryLoading] = useState(false);
   const bot = workspace.bots.find((bot) => bot.id === selectedId) || null;
@@ -75,7 +75,7 @@ export default function App() {
   useEffect(() => {
     function keyboard(event: KeyboardEvent) {
       if (event.key === "Escape") {
-        setSettings(null);
+        setGlobalSettings(false);
         setCreating(false);
       }
     }
@@ -87,7 +87,7 @@ export default function App() {
     setMobileChat(true);
     location.hash = `/bots/${encodeURIComponent(id)}`;
   }, []);
-  const closeSettings = useCallback(() => setSettings(null), []);
+  const closeSettings = useCallback(() => setGlobalSettings(false), []);
   const closeCreate = useCallback(() => setCreating(false), []);
   function created(bot: Bot) {
     workspace.updateBot(bot);
@@ -111,7 +111,7 @@ export default function App() {
         selectedId={selectedId}
         onSelect={select}
         onCreate={() => setCreating(true)}
-        onSettings={() => setSettings("global")}
+        onSettings={() => setGlobalSettings(true)}
         onTheme={setTheme}
         theme={theme}
         onLogout={() =>
@@ -137,12 +137,13 @@ export default function App() {
               events={workspace.events[bot.id] || []}
               capabilities={workspace.capabilities}
               loading={historyLoading}
+              suspended={globalSettings || creating}
               onBack={() => {
                 setMobileChat(false);
                 location.hash = "";
               }}
-              onSettings={() => setSettings("bot")}
               onBotChange={workspace.updateBot}
+              onArchive={workspace.archiveBot}
               onError={workspace.setError}
               onHistory={() =>
                 void workspace
@@ -191,12 +192,12 @@ export default function App() {
           </button>
         </div>
       )}
-      {settings && (
+      {globalSettings && (
         <Suspense fallback={null}>
           <SettingsDrawer
-            bot={settings === "bot" ? bot : null}
+            bot={null}
             bots={workspace.allBots}
-            global={settings === "global"}
+            global
             capabilities={workspace.capabilities}
             onClose={closeSettings}
             onBotChange={workspace.updateBot}

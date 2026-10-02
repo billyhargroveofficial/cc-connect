@@ -24,9 +24,10 @@ export default function ChatRoom({
   events,
   capabilities,
   loading,
+  suspended,
   onBack,
-  onSettings,
   onBotChange,
+  onArchive,
   onError,
   onHistory,
 }: {
@@ -34,9 +35,10 @@ export default function ChatRoom({
   events: Event[];
   capabilities: Capabilities | null;
   loading: boolean;
+  suspended: boolean;
   onBack: () => void;
-  onSettings: () => void;
   onBotChange: (bot: Bot) => void;
+  onArchive: (id: string) => void;
   onError: (error: string) => void;
   onHistory?: () => void;
 }) {
@@ -196,15 +198,16 @@ export default function ChatRoom({
         supportsGoal={supportsGoal}
         hasGoal={!!goal}
         open={detailsOpen}
+        suspended={suspended}
+        onOpen={() => setDetailsOpen(true)}
         onClose={() => setDetailsOpen(false)}
         triggerRef={detailsTrigger}
+        capabilities={capabilities}
+        onBotChange={onBotChange}
+        onArchive={onArchive}
         onGoal={() => {
           setDetailsOpen(false);
           setGoalOpen(true);
-        }}
-        onSettings={() => {
-          setDetailsOpen(false);
-          onSettings();
         }}
       />
       {goalOpen && (

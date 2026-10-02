@@ -5,6 +5,7 @@ import { runInNewContext } from 'node:vm';
 import ts from 'typescript';
 import * as reducer from './reducer.ts';
 import { motionTestModule } from '../../lib/motion-stub.mjs';
+import { accountURL, setApiAccount } from '../../lib/api.ts';
 
 const source = ts.transpileModule(
   `${readFileSync(new URL('./Transcript.tsx', import.meta.url), 'utf8')}\nexport { ActivityItem, TurnActivity, TurnStats, ResponseDetails, Turn, Attachments, Message, RawDetails, JournalItem, RawJournal, RequestCard, Goal };`,
@@ -41,6 +42,7 @@ function disclosure(component, initialProps, motionOverrides = {}) {
     'lucide-react': new Proxy({}, { get: (_, name) => name }),
     'react-markdown': {}, 'remark-gfm': {}, 'remark-math': {}, 'rehype-highlight': {}, 'rehype-katex': {},
     '../../components/Avatar': {}, '../../lib/events': { botMessagePresentation: () => null },
+    '../../lib/api': { accountURL },
     '../../lib/motion': { ...motionTestModule(), ...motionOverrides },
     './reducer': reducer, './transcript.css': {},
   };
@@ -165,6 +167,31 @@ test('image and file attachments share compact card sections and retain accessib
     assert.equal(preview.props.href, '/api/studio/bots/bot%2Fid/files/image%2Fid');
     assert.equal(view.find(node => node.type === 'img').props.alt, 'figure.png');
   }
+});
+
+test('native attachment media, downloads, and markdown artifact links retain their account binding', () => {
+  setApiAccount('account-a');
+  try {
+    const view = disclosure('Attachments', {
+      botId: 'bot-a',
+      attachments: [
+        { id: 'image', name: 'image.png', mimeType: 'image/png' },
+        { id: 'audio', name: 'audio.wav', mimeType: 'audio/wav' },
+        { id: 'video', name: 'video.mp4', mimeType: 'video/mp4' },
+      ],
+    });
+    for (const node of view.findAll(node => node.type === 'a' || ['img', 'audio', 'video'].includes(node.type))) {
+      const url = node.props.href || node.props.src;
+      if (url) assert.match(url, /\?expectedAccount=account-a$/);
+    }
+    const markdown = disclosure('Markdown', { content: '' }).find(node => node.props?.components)?.props.components;
+    const local = '/api/studio/bots/bot-a/files/image';
+    assert.equal(markdown.a({ href: local, children: 'Open' }).props.href, `${local}?expectedAccount=account-a`);
+    const image = markdown.img({ src: local, alt: 'Figure' });
+    assert.equal(image.props.href, `${local}?expectedAccount=account-a`);
+    assert.equal(image.props.children.props.src, `${local}?expectedAccount=account-a`);
+    assert.equal(markdown.a({ href: 'https://example.com', children: 'Reference' }).props.href, 'https://example.com');
+  } finally { setApiAccount(null); }
 });
 
 test('a completed turn collapses its expanded history and can reopen the same actions', () => {

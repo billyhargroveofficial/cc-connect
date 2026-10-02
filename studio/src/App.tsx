@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, lazy, Suspense } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, lazy, Suspense } from "react";
 import { Plus, X, LoaderCircle } from "lucide-react";
 import { useWorkspace } from "./hooks/useWorkspace";
 import type { Bot } from "./lib/types";
@@ -52,7 +52,6 @@ function FadingSurface({
       animate="visible"
       exit="exit"
       inert={!present}
-      aria-hidden={!present || undefined}
     >
       {children}
     </m.div>
@@ -93,10 +92,76 @@ function WorkspaceToast({
 }
 
 export default function App() {
-  const [selectedId, setSelectedId] = useState(currentBot);
-  const workspace = useWorkspace(selectedId);
-  const [mobileChat, setMobileChat] = useState(() => !!currentBot());
+  const workspace = useWorkspace();
   const { preference: theme, setPreference: setTheme } = useTheme();
+  const previousAccount = useRef<string | null>(null);
+  const [route, setRoute] = useState<{ key: string; botId: string } | null>(null);
+  const accountKey = workspace.user ? `${workspace.user.id}:${workspace.accountVersion}` : "";
+  useLayoutEffect(() => {
+    const clearHash = () => {
+      if (location.hash) history.replaceState(null, "", location.pathname + location.search);
+    };
+    if (workspace.phase !== "ready" || !workspace.user) {
+      if (previousAccount.current) clearHash();
+      setRoute(null);
+      return;
+    }
+    let storedAccount: string | null = null;
+    try { storedAccount = sessionStorage.getItem("connect-bots:route-account"); } catch { /* Storage may be disabled. */ }
+    const reuseRoute = !previousAccount.current && (!storedAccount || storedAccount === workspace.user.id);
+    const botId = reuseRoute ? currentBot() : "";
+    if (!reuseRoute) clearHash();
+    previousAccount.current = workspace.user.id;
+    try { sessionStorage.setItem("connect-bots:route-account", workspace.user.id); } catch { /* The route still resets within this page. */ }
+    setRoute({ key: accountKey, botId });
+  }, [workspace.phase, workspace.user?.id, accountKey]);
+  const ready = workspace.phase === "ready" && route?.key === accountKey;
+  return (
+    <AnimatePresence mode="wait" initial={false}>
+      {ready ? (
+        <AccountWorkspace
+          key={accountKey}
+          workspace={workspace}
+          initialBot={route.botId}
+          theme={theme}
+          setTheme={setTheme}
+        />
+      ) : (
+        <Login
+          key="login"
+          checking={workspace.phase === "checking" || workspace.phase === "ready"}
+          error={workspace.error}
+          registrationAllowed={workspace.registrationAllowed}
+          legacyClaimAvailable={workspace.legacyClaimAvailable}
+          setupRequired={workspace.setupRequired}
+          onLogin={workspace.login}
+          onRegister={workspace.register}
+          onRetry={workspace.retry}
+        />
+      )}
+    </AnimatePresence>
+  );
+}
+
+function AccountWorkspace({
+  workspace,
+  initialBot,
+  theme,
+  setTheme,
+}: {
+  workspace: ReturnType<typeof useWorkspace>;
+  initialBot: string;
+  theme: ReturnType<typeof useTheme>["preference"];
+  setTheme: ReturnType<typeof useTheme>["setPreference"];
+}) {
+  const active = useRef(true);
+  active.current = useIsPresent();
+  useEffect(() => {
+    active.current = true;
+    return () => { active.current = false; };
+  }, []);
+  const [selectedId, setSelectedId] = useState(initialBot);
+  const [mobileChat, setMobileChat] = useState(!!initialBot);
   const [globalSettings, setGlobalSettings] = useState(false);
   const [creating, setCreating] = useState(false);
   const [historyLoading, setHistoryLoading] = useState(false);
@@ -104,6 +169,7 @@ export default function App() {
     () => window.matchMedia("(max-width: 700px)").matches,
   );
   const bot = workspace.bots.find((bot) => bot.id === selectedId) || null;
+  useEffect(() => workspace.selectCatalogBot(selectedId), [selectedId, workspace.selectCatalogBot]);
   useEffect(() => {
     const query = window.matchMedia("(max-width: 700px)");
     const update = () => setMobileViewport(query.matches);
@@ -113,6 +179,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     const onHash = () => {
+      if (!active.current) return;
       const id = currentBot();
       if (id) setSelectedId(id);
       setMobileChat(!!id);
@@ -159,6 +226,7 @@ export default function App() {
     return () => window.removeEventListener("keydown", keyboard);
   }, []);
   const select = useCallback((id: string) => {
+    if (!active.current) return;
     setSelectedId(id);
     setMobileChat(true);
     location.hash = `/bots/${encodeURIComponent(id)}`;
@@ -166,23 +234,13 @@ export default function App() {
   const closeSettings = useCallback(() => setGlobalSettings(false), []);
   const closeCreate = useCallback(() => setCreating(false), []);
   function created(bot: Bot) {
+    if (!active.current) return;
     workspace.updateBot(bot);
     select(bot.id);
     setCreating(false);
   }
   return (
-    <AnimatePresence mode="wait" initial={false}>
-      {workspace.phase !== "ready" ? (
-        <Login
-          key="login"
-          checking={workspace.phase === "checking"}
-          error={workspace.error}
-          onLogin={workspace.login}
-          onRetry={workspace.retry}
-        />
-      ) : (
         <FadingSurface
-          key="workspace"
           className={`workspace ${mobileChat ? "is-chat" : ""}`}
         >
           <BotRoster
@@ -201,6 +259,7 @@ export default function App() {
                 .catch((error) => workspace.setError(errorMessage(error)))
             }
             connection={workspace.connection}
+            user={workspace.user}
           />
           <m.main
             className="workspace-content"
@@ -230,12 +289,14 @@ export default function App() {
                     className="workspace-conversation"
                   >
                     <ChatRoom
+                      draftScope={workspace.user?.id || ""}
                       bot={bot}
                       events={workspace.events[bot.id] || []}
                       capabilities={workspace.capabilities}
                       loading={historyLoading}
                       suspended={globalSettings || creating || (mobileViewport && !mobileChat)}
                       onBack={() => {
+                        if (!active.current) return;
                         setMobileChat(false);
                         location.hash = "";
                       }}
@@ -331,7 +392,5 @@ export default function App() {
             )}
           </AnimatePresence>
         </FadingSurface>
-      )}
-    </AnimatePresence>
   );
 }

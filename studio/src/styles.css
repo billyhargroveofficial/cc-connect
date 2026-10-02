@@ -517,6 +517,36 @@ svg {
 .login-card input:focus {
   border-color: var(--accent);
 }
+.login-card input[aria-invalid="true"] { border-color: var(--danger); }
+.login-tabs {
+  display: flex;
+  gap: 3px;
+  padding: 3px;
+  margin-bottom: 22px;
+  border-radius: 10px;
+  background: var(--surface-hover);
+}
+.login-tabs button {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  height: 34px;
+  border-radius: 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.login-tabs button[aria-selected="true"] { color: var(--text); }
+.login-tabs button > span:not(.login-tab-active) { position: relative; }
+.login-tab-active {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: var(--surface);
+  box-shadow: 0 1px 4px #0000000a;
+}
+.login-fields > label:not(:first-child),
+.login-confirm label { margin-top: 17px; }
+.login-confirm { overflow: hidden; }
 .login-submit {
   width: 100%;
   margin-top: 10px;
@@ -731,6 +761,13 @@ html.is-resizing-sidebar * {
   color: var(--faint);
   margin-bottom: 13px;
   padding-left: 5px;
+}
+.roster-connection .status-dot { flex-shrink: 0; }
+.roster-connection-copy {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 .roster-footer-actions {
   display: flex;
@@ -1784,13 +1821,13 @@ html.is-resizing-sidebar * {
   .welcome-layout {
     flex-direction: column;
     align-items: stretch;
-    padding: 48px 0 34px;
+    padding: 28px 0;
     gap: 32px;
     width: 100%;
     max-width: 460px;
   }
   .welcome-copy {
-    flex: none;
+    display: none;
   }
   .welcome-avatars {
     margin-bottom: 28px;

@@ -97,6 +97,15 @@ test('departing animated bot rows cannot be selected during their exit', () => {
   assert.equal(row.props['aria-hidden'], true);
 });
 
+test('the account identity shares the existing connection line', () => {
+  const roster = renderRoster([], () => {}, { user: { id: 'user-1', username: 'billy.name' } });
+  const line = allIn(roster, node => node.props.className === 'roster-connection')[0];
+  const identity = allIn(line, node => node.props.className === 'roster-connection-copy')[0];
+  assert.equal(identity.props.children, '@billy.name · Connected');
+  assert.equal(line.props.title, 'Signed in as @billy.name · Workspace connected');
+  assert.equal(allIn(roster, node => node.props.className === 'roster-connection').length, 1);
+});
+
 test('roster layout measurements follow ordering and selection instead of streaming updates', () => {
   const bots = [
     { id: 'bot-1', name: 'Researcher', status: 'idle', chief: false, createdAt: '2026-10-01' },

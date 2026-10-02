@@ -126,6 +126,20 @@ func (m *TelegramManager) SetWorkspace(workspace *Workspace) {
 	m.mu.Unlock()
 }
 
+// SetEnvironmentResolver limits Telegram credentials to the deployment's
+// approved scope. A nil resolver denies environment lookup; account workspaces
+// must not be able to select a host owner's credential by its variable name.
+func (m *TelegramManager) SetEnvironmentResolver(resolver func(string) string) {
+	if resolver == nil {
+		resolver = func(string) string { return "" }
+	}
+	m.syncMu.Lock()
+	defer m.syncMu.Unlock()
+	m.mu.Lock()
+	m.getenv = resolver
+	m.mu.Unlock()
+}
+
 func (m *TelegramManager) Sync(ctx context.Context) error {
 	m.syncMu.Lock()
 	defer m.syncMu.Unlock()

@@ -5,10 +5,42 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestHasLegacyWorkspaceBeforeStoreInitialization(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "workspace")
+	if existing, err := hasLegacyWorkspace(root); err != nil || existing {
+		t.Fatalf("new workspace reported as legacy: %v, %v", existing, err)
+	}
+	// Codex initialization alone must not grant access to a legacy workspace.
+	if err := os.MkdirAll(filepath.Join(root, "codex", "state"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if existing, err := hasLegacyWorkspace(root); err != nil || existing {
+		t.Fatalf("app-server directories reported as bot state: %v, %v", existing, err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "state.json"), []byte("{}\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if existing, err := hasLegacyWorkspace(root); err != nil || !existing {
+		t.Fatalf("existing bot state was not protected during upgrade: %v, %v", existing, err)
+	}
+}
+
+func TestHasLegacyWorkspaceReportsInspectionFailure(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "not-a-directory")
+	if err := os.WriteFile(root, []byte("file"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := hasLegacyWorkspace(root); err == nil {
+		t.Fatal("invalid data root was accepted as a fresh installation")
+	}
+}
 
 func TestInternalToolURLMatchesHTTPBind(t *testing.T) {
 	for _, test := range []struct {

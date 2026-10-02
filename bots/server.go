@@ -47,6 +47,8 @@ type Server struct {
 	maintenance *Maintenance
 	config      ServerConfig
 	handler     http.Handler
+	apiHandler  http.Handler
+	internal    http.Handler
 	tokenHash   [32]byte
 	cookieKey   [32]byte
 	loginMu     sync.Mutex
@@ -61,19 +63,40 @@ func NewServer(store *Store, runtime *Runtime, config ServerConfig) (*Server, er
 	if err != nil {
 		return nil, err
 	}
-	s := &Server{store: store, runtime: runtime, config: config, tokenHash: sha256.Sum256([]byte(token)), loginLimits: make(map[string]loginAttempt)}
+	s, err := NewTenantServer(store, runtime, config)
+	if err != nil {
+		return nil, err
+	}
 	// Keep only the token hash after initialization; never expose tokens via API.
-	s.config.Token = ""
+	s.tokenHash = sha256.Sum256([]byte(token))
+	s.loginLimits = make(map[string]loginAttempt)
 	key := hmac.New(sha256.New, []byte(token))
 	key.Write([]byte("connect-bots/session/v1"))
 	copy(s.cookieKey[:], key.Sum(nil))
+	s.handler = s.buildHandler()
+	return s, nil
+}
+
+// NewTenantServer creates the workspace services without owner-token login,
+// session, or static routes. The host must authenticate requests before
+// dispatching them to APIHandler or Handler.
+func NewTenantServer(store *Store, runtime *Runtime, config ServerConfig) (*Server, error) {
+	if store == nil {
+		return nil, fmt.Errorf("server requires a store")
+	}
+	s := &Server{store: store, runtime: runtime, config: config}
+	s.config.Token = ""
 	s.workspace = config.Workspace
 	if s.workspace == nil {
 		s.workspace = NewWorkspace(store)
 	}
 	s.workspace.Configure(WorkspaceConfig{FlovURL: config.FlovURL})
 	s.maintenance = NewMaintenance(store, runtime)
-	s.handler = s.buildHandler()
+	s.apiHandler = s.buildAPIHandler()
+	internal := http.NewServeMux()
+	internal.HandleFunc("POST /api/studio/internal/tools", s.internalTool)
+	s.internal = internal
+	s.handler = s.apiHandler
 	return s, nil
 }
 
@@ -83,7 +106,15 @@ func (s *Server) Maintenance() *Maintenance           { return s.maintenance }
 func (s *Server) StartBackground(ctx context.Context) { s.maintenance.Start(ctx) }
 func (s *Server) Close() error                        { return s.maintenance.Close() }
 
-func (s *Server) buildHandler() http.Handler {
+// APIHandler contains workspace routes only. Its caller is responsible for
+// authenticating the account and validating mutation origins.
+func (s *Server) APIHandler() http.Handler { return s.apiHandler }
+
+// InternalHandler retains the separate internal credential and loopback checks;
+// account authentication alone never grants access to runtime tools.
+func (s *Server) InternalHandler() http.Handler { return s.internal }
+
+func (s *Server) buildAPIHandler() http.Handler {
 	api := http.NewServeMux()
 	api.HandleFunc("GET /api/studio/bots", s.listBots)
 	api.HandleFunc("POST /api/studio/bots", s.createBot)
@@ -103,13 +134,17 @@ func (s *Server) buildHandler() http.Handler {
 	api.HandleFunc("POST /api/studio/bots/{id}/compact", s.compactBot)
 	s.workspace.RegisterHTTP(api, s.runtime)
 	s.maintenance.RegisterHTTP(api)
+	return api
+}
+
+func (s *Server) buildHandler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/studio/health", func(w http.ResponseWriter, r *http.Request) { writeJSON(w, http.StatusOK, map[string]bool{"ok": true}) })
 	mux.HandleFunc("GET /api/studio/session", s.session)
 	mux.HandleFunc("POST /api/studio/login", s.login)
 	mux.HandleFunc("POST /api/studio/logout", s.logout)
-	mux.HandleFunc("POST /api/studio/internal/tools", s.internalTool)
-	mux.Handle("/api/studio/", s.requireAuth(api))
+	mux.Handle("POST /api/studio/internal/tools", s.InternalHandler())
+	mux.Handle("/api/studio/", s.requireAuth(s.APIHandler()))
 	mux.Handle("/", s.staticHandler())
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
@@ -462,11 +497,15 @@ func eventCursor(r *http.Request) (uint64, error) {
 }
 
 func (s *Server) staticHandler() http.Handler {
+	return newStaticHandler(s.config)
+}
+
+func newStaticHandler(config ServerConfig) http.Handler {
 	var source fs.FS
-	if s.config.StaticFS != nil {
-		source = s.config.StaticFS
-	} else if s.config.StaticDir != "" {
-		source = os.DirFS(s.config.StaticDir)
+	if config.StaticFS != nil {
+		source = config.StaticFS
+	} else if config.StaticDir != "" {
+		source = os.DirFS(config.StaticDir)
 	}
 	if source == nil {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { http.NotFound(w, r) })

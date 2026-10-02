@@ -12,10 +12,131 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"testing/fstest"
 	"time"
 )
 
 const testOwnerToken = "test-owner-token-never-use-in-production"
+
+func TestTenantServer_NoOwnerTokenOrHostRoutes(t *testing.T) {
+	for _, existingToken := range []bool{false, true} {
+		name := "absent-token"
+		if existingToken {
+			name = "invalid-existing-token"
+		}
+		t.Run(name, func(t *testing.T) {
+			store := testStore(t)
+			tokenPath := filepath.Join(store.Root(), "token")
+			if existingToken {
+				if err := os.WriteFile(tokenPath, []byte("invalid"), 0644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			workspace := NewWorkspace(store)
+			server, err := NewTenantServer(store, nil, ServerConfig{
+				Token: testOwnerToken, Workspace: workspace, FlovURL: "http://flov.local/transcribe",
+				StaticFS: fstest.MapFS{"index.html": &fstest.MapFile{Data: []byte("studio")}},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer server.Close()
+			if server.Workspace() != workspace || server.Maintenance() == nil || server.config.Token != "" {
+				t.Fatal("workspace services were not initialized without owner credentials")
+			}
+			if got := server.Workspace().settings().FlovURL; got != "http://flov.local/transcribe" {
+				t.Fatalf("FlovURL = %q", got)
+			}
+			info, err := os.Stat(tokenPath)
+			if existingToken {
+				if err != nil || info.Mode().Perm() != 0644 {
+					t.Fatalf("tenant construction accessed owner token: %v %v", info, err)
+				}
+			} else if !os.IsNotExist(err) {
+				t.Fatalf("tenant construction created an owner token: %v", err)
+			}
+			for _, path := range []string{"/api/studio/bots", "/api/studio/user/instructions", "/api/studio/maintenance"} {
+				recorder := httptest.NewRecorder()
+				server.APIHandler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, path, nil))
+				if recorder.Code != http.StatusOK {
+					t.Fatalf("workspace route %s = %d: %s", path, recorder.Code, recorder.Body.String())
+				}
+			}
+			for _, route := range []struct{ method, path string }{
+				{http.MethodGet, "/"},
+				{http.MethodGet, "/api/studio/session"},
+				{http.MethodGet, "/api/studio/health"},
+				{http.MethodPost, "/api/studio/login"},
+				{http.MethodPost, "/api/studio/logout"},
+				{http.MethodPost, "/api/studio/internal/tools"},
+			} {
+				recorder := httptest.NewRecorder()
+				server.Handler().ServeHTTP(recorder, httptest.NewRequest(route.method, route.path, nil))
+				if recorder.Code != http.StatusNotFound {
+					t.Fatalf("host route mounted in tenant %s %s = %d", route.method, route.path, recorder.Code)
+				}
+			}
+		})
+	}
+}
+
+func TestTenantServer_APIHandlerUsesItsWorkspace(t *testing.T) {
+	firstStore, secondStore := testStore(t), testStore(t)
+	first, err := NewTenantServer(firstStore, nil, ServerConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer first.Close()
+	second, err := NewTenantServer(secondStore, nil, ServerConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.Close()
+	firstBot := firstStore.ListBots()[0]
+	for _, route := range []string{
+		"/api/studio/bots/" + firstBot.ID,
+		"/api/studio/bots/" + firstBot.ID + "/instructions",
+		"/api/studio/bots/" + firstBot.ID + "/events",
+	} {
+		for _, tenant := range []struct {
+			server *Server
+			want   int
+		}{{first, http.StatusOK}, {second, http.StatusNotFound}} {
+			recorder := httptest.NewRecorder()
+			tenant.server.APIHandler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, route, nil))
+			if recorder.Code != tenant.want {
+				t.Fatalf("workspace route %s = %d, want %d", route, recorder.Code, tenant.want)
+			}
+		}
+	}
+}
+
+func TestTenantServer_InternalHandlerRetainsAuthenticationAndMethodChecks(t *testing.T) {
+	server, err := NewTenantServer(testStore(t), nil, ServerConfig{InternalToken: "test-internal-token"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer server.Close()
+	for _, test := range []struct {
+		method, remote, token string
+		want                  int
+	}{
+		{http.MethodPost, "192.0.2.10:3000", "test-internal-token", http.StatusUnauthorized},
+		{http.MethodPost, "127.0.0.1:3000", testOwnerToken, http.StatusUnauthorized},
+		{http.MethodPost, "127.0.0.1:3000", "", http.StatusUnauthorized},
+		{http.MethodPost, "127.0.0.1:3000", "test-internal-token", http.StatusServiceUnavailable},
+		{http.MethodGet, "127.0.0.1:3000", "test-internal-token", http.StatusMethodNotAllowed},
+	} {
+		request := httptest.NewRequest(test.method, "/api/studio/internal/tools", strings.NewReader(`{"botId":"x","name":"bots_list"}`))
+		request.RemoteAddr = test.remote
+		request.Header.Set("Authorization", "Bearer "+test.token)
+		recorder := httptest.NewRecorder()
+		server.InternalHandler().ServeHTTP(recorder, request)
+		if recorder.Code != test.want {
+			t.Fatalf("internal %s %s = %d, want %d", test.method, test.remote, recorder.Code, test.want)
+		}
+	}
+}
 
 func testServer(t *testing.T) (*Store, *Server, *httptest.Server) {
 	t.Helper()

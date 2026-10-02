@@ -4,8 +4,6 @@ package main
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"errors"
 	"flag"
 	"fmt"
@@ -51,6 +49,7 @@ func run() (runErr error) {
 	flov := flag.String("flov-url", "http://127.0.0.1:17432/v1/audio/transcriptions", "Flov transcription endpoint")
 	assets := flag.String("assets", "", "serve a frontend build directory instead of embedded assets")
 	origins := flag.String("origins", "", "additional allowed browser origins, comma separated")
+	registration := flag.Bool("registration", true, "allow new account registration")
 	codexEndpoint := flag.String("codex-app-server-url", "", "explicit dedicated Codex endpoint; default starts a private app-server")
 	httpsAddr := flag.String("https-addr", "", "optional HTTPS listening address (browser microphone on LAN)")
 	tlsCert := flag.String("tls-cert", "", "HTTPS certificate chain file")
@@ -71,21 +70,24 @@ func run() (runErr error) {
 	if *httpsAddr == "" && (*tlsCert != "" || *tlsKey != "") {
 		return fmt.Errorf("tls-cert and tls-key require https-addr")
 	}
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer cancel()
-	store, err := bots.OpenStore(*data)
+	dataRoot, err := filepath.Abs(*data)
+	if err != nil {
+		return fmt.Errorf("resolve workspace root: %w", err)
+	}
+	legacyWorkspace, err := hasLegacyWorkspace(dataRoot)
 	if err != nil {
 		return err
 	}
-	defer store.Close()
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
 	codexURL := strings.TrimSpace(*codexEndpoint)
 	var ownedCodex *bots.CodexAppServer
 	var codexDone <-chan struct{}
 	if codexURL == "" {
-		// Keep the server alive until Runtime.Close has interrupted its owned
-		// work and detached every adapter. HTTP signal cancellation runs first.
+		// Keep the server alive until every account runtime has interrupted its
+		// owned work and detached its adapters. HTTP cancellation runs first.
 		var stopCodex context.CancelFunc
-		ownedCodex, stopCodex, err = startOwnedCodexAppServer(ctx, bots.CodexAppServerConfig{DataDir: store.Root(), StartupTimeout: 120 * time.Second})
+		ownedCodex, stopCodex, err = startOwnedCodexAppServer(ctx, bots.CodexAppServerConfig{DataDir: dataRoot, StartupTimeout: 120 * time.Second})
 		if err != nil {
 			return err
 		}
@@ -100,33 +102,8 @@ func run() (runErr error) {
 			return fmt.Errorf("dedicated Codex endpoint: %w", err)
 		}
 	}
-	workspace := bots.NewWorkspace(store)
-	workspace.Configure(bots.WorkspaceConfig{FlovURL: *flov})
-	extension, err := bots.InstallPiExtension(store.Root())
-	if err != nil {
-		return err
-	}
-	random := make([]byte, 32)
-	if _, err := rand.Read(random); err != nil {
-		return fmt.Errorf("generate internal credential: %w", err)
-	}
-	internalToken := hex.EncodeToString(random)
-	runtime := bots.NewRuntime(store, bots.RuntimeConfig{
-		AgentOptions:    map[string]map[string]any{"codex": {"app_server_url": codexURL}},
-		PiExtensionPath: extension, InternalURL: internalURL,
-		InternalToken: internalToken, Instructions: workspace.AgentInstructions,
-		SessionOptions: workspace.SkillSessionOptions, ResolveAttachments: workspace.ResolveAttachments,
-		PublishFiles:   workspace.PublishFiles,
-		VoiceAvailable: *flov != "",
-	})
-	defer runtime.Close()
-	telegram := bots.NewTelegramManager(store, runtime)
-	telegram.SetWorkspace(workspace)
-	defer telegram.Close()
 	config := bots.ServerConfig{
 		StaticDir: *assets, FlovURL: *flov,
-		InternalToken: internalToken, Workspace: workspace,
-		BotChanged: func(string) { go telegram.Sync(ctx) },
 	}
 	if *assets == "" {
 		config.StaticFS = studio.Assets()
@@ -136,13 +113,39 @@ func run() (runErr error) {
 			config.AllowedOrigins = append(config.AllowedOrigins, origin)
 		}
 	}
-	server, err := bots.NewServer(store, runtime, config)
+	tenants, err := NewTenantManager(TenantManagerConfig{
+		Context: ctx, DataRoot: dataRoot, CodexURL: codexURL,
+		InternalURL: internalURL, FlovURL: *flov, Server: config,
+	})
 	if err != nil {
 		return err
 	}
-	defer server.Close()
-	telegram.Sync(ctx)
-	server.Maintenance().Start(ctx)
+	defer func() { runErr = errors.Join(runErr, tenants.Close()) }()
+	server, err := bots.NewHostServer(bots.HostServerConfig{
+		Root: dataRoot, StaticDir: config.StaticDir, StaticFS: config.StaticFS,
+		AllowedOrigins: config.AllowedOrigins, RegistrationAllowed: *registration,
+		LegacyWorkspace: legacyWorkspace,
+		ResolveTenant: func(requestCtx context.Context, account bots.Account) (*bots.Server, error) {
+			if err := requestCtx.Err(); err != nil {
+				return nil, err
+			}
+			return tenants.Resolve(account)
+		},
+		ResolveInternalToken: tenants.ResolveInternalToken,
+	})
+	if err != nil {
+		return err
+	}
+	defer func() { runErr = errors.Join(runErr, server.Close()) }()
+	preloadErr := server.PreloadTenants(ctx)
+	if ctx.Err() != nil {
+		return nil
+	}
+	if preloadErr != nil {
+		// A damaged account workspace must not take other users offline. Its
+		// requests can retry resolution and receive the host's generic error.
+		slog.Warn("Connect Bots could not restore every account workspace", "error", preloadErr)
+	}
 	httpServer := newHTTPServer(ctx, *addr, server.Handler())
 	stopped := make(chan error, 2)
 	go func() { stopped <- httpServer.ListenAndServe() }()
@@ -152,7 +155,7 @@ func run() (runErr error) {
 		go func() { stopped <- tlsServer.ListenAndServeTLS(*tlsCert, *tlsKey) }()
 		slog.Info("Connect Bots HTTPS listening", "addr", *httpsAddr)
 	}
-	slog.Info("Connect Bots listening", "addr", *addr, "workspace", store.Root(), "login_file", filepath.Join(store.Root(), "token"))
+	slog.Info("Connect Bots listening", "addr", *addr, "workspace", dataRoot, "accounts_file", filepath.Join(dataRoot, "auth", "accounts.json"))
 	var serveErr error
 	select {
 	case err := <-stopped:
@@ -173,13 +176,33 @@ func run() (runErr error) {
 	defer done()
 	if err := httpServer.Shutdown(shutdownCtx); err != nil {
 		serveErr = errors.Join(serveErr, fmt.Errorf("HTTP shutdown: %w", err))
+		if err := httpServer.Close(); err != nil {
+			serveErr = errors.Join(serveErr, fmt.Errorf("HTTP close: %w", err))
+		}
 	}
 	if tlsServer != nil {
 		if err := tlsServer.Shutdown(shutdownCtx); err != nil {
 			serveErr = errors.Join(serveErr, fmt.Errorf("HTTPS shutdown: %w", err))
+			if err := tlsServer.Close(); err != nil {
+				serveErr = errors.Join(serveErr, fmt.Errorf("HTTPS close: %w", err))
+			}
 		}
 	}
 	return serveErr
+}
+
+// Check before starting Codex or opening a store: both initialize directories,
+// and OpenStore creates state.json even on a brand-new installation. A legacy
+// workspace must be claimed through its existing owner credential.
+func hasLegacyWorkspace(root string) (bool, error) {
+	_, err := os.Stat(filepath.Join(root, "state.json"))
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("inspect existing workspace: %w", err)
+	}
+	return true, nil
 }
 
 // Pi tools reach the same HTTP listener over loopback. A specific LAN bind

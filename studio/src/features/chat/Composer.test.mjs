@@ -19,11 +19,13 @@ function deferred() {
 
 // Drive the real component handlers without a browser. Only React's hook and
 // JSX plumbing is stubbed; the send/upload workflow comes from Composer.tsx.
-function composer() {
+function composer({ draftScope = 'user-a', botId = 'bot', storage = new Map(), getUserMedia } = {}) {
   let cursor = 0, nextUpload = 0, uploadsPaused = false;
   let effectCursor = 0;
+  let present = true;
   const uploadGate = deferred();
   const values = [], requests = [], uploads = [], errors = [];
+  const recordings = [];
   const effects = [], pendingEffects = [], traps = [];
   const state = initial => {
     const index = cursor++;
@@ -59,7 +61,7 @@ function composer() {
       } },
       errorMessage: error => error.message,
     },
-    '../../lib/motion': motionTestModule(),
+    '../../lib/motion': { ...motionTestModule(), useIsPresent: () => present },
     './ModelPicker': { default: 'ModelPicker', PresenceSurface: 'div', useDialogFocus: active => traps.push(active) },
     './ContextControl': { default: 'ContextControl' },
     './minimal-composer.css': {},
@@ -71,11 +73,21 @@ function composer() {
       assert.ok(name in modules, `Unexpected Composer import: ${name}`);
       return modules[name];
     },
-    localStorage: { getItem: () => null },
-    window: {},
+    localStorage: {
+      getItem: key => storage.get(key) ?? null,
+      setItem: (key, value) => storage.set(key, value),
+    },
+    window: { isSecureContext: Boolean(getUserMedia) },
+    navigator: { mediaDevices: { getUserMedia } },
+    MediaRecorder: class {
+      static isTypeSupported() { return true; }
+      constructor(stream) { this.stream = stream; recordings.push(this); }
+      start() { this.state = 'recording'; }
+      stop() { this.state = 'inactive'; this.onstop?.(); }
+    },
   }, { filename: 'Composer.tsx' });
   const props = {
-    bot: { id: 'bot', name: 'Bot' }, capabilities: null, busy: false,
+    bot: { id: botId, name: 'Bot' }, draftScope, capabilities: getUserMedia ? { voice: true } : null, busy: false,
     context: { compacting: false, requesting: false },
     onSend: (text, attachments) => {
       const request = { text, attachments, ...deferred() };
@@ -103,7 +115,11 @@ function composer() {
   }
   const find = match => all(match)[0];
   return {
-    requests, errors,
+    requests, errors, recordings,
+    unmount: () => { for (const effect of effects) effect?.cleanup?.(); },
+    changeScope: scope => { props.draftScope = scope; render(); },
+    exit: () => { present = false; render(); },
+    microphone: () => find(node => node.props?.['aria-label'] === 'Dictation').props.onClick(),
     suspend: suspended => { props.suspended = suspended; render(); },
     openActions: () => find(node => node.props?.['aria-label'] === 'More actions').props.onClick(),
     actionsOpen: () => !!find(node => node.props?.className === 'composer-actions-menu'),
@@ -125,6 +141,77 @@ function composer() {
     },
   };
 }
+
+test('microphone permission granted after sign-out stops every track without creating a recorder', async () => {
+  const permission = deferred();
+  let stopped = 0;
+  const stream = { getTracks: () => [{ stop: () => stopped++ }, { stop: () => stopped++ }] };
+  const view = composer({ getUserMedia: () => permission.promise });
+  view.microphone();
+  view.unmount();
+  permission.resolve(stream);
+  await settled();
+  assert.equal(stopped, 2, 'late permission must immediately release every captured track');
+  assert.equal(view.recordings.length, 0, 'an unmounted composer cannot create a hidden recorder');
+  assert.deepEqual(view.errors, []);
+});
+
+test('microphone permission from a previous account or exiting composer cannot start recording', async () => {
+  for (const invalidate of [view => view.changeScope('user-b'), view => view.exit()]) {
+    const permission = deferred();
+    let stopped = 0;
+    const view = composer({ getUserMedia: () => permission.promise });
+    view.microphone();
+    invalidate(view);
+    permission.resolve({ getTracks: () => [{ stop: () => stopped++ }] });
+    await settled();
+    assert.equal(stopped, 1);
+    assert.equal(view.recordings.length, 0);
+    view.unmount();
+  }
+});
+
+test('microphone permission for the current composer starts recording and releases capture on unmount', async () => {
+  const permission = deferred();
+  let stopped = 0;
+  const stream = { getTracks: () => [{ stop: () => stopped++ }] };
+  const view = composer({ getUserMedia: () => permission.promise });
+  view.microphone();
+  permission.resolve(stream);
+  await settled();
+  assert.equal(view.recordings.length, 1);
+  assert.equal(view.recordings[0].state, 'recording');
+  assert.equal(stopped, 0);
+  view.unmount();
+  assert.equal(view.recordings[0].state, 'inactive');
+  assert.equal(stopped, 1);
+});
+
+test('composer drafts persist only for the same account and bot', () => {
+  const storage = new Map([['connect-bots:draft:bot', 'Legacy private draft']]);
+  const alice = composer({ draftScope: 'user-alice', storage });
+  assert.equal(alice.draft(), '', 'unscoped legacy drafts are never loaded by an account');
+  alice.edit('Alice private draft');
+  assert.equal(alice.draft(), 'Alice private draft');
+
+  const bob = composer({ draftScope: 'user-bob', storage });
+  assert.equal(bob.draft(), '', 'another account cannot load the draft for the same bot id');
+  bob.edit('Bob private draft');
+  assert.equal(bob.draft(), 'Bob private draft');
+
+  assert.equal(composer({ draftScope: 'user-alice', storage }).draft(), 'Alice private draft');
+  assert.equal(composer({ draftScope: 'user-bob', storage }).draft(), 'Bob private draft');
+  assert.equal(composer({ draftScope: 'user-alice', botId: 'another-bot', storage }).draft(), '');
+});
+
+test('composer without an account identity cannot read or persist a draft', () => {
+  const storage = new Map([['connect-bots:draft:bot', 'Legacy private draft']]);
+  const anonymous = composer({ draftScope: '', storage });
+  assert.equal(anonymous.draft(), '');
+  anonymous.edit('Not stored');
+  assert.equal(anonymous.draft(), 'Not stored');
+  assert.deepEqual(Array.from(storage), [['connect-bots:draft:bot', 'Legacy private draft']]);
+});
 
 test('suspending a retained mobile composer releases popup focus and keeps draft files', async () => {
   const view = composer();

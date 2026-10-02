@@ -1,5 +1,6 @@
 import { Plus, Settings2, LogOut, Crown, Send } from "lucide-react";
 import type { Bot, Event } from "../lib/types";
+import type { StudioUser } from "../lib/api";
 import type { ThemePreference } from "../lib/theme";
 import {
   isWorking,
@@ -138,6 +139,7 @@ export default function BotRoster({
   theme,
   onLogout,
   connection,
+  user,
   mobileHidden = false,
 }: {
   bots: Bot[];
@@ -150,6 +152,7 @@ export default function BotRoster({
   theme: ThemePreference;
   onLogout: () => void;
   connection: string;
+  user?: StudioUser | null;
   mobileHidden?: boolean;
 }) {
   const sortedBots = [...bots].sort(
@@ -197,21 +200,20 @@ export default function BotRoster({
         </m.nav>
       </LayoutGroup>
       <footer className="roster-footer">
-        <div className="roster-connection">
+        <div className="roster-connection" title={`${user ? `Signed in as @${user.username} · ` : ""}${connection === "connected" ? "Workspace connected" : "Reconnecting"}`}>
           <span
             className={`status-dot ${connection === "connected" ? "is-connected" : "is-reconnecting"}`}
           />
           <AnimatePresence initial={false} mode="wait">
             <m.span
-              key={connection === "connected" ? "connected" : "reconnecting"}
+              key={`${user?.id || ""}:${connection === "connected" ? "connected" : "reconnecting"}`}
+              className="roster-connection-copy"
               variants={fade}
               initial="hidden"
               animate="visible"
               exit="exit"
             >
-              {connection === "connected"
-                ? "Workspace connected"
-                : "Reconnecting"}
+              {user ? `@${user.username} · ${connection === "connected" ? "Connected" : "Reconnecting"}` : connection === "connected" ? "Workspace connected" : "Reconnecting"}
             </m.span>
           </AnimatePresence>
         </div>

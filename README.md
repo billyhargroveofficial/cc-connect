@@ -4,6 +4,8 @@ This fork includes **Connect Bots**: persistent Codex and Pi bots with independe
 workspaces, a coordinator, and a responsive React web app. Conversations retain
 searches, tools, reasoning summaries, subagents and native goals. Instructions,
 skills, voice input and optional Telegram connections are managed in the app.
+Username/password accounts let several trusted users share one host, each with
+their own bots, conversation history, instructions and workspace folders.
 
 See [Connect Bots documentation](docs/connect-bots/README.md) for setup,
 [deployment](docs/connect-bots/DEPLOYMENT.md) and

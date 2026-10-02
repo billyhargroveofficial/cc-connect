@@ -11,6 +11,35 @@ with `no_web`, and runs race-enabled tests for `bots`, `core`, `agent/codex`,
 `agent/pi` and `cmd/connect-bots`. It includes core CUJ tests and does not skip
 product tests. Building the old web dashboard is not required.
 
+## Account authentication and workspace isolation
+
+The multi-user change replaces normal token login with username/password
+registration, server-side sessions and account-scoped workspaces. Its focused
+regression suites cover password validation and persistence, session revocation,
+fresh and legacy owner claims, cross-account bot/file/event access, internal tool
+dispatch and private account runtime configuration. Frontend tests cover account
+forms and clearing stale workspace state when sessions or identities change.
+Account-binding regressions must reject missing or mismatched request bindings
+with `account_changed`, including stale-tab mutations, file/SSE reads and logout.
+
+Run these checks for the account change, followed by the full product gate:
+
+```sh
+go test -race ./bots ./cmd/connect-bots
+pnpm --dir studio test
+pnpm --dir studio build
+make -f Makefile.connect-bots check
+go test ./core/ -run TestCUJ
+```
+
+Browser verification should register two accounts on a disposable host, sign out
+and back in, check that bots, instructions, skills, uploads and event streams stay
+within their account, and exercise the mobile forms. Check legacy migration with
+an existing valid owner cookie separately: it must retain the root workspace,
+while an anonymous registration receives a new folder. Tests of browser/API
+isolation do not establish an operating-system sandbox; harnesses still share
+the host Unix user and Codex/provider credentials.
+
 ## Upstream suite and external CLIs
 
 ```sh
@@ -48,10 +77,10 @@ Codex app-server. The final compaction-to-goal regression also passed the full
 
 | Check | Result |
 | --- | --- |
-| `make -f Makefile.connect-bots check` completed run | PASS: 69 frontend tests, TypeScript/Vite build, all-package Go vet and product/core/adapter/command tests with the race detector |
+| `make -f Makefile.connect-bots check` completed run | PASS: 163 frontend tests, TypeScript/Vite build, all-package Go vet and product/core/adapter/command tests with the race detector |
 | Explicitly limited all-package Go suite | PASS with `CI=1`, `no_web` and the single Claude constructor exception shown above |
 | New product workflow checked by `actionlint` | PASS |
-| Latest frontend activity/composer tests and build | PASS: 69 tests and production build, including exact compaction correlation, request-lifetime spinner and preservation of drafts/files added during an in-flight send |
+| Latest frontend activity/composer tests and build | PASS: 163 tests and production build, including multi-account identity races, exact compaction correlation, request-lifetime spinner and preservation of drafts/files added during an in-flight send |
 
 ## Dedicated Codex runtime verification
 

@@ -7,11 +7,22 @@ Only optional native-event/RPC/tool capabilities are added to existing adapters.
 
 Each bot owns one directory, AGENTS.md, `.agents/skills/`, `tmp/`, and durable
 conversation history. Shared application instructions and skills live in a
-separate `user/` directory. Native Codex/Pi user instructions remain available.
-There is one owner per installation, not a new multi-tenant cloud platform.
+separate `user/` directory within its account. The host account router resolves
+the signed-in account to a separate Store, Workspace, Runtime, maintenance worker
+and Telegram manager. Bot IDs, files, event cursors and tools are scoped through
+that workspace; a browser cannot select a different tenant with a request field.
 
-Connect Bots starts and owns one dedicated Codex app-server. Every product Codex
-session, including junior-model maintenance, connects to its concrete endpoint.
+The owner's workspace remains at the original data root. Additional accounts use
+`<data>/users/user_<random>/`; usernames never form filesystem paths. The owner
+retains its native Codex/Pi skills and environment-backed Telegram connections.
+Other accounts have private product skills and Pi configuration, and their
+editors do not expose the owner's native catalogs. Startup preloads persisted
+accounts so their Telegram connections and maintenance resume without a browser
+login.
+
+Connect Bots starts and owns one dedicated Codex app-server shared by the host's
+accounts. Every product Codex session, including junior-model maintenance,
+connects to its concrete endpoint.
 The default uses a private Unix socket; Windows uses loopback WebSocket. Native
 authentication, user instructions and skills still come from the inherited
 Codex home, while SQLite state and logs live under `<data>/codex/`. An explicitly
@@ -19,6 +30,12 @@ configured external endpoint must be dedicated to this product; `managed:` and
 an implicit shared-daemon fallback are rejected. If the owned child exits, the
 HTTP process exits so its supervisor can restart it. Shutdown closes runtime
 sessions before stopping the owned app-server.
+
+Account boundaries protect the browser/API data model, not arbitrary agent shell
+commands. Harnesses run as the same Unix user with the host's Codex/provider
+credentials and filesystem permissions. The shared Codex server also retains its
+native host configuration. This deployment model assumes trusted users; it does
+not provide separate OS sandboxes or per-account inference credentials.
 
 The coordinator is an ordinary persistent bot with list, send, status, and
 create-bot tools. Calls and results stay in the conversation journal. Backend
@@ -31,9 +48,9 @@ copies remain outside `tmp/`; original paths never enter the public message.
 
 State is written atomically to owner-only JSON files. Conversation events append
 to JSONL with monotonically increasing sequence numbers. SSE replays from a
-cursor and supports independent browsers. A lost connection never resubmits a
-prompt. After a server restart, interrupted work is marked interrupted, rather
-than silently repeated.
+workspace cursor and supports independent browsers. A lost connection never
+resubmits a prompt. After a server restart, interrupted work is marked
+interrupted, rather than silently repeated.
 
 The runtime retains complete scoped native events alongside legacy normalized
 events. Thinking means provider-exposed reasoning summaries. Goals and ultra
@@ -43,9 +60,11 @@ where item timing is available.
 
 Telegram is an optional surface over the same bot session; it uses cc-connect's
 existing platform adapter and dedicated, explicitly enabled tokens supplied by
-environment-variable name. Existing Telegram services are not imported or taken
-over. Voice is proxied to an OpenAI-compatible Flov transcription endpoint;
-browser microphone recording needs HTTPS, and audio upload remains available.
+environment-variable name for the owner. Additional accounts cannot read the
+host's environment-backed Telegram tokens. Existing Telegram services are not
+imported or taken over. Voice is proxied to an OpenAI-compatible Flov transcription
+endpoint; browser microphone recording needs HTTPS, and audio upload remains
+available.
 
 Daily maintenance inventories only each bot's temporary directory using the
 configured junior model. Durable instructions, skills, uploads, and artifacts are
@@ -54,17 +73,40 @@ is introduced.
 
 ## HTTP contract
 
-All APIs are under `/api/studio`. JSON errors are `{error:string}`. Owner login
-uses an HttpOnly cookie; SSE and same-origin requests share it. Mutation requests
-check the Origin. The deployment token is read from environment or an owner-only
-local file and never returned by the API.
+All APIs are under `/api/studio`. JSON errors are `{error:string}`. Account login
+uses an opaque HttpOnly, SameSite Strict cookie with a 30-day absolute lifetime;
+HTTPS adds Secure. Only a SHA-256 session digest is persisted, and logout revokes
+the session and closes its active requests, including SSE. Mutation requests
+check the Origin. Login and registration have rate and KDF concurrency limits.
+
+`auth/accounts.json` stores accounts, bcrypt password hashes (cost 12 over a
+SHA-256 password digest) and session digests, with permissions `0600` in a `0700`
+directory. Usernames are normalized lowercase ASCII, 3–32 characters, using
+letters, digits, `.`, `_` or `-` and starting with a letter or digit; passwords are
+8–128 bytes and are not trimmed.
+The client clears workspace state and event cursors when the account changes.
+
+Protected workspace requests must send `X-Connect-Bots-Account` with the signed-in
+user ID. EventSource and direct file GETs instead pass `expectedAccount` in the
+query string. The binding must match the session account; a missing or mismatched
+binding returns HTTP 409 with `code: "account_changed"`. Logout is bound as well,
+so an old tab cannot mutate or sign out a newly selected account using its shared
+browser cookie.
+
+On a fresh installation the first registration claims the root workspace. An
+upgraded workspace requires a valid legacy owner cookie or a one-time
+`accessKey` on registration to claim that root. Anonymous registrations on an
+upgraded host receive a new workspace. `auth/workspace.json` persists this policy
+across restarts. The legacy token is never normal account authentication and is
+never returned by the API.
 
 - `GET /health`: unauthenticated liveness.
-- `POST /login` `{token}`; `POST /logout`; `GET /session`.
+- `POST /login` `{username,password}`; `POST /register` `{username,password,accessKey?}`; `POST /logout`.
+- `GET /session` -> `{authenticated,user?:{id,username},registrationAllowed,setupRequired?,legacyClaimAvailable?}`.
 - `GET /bots` -> `{bots:Bot[]}`; `POST /bots` Bot fields -> Bot.
 - `GET /bots/:id` -> Bot; `PATCH /bots/:id` partial Bot; `DELETE` archives bot.
 - `GET /bots/:id/events?after=seq` -> `{events:Event[]}`.
-- `GET /events?after=seq` SSE event `event`, data Event (global sequence).
+- `GET /events?after=seq` SSE event `event`, data Event (account workspace sequence).
 - `POST /bots/:id/messages` `{text,attachments?}` -> `{turnId}` (202).
 - `POST /bots/:id/stop`; `POST /bots/:id/permission` `{requestId,behavior,updatedInput?,message?}`.
 - `GET /capabilities?botId=...` -> Capabilities for the selected bot; `GET /bots/:id/goal`; `PUT` native goal fields; `DELETE`.
@@ -78,6 +120,11 @@ local file and never returned by the API.
 - `POST /bots/:id/uploads` multipart `file` -> Attachment; `GET /bots/:id/files/:attachmentId`.
 - `POST /transcribe` multipart `file` -> `{text}`.
 - `GET /maintenance` -> settings and last reports; `PATCH` settings; `POST /maintenance/run`.
+
+Every protected route dispatches to the workspace from the authenticated account,
+including capabilities, file downloads and SSE. The loopback-only Pi bridge at
+`POST /internal/tools` uses a separate random internal token per workspace, never
+a browser credential; its token selects the workspace before resolving a bot ID.
 
 Event types: `message` ({role,content,attachments,source}), `native` (core.NativeEvent),
 `agent` (normalized core.Event with error converted to string), `turn`

@@ -11,22 +11,57 @@ import type {
   Skill,
 } from "./types";
 const BASE = "/api/studio";
+export interface StudioUser {
+  id: string;
+  username: string;
+}
+export interface StudioSession {
+  authenticated: boolean;
+  user?: StudioUser;
+  registrationAllowed: boolean;
+  legacyClaimAvailable?: boolean;
+  setupRequired?: boolean;
+}
+export interface AccountCredentials {
+  username: string;
+  password: string;
+}
+let activeAccount: string | null = null;
+const accountChangedListeners = new Set<(accountId: string) => void>();
+const publicPaths = new Set(["/session", "/login", "/register", "/health"]);
+export function setApiAccount(accountId: string | null) { activeAccount = accountId; }
+export function onApiAccountChanged(listener: (accountId: string) => void) {
+  accountChangedListeners.add(listener);
+  return () => { accountChangedListeners.delete(listener); };
+}
 export class ApiError extends Error {
   status: number;
+  code?: string;
   constructor(
     message: string,
     status: number,
+    code?: string,
   ) {
     super(message);
     this.status = status;
+    this.code = code;
     this.name = "ApiError";
   }
+}
+export function isAccountChanged(error: unknown): error is ApiError {
+  return error instanceof ApiError && error.code === "account_changed";
 }
 export async function request<T>(
   path: string,
   options: RequestInit = {},
+  expectedAccount?: string,
 ): Promise<T> {
   const headers = new Headers(options.headers);
+  const protectedPath = !publicPaths.has(path.split("?")[0]);
+  const accountId = expectedAccount || activeAccount;
+  if (protectedPath && accountId) headers.set("X-Connect-Bots-Account", accountId);
+  else if (protectedPath && path !== "/logout")
+    throw new ApiError("Sign in again to open this workspace.", 401);
   if (
     options.body &&
     !(options.body instanceof FormData) &&
@@ -57,23 +92,28 @@ export async function request<T>(
         : response.status >= 500
           ? "The server is temporarily unavailable. Please try reconnecting."
           : "The request could not be completed.";
-    throw new ApiError(error, response.status);
+    const code = data && typeof data === "object" && "code" in data ? String(data.code) : undefined;
+    if (code === "account_changed" && accountId && accountId === activeAccount)
+      for (const listener of accountChangedListeners) listener(accountId);
+    throw new ApiError(error, response.status, code);
   }
   return data as T;
 }
-function json<T>(path: string, method: string, body?: unknown) {
+function json<T>(path: string, method: string, body?: unknown, expectedAccount?: string) {
   return request<T>(path, {
     method,
     body: body === undefined ? undefined : JSON.stringify(body),
-  });
+  }, expectedAccount);
 }
 const botPath = (id: string) => `/bots/${encodeURIComponent(id)}`;
 const scopePath = (id?: string) => (id ? botPath(id) : "/user");
 export const api = {
-  session: () =>
-    request<{ authenticated?: boolean; [key: string]: unknown }>("/session"),
-  login: (token: string) => json<void>("/login", "POST", { token }),
-  logout: () => json<void>("/logout", "POST"),
+  session: () => request<StudioSession>("/session"),
+  login: (credentials: AccountCredentials) =>
+    json<StudioSession>("/login", "POST", credentials),
+  register: (credentials: AccountCredentials) =>
+    json<StudioSession>("/register", "POST", credentials),
+  logout: (expectedAccount?: string) => json<void>("/logout", "POST", undefined, expectedAccount),
   bots: () => request<{ bots: Bot[] }>("/bots"),
   createBot: (fields: Partial<Bot>) => json<Bot>("/bots", "POST", fields),
   updateBot: (id: string, fields: Partial<Bot>) =>
@@ -160,10 +200,19 @@ export const api = {
   runMaintenance: () => json<Maintenance>("/maintenance/run", "POST"),
 };
 export function fileURL(botId: string, attachment: Attachment) {
-  return (
+  return accountURL(
     attachment.url ||
     `${BASE}${botPath(botId)}/files/${encodeURIComponent(attachment.id)}`
   );
+}
+export function accountURL(path: string) {
+  if (!activeAccount) return path;
+  const origin = typeof location === "undefined" ? "http://connect-bots.local" : location.origin;
+  let url: URL;
+  try { url = new URL(path, origin); } catch { return path; }
+  if (url.origin !== origin || !url.pathname.startsWith(`${BASE}/`)) return path;
+  url.searchParams.set("expectedAccount", activeAccount);
+  return path.startsWith("/") ? `${url.pathname}${url.search}${url.hash}` : url.toString();
 }
 export function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : "Something went wrong.";

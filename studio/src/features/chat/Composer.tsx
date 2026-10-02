@@ -26,15 +26,17 @@ interface Upload {
   attachment?: Attachment;
   error?: string;
 }
-function initialDraft(id: string) {
+function initialDraft(scope: string, id: string) {
+  if (!scope) return "";
   try {
-    return localStorage.getItem(`connect-bots:draft:${id}`) || "";
+    return localStorage.getItem(`connect-bots:draft:${scope}:${id}`) || "";
   } catch {
     return "";
   }
 }
 export default function Composer({
   bot,
+  draftScope,
   capabilities,
   busy,
   onSend,
@@ -45,6 +47,7 @@ export default function Composer({
   suspended = false,
 }: {
   bot: Bot;
+  draftScope: string;
   capabilities: Capabilities | null;
   busy: boolean;
   onSend: (text: string, attachments: Attachment[]) => Promise<void>;
@@ -56,7 +59,7 @@ export default function Composer({
 }) {
   const present = useIsPresent();
   const reducedMotion = useReducedMotion();
-  const [text, setText] = useState(() => initialDraft(bot.id));
+  const [text, setText] = useState(() => initialDraft(draftScope, bot.id));
   const [uploads, setUploads] = useState<Upload[]>([]);
   const [sending, setSending] = useState(false);
   const [transcribing, setTranscribing] = useState(false);
@@ -75,6 +78,10 @@ export default function Composer({
   const recorder = useRef<MediaRecorder | null>(null);
   const stream = useRef<MediaStream | null>(null);
   const audioChunks = useRef<Blob[]>([]);
+  const microphoneLifecycle = useRef({ epoch: 0, active: true, present, draftScope, botId: bot.id });
+  microphoneLifecycle.current.present = present;
+  microphoneLifecycle.current.draftScope = draftScope;
+  microphoneLifecycle.current.botId = bot.id;
   function closeActions() {
     setActionsOpen(false);
     setModelPickerOpen(false);
@@ -90,7 +97,7 @@ export default function Composer({
   }, [suspended]);
   useEffect(() => {
     try {
-      localStorage.setItem(`connect-bots:draft:${bot.id}`, text);
+      if (draftScope) localStorage.setItem(`connect-bots:draft:${draftScope}:${bot.id}`, text);
     } catch {
       /* Private browsers may disable persistence. */
     }
@@ -103,23 +110,27 @@ export default function Composer({
         textarea.current.style.overflowY = "hidden";
       }
     }
-  }, [text, bot.id, recording]);
+  }, [text, bot.id, draftScope, recording]);
   useEffect(() => {
     if (!recording) return;
     setElapsed(0);
     const timer = setInterval(() => setElapsed((t) => t + 1), 1000);
     return () => clearInterval(timer);
   }, [recording]);
-  useEffect(
-    () => () => {
+  useEffect(() => {
+    const lifecycle = microphoneLifecycle.current;
+    lifecycle.epoch++;
+    lifecycle.active = present;
+    return () => {
+      lifecycle.active = false;
+      lifecycle.epoch++;
       if (recorder.current?.state === "recording") {
         recorder.current.onstop = null;
         recorder.current.stop();
       }
       stream.current?.getTracks().forEach((track) => track.stop());
-    },
-    [],
-  );
+    };
+  }, [draftScope, bot.id, present]);
   const pendingUploads = uploads.some(
     (upload) => !upload.attachment && !upload.error,
   );
@@ -212,10 +223,21 @@ export default function Composer({
       );
       return;
     }
+    const lifecycle = microphoneLifecycle.current;
+    const epoch = lifecycle.epoch;
+    const current = () => lifecycle.active && lifecycle.present && lifecycle.epoch === epoch
+      && lifecycle.draftScope === draftScope && lifecycle.botId === bot.id;
     try {
-      stream.current = await navigator.mediaDevices.getUserMedia({
+      const grantedStream = await navigator.mediaDevices.getUserMedia({
         audio: true,
       });
+      // Permission can resolve after sign-out, a bot switch, or an exit
+      // animation. The old composer must never start an invisible recorder.
+      if (!current()) {
+        grantedStream.getTracks().forEach((track) => track.stop());
+        return;
+      }
+      stream.current = grantedStream;
       const mime = ["audio/webm;codecs=opus", "audio/mp4", "audio/webm"].find(
         (type) => MediaRecorder.isTypeSupported(type),
       );
@@ -242,6 +264,7 @@ export default function Composer({
       media.start();
       setRecording(true);
     } catch (error) {
+      if (!current()) return;
       stream.current?.getTracks().forEach((track) => track.stop());
       onError(
         error instanceof DOMException && error.name === "NotAllowedError"

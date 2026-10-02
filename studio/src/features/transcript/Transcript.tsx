@@ -13,6 +13,7 @@ import rehypeKatex from 'rehype-katex';
 import type { Bot, Event as JournalEvent } from '../../lib/types';
 import Avatar from '../../components/Avatar';
 import { botMessagePresentation } from '../../lib/events';
+import { accountURL } from '../../lib/api';
 import {
   AnimatePresence, controlMotion, fade, fadeUp, m, motionTransition,
   rowMotion, softControlMotion, useIsPresent, useReducedMotion,
@@ -115,18 +116,19 @@ export function Markdown({ content }: { content: string }) {
   return <div className="transcript-markdown"><ReactMarkdown
     remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeHighlight, [rehypeKatex, { strict: false }]]}
     components={{
-      a: ({ href, children }) => <a href={href} target="_blank" rel="noreferrer noopener">{children}<ArrowUpRight size={11} className="transcript-link-arrow" /></a>,
+      a: ({ href, children }) => <a href={href ? accountURL(href) : href} target="_blank" rel="noreferrer noopener">{children}<ArrowUpRight size={11} className="transcript-link-arrow" /></a>,
       pre: ({ children }) => <div className="transcript-code-block"><CopyButton content={codeText(children)} label="Copy code" /><pre>{children}</pre></div>,
       table: ({ children }) => <div className="transcript-table-scroll"><table>{children}</table></div>,
-      img: ({ src, alt }) => <a href={src} target="_blank" rel="noreferrer noopener"><img src={src} alt={alt || 'Illustration'} loading="lazy" /></a>,
+      img: ({ src, alt }) => <a href={src ? accountURL(src) : src} target="_blank" rel="noreferrer noopener"><img src={src ? accountURL(src) : src} alt={alt || 'Illustration'} loading="lazy" /></a>,
     }}
   >{content}</ReactMarkdown></div>;
 }
 
 function attachmentUrl(botId: string, attachment: TranscriptAttachment) {
-  return attachment.id
+  const url = attachment.id
     ? `/api/studio/bots/${encodeURIComponent(botId)}/files/${encodeURIComponent(attachment.id)}`
     : safeUrl(attachment.url || '', true);
+  return url ? accountURL(url) : url;
 }
 
 function attachmentKind(mimeType: string) {

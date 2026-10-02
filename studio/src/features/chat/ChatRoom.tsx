@@ -43,6 +43,7 @@ function turnStats(events: Event[]) {
 }
 export default function ChatRoom({
   bot,
+  draftScope,
   events,
   capabilities,
   loading,
@@ -54,6 +55,7 @@ export default function ChatRoom({
   onHistory,
 }: {
   bot: Bot;
+  draftScope: string;
   events: Event[];
   capabilities: Capabilities | null;
   loading: boolean;
@@ -239,7 +241,8 @@ export default function ChatRoom({
       )}
       </AnimatePresence>
       <Composer
-        key={bot.id}
+        key={`${draftScope}:${bot.id}`}
+        draftScope={draftScope}
         suspended={suspended}
         bot={bot}
         capabilities={capabilities}

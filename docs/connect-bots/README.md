@@ -12,6 +12,8 @@ Telegram adapters. The original Go module and upstream attribution are retained.
 
 ## What you can do
 
+- Create an account and sign in with a username and password. Each account has
+  its own bots, history, folders, product instructions and skills.
 - Create persistent bots with independent folders and a shared coordinator.
 - Use Codex through a dedicated app-server, or Pi with a configured DeepSeek provider.
 - Change the model, effort and supported Codex service tier from the conversation.
@@ -20,11 +22,12 @@ Telegram adapters. The original Go module and upstream attribution are retained.
   progress shown in the conversation.
 - Inspect searches, tool calls, reasoning summaries and outputs. Completed
   activity folds away and stays available in the journal.
-- Edit each bot's `AGENTS.md` and skills, and the installation's shared
-  instructions and skills. Native harness user configuration still applies.
+- Edit each bot's `AGENTS.md` and skills, and the account's shared product
+  instructions and skills. The owner also manages native harness user skills.
 - Attach pictures, documents and archives, and let a bot publish its prepared
   files as downloadable conversation cards. Transcribe audio through Flov, and
-  optionally connect a bot to Telegram. Telegram and the web app use the same bot conversation.
+  optionally connect an owner's bot to Telegram. Telegram and the web app use the
+  same bot conversation.
 - Run daily temporary-file inventory with a junior model.
 
 Open “More actions” (⋯) → “Model settings” in the composer's toolbar to change
@@ -40,8 +43,10 @@ recent requests and published files live in a floating card on the right.
 On narrow screens, open it with the panel button in the upper-right corner;
 the upper-left arrow returns to the bot list on mobile.
 
-One installation belongs to one owner. Bots run with that owner's local harness
-credentials and filesystem access. No screen streaming or cloud control plane is
+One host can serve several accounts. The browser and API expose only the signed-in
+account's workspace. All bots still run as the same operating-system user and use
+the host's inference credentials; this is logical isolation for trusted users,
+not an operating-system sandbox. No screen streaming or cloud control plane is
 required.
 
 ## Build and run
@@ -59,16 +64,21 @@ make -f Makefile.connect-bots build
 
 Open `http://localhost:9830`. The server stores data outside the checkout, under
 `~/.local/share/connect-bots` by default, or `$XDG_DATA_HOME/connect-bots` when
-that variable is set. Read `<data-directory>/token` locally and enter it in the
-login screen; keep it out of URLs, screenshots and commits. See
-[Deployment](DEPLOYMENT.md) for LAN access and services.
+that variable is set. Choose **Create account** to register a username and
+password. On a fresh installation, the first account owns the root workspace;
+later accounts receive separate folders. Registration is enabled by default and
+can be closed with `--registration=false`. For an existing token-based
+installation, register in the browser that still has the old valid session to
+retain its bots and history. See [account setup and migration](DEPLOYMENT.md#accounts)
+and [Deployment](DEPLOYMENT.md) for LAN access and services.
 
 The built binary embeds the web app. Node.js is needed for building the frontend
 and for a Pi runtime; the Go web server itself does not need Node.js.
 
 Connect Bots starts one dedicated Codex app-server for all its Codex bots and
-maintenance. It uses the owner's existing Codex authentication, instructions and
-skills, with private SQLite state and logs under the product data directory.
+maintenance across accounts. It uses the owner's existing Codex authentication,
+instructions and skills, with private SQLite state and logs under the product
+data directory.
 Connect Bots owns that process and stops it during shutdown. See
 [deployment options](DEPLOYMENT.md#codex-runtime) for an external dedicated endpoint.
 
@@ -76,14 +86,19 @@ Connect Bots owns that process and stops it during shutdown. See
 
 Every bot has an `AGENTS.md`, `.agents/skills/` and `tmp/` inside its own
 workspace. Shared product instructions live in `user/AGENTS.md` and shared
-product skills in `user/skills/`. Turning off a skill for a bot does not rewrite
-the owner's global harness configuration.
+product skills in `user/skills/` within that account's workspace root. The owner's
+root stays at the data directory; other roots are under `users/user_<random>/`.
+Turning off a skill for a bot does not rewrite the owner's global harness
+configuration.
 
-The bot's skill list follows its selected backend: native Codex and Pi folders
-appear only for that harness, while product and project skills remain available
-to both. The global editor includes both native catalogs. Plugin-provided skills
+For the owner, the bot's skill list follows its selected backend: native Codex and
+Pi folders appear only for that harness, while product and project skills remain
+available to both. The global editor includes both native catalogs. Plugin-provided skills
 still follow the native harness configuration; their cache is not managed by
-this editor.
+this editor. Other accounts edit their own product and project skills and do not
+receive the host owner's native skill catalog. They use private Pi configuration
+and history; their default DeepSeek provider references the host's
+`DEEPSEEK_API_KEY` environment variable without copying its value into a file.
 
 Switching between Codex and Pi retains the visible product journal and transfers
 recent conversation context. Each harness keeps its own native thread ID; it

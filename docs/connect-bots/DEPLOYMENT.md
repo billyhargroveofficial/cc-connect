@@ -1,8 +1,9 @@
 # Deployment
 
 Connect Bots is one Go HTTP server with an embedded React app, local bot
-workspaces and a dedicated Codex app-server child. Default startup requires
-Codex CLI on `PATH`. Run it as the owner with authenticated Codex; Pi is optional.
+workspaces, username/password accounts and a dedicated Codex app-server child.
+Default startup requires Codex CLI on `PATH`. Run it as the host owner with
+authenticated Codex; Pi is optional.
 Harness executables, credentials and Flov are not bundled.
 
 ## Server options
@@ -17,19 +18,52 @@ Harness executables, credentials and Flov are not bundled.
 | `--flov-url` | `http://127.0.0.1:17432/v1/audio/transcriptions` | Complete transcription endpoint URL |
 | `--assets` | Embedded frontend | Serve a frontend build directory instead |
 | `--origins` | Same-origin requests | Additional allowed browser origins, comma separated |
+| `--registration` | `true` | Allow new accounts; use `--registration=false` to close registration |
 | `--version` | — | Print the binary version and exit |
 
-The server creates `<data>/token` with owner-only permissions on first start.
-Read it locally and enter it in the browser login form. `CONNECT_BOTS_TOKEN` can
-instead supply a deployment token through the server environment. Tokens are not
-returned through the API or included in startup logs. The browser receives an
-HttpOnly session cookie.
+## Accounts
+
+Open the app and choose **Create account**. Usernames are case-insensitive,
+3–32 ASCII characters and can contain letters, digits, `.`, `_` and `-`, starting
+with a letter or digit. Passwords are 8–128 bytes. On a fresh installation, the
+first account owns the root workspace; every later account receives its own
+`users/user_<random>/` workspace and a coordinator. Each account has independent
+bots, conversation history, uploads, instructions, product skills and maintenance
+settings. Sign in later with the username and password.
+
+Registration is enabled by default. Set `--registration=false` after creating
+the desired accounts to allow only existing users to sign in. Browsers receive
+opaque HttpOnly, SameSite Strict session cookies that expire after 30 days;
+HTTPS also sets Secure. Sessions survive a server restart. Signing out revokes
+that browser session and closes its open event stream. Requests stay bound to
+the account shown in their tab, so a stale tab cannot change or sign out another
+account after a switch.
+
+For an upgrade from token login, the existing workspace stays in place. Choose
+**Create account** in the browser with the old valid owner session; registration
+links the account to the existing bots, history and folders. A new browser without
+that session creates a separate workspace, even if it registers first. If the old
+session is unavailable, the host owner can claim the workspace once with
+`POST /api/studio/register` using `{username,password,accessKey}`, where `accessKey`
+is the legacy value from `<data>/token` or `CONNECT_BOTS_TOKEN`. Supply the same
+Origin as the app. Keep this value out of URLs, logs and commits. It is accepted
+only for claiming an unowned legacy workspace and cannot be used to sign in.
+Fresh installations do not create a login token.
+
+Accounts and session digests are stored in `auth/accounts.json`, not in bot
+instructions. Passwords are hashed with bcrypt; raw passwords and session tokens
+are not stored. `auth/workspace.json` preserves whether the root needed a legacy
+claim. Keep the whole `auth/` directory with backups and do not edit it while the
+server is running.
 
 The default install directory contains:
 
 ```text
 connect-bots/
-  token
+  auth/
+    accounts.json
+    workspace.json
+  token                         # legacy workspace claim only, if upgrading
   state.json
   events.jsonl
   codex/
@@ -44,18 +78,38 @@ connect-bots/
     .agents/skills/<skill-name>/SKILL.md
     tmp/
     uploads/
+  users/user_<random>/           # one root per additional account
+    state.json
+    events.jsonl
+    user/AGENTS.md
+    user/skills/<skill-name>/SKILL.md
+    .pi/agent/
+      models.json
+      settings.json
+    bots/<bot-id>/
+      AGENTS.md
+      .agents/skills/<skill-name>/SKILL.md
+      tmp/
+      uploads/
 ```
 
 Use a dedicated data directory outside the Git checkout. Codex authentication
 and user configuration remain in its existing home; the owned server's SQLite
-state and logs belong to the product directory. Pi uses its native user
-configuration and history. For a consistent backup, stop the service, copy the
-product data directory and preserve native harness history outside it when
-needed for full backend-session restoration.
+state and logs belong to the product directory. The owner retains native Pi
+configuration and history; additional accounts use private Pi state inside their
+workspace. For a consistent backup, stop the service, copy the whole product data
+directory and preserve the owner's native harness history outside it when needed
+for full backend-session restoration.
+
+Account separation is enforced by the app and API. All harnesses run as the same
+operating-system user and share the host's inference credentials and filesystem
+permissions. The shared Codex server retains native host configuration. Use this
+setup for trusted users; account folders are not a sandbox for arbitrary shell
+commands. Independent OS users or containers are needed for a stronger boundary.
 
 ## Codex runtime
 
-By default, Connect Bots launches one `codex app-server` for all of its Codex
+By default, Connect Bots launches one `codex app-server` for all accounts' Codex
 bots and maintenance. It overrides `sqlite_home` and `log_dir` to
 `<data>/codex/state` and `<data>/codex/log`. The inherited Codex home supplies the
 existing authentication, user instructions, skills and other user configuration.
@@ -91,7 +145,7 @@ Build with `make -f Makefile.connect-bots build`, then run:
 ```
 
 Open `http://<computer-LAN-IP>:9830` from a phone or laptop on the same network.
-The owner login applies to LAN connections too. Development uses the Vite
+Account login applies to LAN connections too. Development uses the Vite
 frontend on port 5173 with the Go API still on loopback port 9830; see the
 [development commands](README.md#development).
 
@@ -165,8 +219,13 @@ available. Remaining processes in the unit are killed only after the stop timeou
 
 Optional secrets and harness environment variables belong in
 `~/.config/connect-bots/environment`, with permissions `0600`. The service reads
-that file; it does not source interactive shell configuration. Pi can use its
-existing native provider configuration or an inherited `DEEPSEEK_API_KEY`.
+that file; it does not source interactive shell configuration. The owner's Pi
+bots can use existing native provider configuration. Additional accounts receive
+a private `.pi/agent/models.json` for DeepSeek Flash at the official Anthropic
+compatibility endpoint, referencing `DEEPSEEK_API_KEY` from the host environment;
+the key value is not copied into that file. Existing account-local Pi files are
+preserved. Set the environment variable on the service to enable this default
+provider for additional accounts.
 Codex authentication and user configuration are inherited by the dedicated child.
 
 For DeepSeek Flash with Pi, the verified provider uses the official Anthropic
@@ -211,17 +270,20 @@ container or another application server.
 
 For Telegram, create a dedicated bot token and make it available through a
 chosen server environment variable, such as `TELEGRAM_COORDINATOR_TOKEN`. Enter
-that variable's name and explicit allowed Telegram user IDs in the bot's settings,
-then enable the connection. Do not place the token itself in instructions or
+that variable's name and explicit allowed Telegram user IDs in the owner's bot
+settings, then enable the connection. Additional accounts cannot resolve host
+environment Telegram tokens. Do not place the token itself in instructions or
 skills. A token must have only one polling process; existing cc-connect Telegram
-services remain independent. The web app shows the connection status.
+services remain independent. The web app shows the connection status. Account
+workspaces load on service startup, so existing connections do not depend on an
+open browser.
 
 For voice, install `ffmpeg`, run Flov's OpenAI-compatible transcription endpoint
 on the server and point `--flov-url` at its full transcription URL. The browser
 uploads audio to Connect Bots, which converts it to WAV and transcribes it on the
 server; the phone does not need direct access to Flov. Recordings and uploads are
 limited to 25 MiB per file. Transcription fills a draft and does not submit a
-message until the owner sends it.
+message until the user sends it.
 
 Daily maintenance uses the configured junior model and retention period to
 inventory each bot's `tmp/`. It keeps reports and never includes instructions,

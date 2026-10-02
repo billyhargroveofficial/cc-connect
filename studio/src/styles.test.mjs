@@ -5,6 +5,7 @@ import postcss from 'postcss';
 
 const styles = postcss.parse(readFileSync(new URL('./styles.css', import.meta.url), 'utf8'));
 const island = postcss.parse(readFileSync(new URL('./features/chat/bot-island.css', import.meta.url), 'utf8'));
+const composer = postcss.parse(readFileSync(new URL('./features/chat/minimal-composer.css', import.meta.url), 'utf8'));
 
 function declarations(css, selector) {
   const values = new Map();
@@ -65,4 +66,9 @@ test('the animated roster status dot is optically centered with its label', () =
   assert.equal(pip.get('display'), 'inline-block');
   assert.equal(label.get('text-overflow'), 'ellipsis',
     'centering the status dot must preserve truncation for long status labels');
+});
+
+test('the effort heading shares one continuous popover surface', () => {
+  assert.equal(declarations(composer, '.model-select-current').get('background'), 'transparent',
+    'the selected model must not draw a second rectangle inside the effort popover');
 });

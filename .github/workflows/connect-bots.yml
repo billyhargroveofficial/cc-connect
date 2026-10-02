@@ -1,0 +1,31 @@
+name: Connect Bots
+
+on:
+  push:
+    branches: [connect-bots]
+  pull_request:
+    branches: [telegram-rich]
+
+permissions:
+  contents: read
+
+jobs:
+  product:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+          cache-dependency-path: studio/pnpm-lock.yaml
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Check product
+        run: make -f Makefile.connect-bots check
+      - name: Build embedded application
+        run: go build -trimpath -o /tmp/connect-bots ./cmd/connect-bots

@@ -1,0 +1,8 @@
+allowBuilds:
+  esbuild: true
+minimumReleaseAgeExclude:
+  - framer-motion@13.5.0
+  - motion-dom@13.5.0
+  - motion-utils@13.5.0
+onlyBuiltDependencies:
+  - esbuild

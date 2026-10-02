@@ -1,0 +1,292 @@
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { ComponentProps, ReactNode, Ref, RefObject } from "react";
+import { FileText, Image, MessageSquare, Monitor, Send, Settings2, Target, X } from "lucide-react";
+import Avatar from "../../components/Avatar";
+import { fileURL } from "../../lib/api";
+import { botMessagePresentation, telegramLabel, telegramTitle } from "../../lib/events";
+import type { Attachment, Bot, Capabilities, Event, NodeInfo } from "../../lib/types";
+import { AnimatePresence, m, useIsPresent, useReducedMotion, fade, popoverMotion, controlMotion, motionSpring } from "../../lib/motion";
+import { BotSettingsPanel } from "../settings/SettingsDrawer";
+import { useDialogFocus } from "./ModelPicker";
+import BotChangeHistory from "./BotChangeHistory";
+import "./bot-island.css";
+
+const desktopQuery = "(min-width: 1100px)";
+const avatarPriorityStatuses = new Set(["blocked", "waiting", "interrupted", "failed", "error"]);
+
+export function focusWithoutScroll(target?: HTMLElement | null) {
+  target?.focus({ preventScroll: true });
+}
+
+function IslandShell(props: ComponentProps<typeof m.aside>) {
+  const present = useIsPresent();
+  return <m.aside {...props}
+    inert={!present || props.inert}
+    aria-hidden={!present || props["aria-hidden"]}
+    style={{ ...props.style, pointerEvents: present ? props.style?.pointerEvents : "none" }} />;
+}
+
+function IslandPane({ className, children, ref }: { className: string; children: ReactNode; ref?: Ref<HTMLDivElement> }) {
+  const present = useIsPresent();
+  return <m.div ref={ref} className={className} variants={fade} initial="hidden" animate="visible" exit="exit"
+    inert={!present} aria-hidden={!present || undefined}>{children}</m.div>;
+}
+
+function attachmentURL(value: unknown): string | undefined {
+  if (typeof value !== "string" || !value) return undefined;
+  if (value.startsWith("/") && !value.startsWith("//") && !value.includes("\\")) return value;
+  try {
+    const url = new URL(value);
+    return ["http:", "https:"].includes(url.protocol) ? url.href : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function botIslandContent(events: Event[], botId: string) {
+  const requests: { seq: number; label: string }[] = [];
+  const files: Attachment[] = [];
+  const seenRequests = new Set<string>();
+  const seenFiles = new Set<string>();
+  const seenEvents = new Set<number>();
+  for (let index = events.length - 1; index >= 0; index--) {
+    const event = events[index];
+    if (event.botId !== botId || event.type !== "message" || seenEvents.has(event.seq)) continue;
+    seenEvents.add(event.seq);
+    const data = event.data;
+    if (data.role === "user" && data.source !== "goal_context" && requests.length < 3) {
+      const content = typeof data.content === "string" ? data.content : "";
+      const delegated = botMessagePresentation(content, String(data.source || ""));
+      const label = (delegated ? `${delegated.sender}: ${delegated.content}` : content)
+        .replace(/\s+/g, " ").trim();
+      if (label && !seenRequests.has(label)) {
+        seenRequests.add(label);
+        requests.push({ seq: event.seq, label });
+      }
+    }
+    if (data.role === "assistant" && Array.isArray(data.attachments)) {
+      for (const value of data.attachments) {
+        if (!value || typeof value !== "object" || Array.isArray(value)) continue;
+        const attachment = value as Record<string, unknown>;
+        const id = typeof attachment.id === "string" ? attachment.id : "";
+        const url = id ? undefined : attachmentURL(attachment.url);
+        const key = id || url;
+        if (!key || seenFiles.has(key) || files.length >= 3) continue;
+        seenFiles.add(key);
+        files.push({
+          id,
+          name: typeof attachment.name === "string" && attachment.name ? attachment.name : "File",
+          mimeType: typeof attachment.mimeType === "string" ? attachment.mimeType : "",
+          url,
+        });
+      }
+    }
+    if (requests.length === 3 && files.length === 3) break;
+  }
+  return { requests, files };
+}
+
+function BotIsland({
+  bot, events, history, status, working, supportsGoal, hasGoal, onGoal,
+  open, suspended, onOpen, onClose, triggerRef, capabilities, onBotChange, onArchive, node,
+}: {
+  bot: Bot;
+  events: Event[];
+  history: Event[];
+  status: string;
+  working: boolean;
+  supportsGoal: boolean;
+  hasGoal: boolean;
+  onGoal: () => void;
+  open: boolean;
+  suspended: boolean;
+  onOpen: () => void;
+  onClose: () => void;
+  triggerRef: RefObject<HTMLButtonElement | null>;
+  capabilities: Capabilities | null;
+  onBotChange: (bot: Bot) => void;
+  onArchive: (id: string) => void;
+  node?: NodeInfo;
+}) {
+  const [desktop, setDesktop] = useState(() =>
+    typeof window !== "undefined" && typeof window.matchMedia === "function"
+      ? window.matchMedia(desktopQuery).matches : false,
+  );
+  const dialog = useRef<HTMLDivElement>(null);
+  const settingsTrigger = useRef<HTMLButtonElement>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const reduced = useReducedMotion();
+  const visible = open || settingsOpen;
+  const overlay = visible && !desktop && !suspended;
+  const { requests, files } = useMemo(() => botIslandContent(events, bot.id), [events, bot.id]);
+  const avatarStatus = avatarPriorityStatuses.has(bot.status)
+    ? bot.status
+    : working ? "working" : bot.status;
+
+  useEffect(() => {
+    const media = window.matchMedia(desktopQuery);
+    const update = () => setDesktop(media.matches);
+    update();
+    media.addEventListener("change", update);
+    return () => media.removeEventListener("change", update);
+  }, []);
+
+  useEffect(() => {
+    if (!desktop) return;
+    const focused = document.activeElement;
+    if (focused === triggerRef.current || focused?.classList.contains("bot-island-close")) {
+      focusWithoutScroll(dialog.current?.querySelector<HTMLButtonElement>(".bot-island-action"));
+    }
+  }, [desktop, triggerRef]);
+
+  useEffect(() => {
+    if (dialog.current) dialog.current.inert = suspended || (!desktop && !overlay);
+  }, [desktop, overlay, suspended]);
+
+  useEffect(() => {
+    if (suspended) setSettingsOpen(false);
+  }, [suspended]);
+
+  const close = useCallback(() => {
+    if (!desktop && dialog.current) dialog.current.inert = true;
+    setSettingsOpen(false);
+    onClose();
+    window.setTimeout(() => focusWithoutScroll(triggerRef.current), 0);
+  }, [desktop, onClose, triggerRef]);
+
+  const closeSettings = useCallback(() => {
+    setSettingsOpen(false);
+    window.requestAnimationFrame(() => focusWithoutScroll(settingsTrigger.current));
+  }, []);
+
+  const openSettings = useCallback(() => {
+    if (!desktop && !open) onOpen();
+    setSettingsOpen(true);
+    window.requestAnimationFrame(() => {
+      focusWithoutScroll(dialog.current?.querySelector<HTMLButtonElement>(".cb-settings-icon-button"));
+    });
+  }, [desktop, open, onOpen]);
+
+  useEffect(() => {
+    if (!desktop || !settingsOpen || suspended) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      closeSettings();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [desktop, settingsOpen, suspended, closeSettings]);
+
+  function openAction(action: () => void) {
+    if (!overlay) {
+      action();
+      return;
+    }
+    if (dialog.current) dialog.current.inert = true;
+    onClose();
+    // Let the island's trap finish before the next dialog captures its return target.
+    window.setTimeout(() => {
+      focusWithoutScroll(triggerRef.current);
+      action();
+    }, 0);
+  }
+
+  useDialogFocus(overlay, dialog, settingsOpen ? closeSettings : close);
+
+  return (
+    <AnimatePresence initial={false}>
+    {(desktop || visible) && <IslandShell key="bot-island" className={`bot-island-shell${visible ? " is-open" : ""}${settingsOpen ? " is-settings" : ""}`}
+      variants={fade} initial={desktop ? false : "hidden"} animate="visible" exit="exit"
+      aria-label={settingsOpen ? "Bot settings" : "Bot details"} inert={suspended || (!desktop && !visible)}>
+      <m.div className="bot-island-backdrop" variants={fade} onClick={close} aria-hidden="true" />
+      <m.div className="bot-island-card" ref={dialog} tabIndex={-1}
+        layout={!reduced} layoutDependency={`${desktop}-${settingsOpen}-${bot.id}`} layoutScroll
+        variants={popoverMotion} initial={desktop ? false : "hidden"} animate="visible" exit="exit"
+        transition={{ layout: motionSpring.layout }} style={{ transformOrigin: "top right" }}
+        role={overlay ? "dialog" : undefined} aria-modal={overlay || undefined}
+        aria-label={overlay ? settingsOpen ? "Bot settings" : "Bot details" : undefined}>
+        <AnimatePresence initial={false} mode="popLayout" anchorX="right">
+        {settingsOpen ? (
+          <IslandPane key="settings" className="bot-island-settings">
+          <BotSettingsPanel key={bot.id} bot={bot} capabilities={capabilities}
+            onClose={closeSettings} onBotChange={onBotChange} onArchive={onArchive} />
+          </IslandPane>
+        ) : (
+          <IslandPane key="overview" className="bot-island-overview">
+            <m.button {...controlMotion} type="button" className="icon-button bot-island-close" onClick={close}
+              aria-label="Close bot details"><X size={18} /></m.button>
+            <div className="bot-island-profile">
+              <Avatar bot={bot} size={52} status={avatarStatus} />
+              <div className="bot-island-identity">
+                <strong>{bot.name}</strong>
+                <span className={`bot-island-status${working ? " is-working" : ""}`}>
+                  {working && <span className="bot-island-live-dot" aria-hidden="true" />}
+                  {status}
+                </span>
+              </div>
+            </div>
+            {node && <div className="bot-island-host" title={[node.name, node.hostname, node.os || node.platform].filter(Boolean).join(' · ')}>
+              <Monitor size={13} aria-hidden="true" /><span>{node.name}</span>{!node.online && <small>Offline</small>}
+            </div>}
+            {bot.role && <p className="bot-island-role" title={bot.role}>{bot.role}</p>}
+            <div className="bot-island-actions">
+              <m.button {...controlMotion} ref={settingsTrigger} type="button" className="bot-island-action" onClick={openSettings}
+                aria-label="Bot settings"><Settings2 size={16} />Settings</m.button>
+              {supportsGoal && (
+                <m.button {...controlMotion} type="button" className={`bot-island-action${hasGoal ? " has-goal" : ""}`}
+                  onClick={() => openAction(onGoal)} aria-label="Bot goal"
+                  title={hasGoal ? "View bot goal" : "Set bot goal"}>
+                  <Target size={16} />Goal{hasGoal && <span className="bot-island-goal-dot" aria-hidden="true" />}
+                </m.button>
+              )}
+            </div>
+            {bot.telegram?.enabled && (
+              <div className={`bot-island-telegram telegram-status-${bot.telegram.status || "configured"}`}
+                title={telegramTitle(bot.telegram)}>
+                <Send size={15} aria-hidden="true" />
+                <span>{telegramLabel(bot.telegram)}
+                  {bot.telegram.username && <small>@{bot.telegram.username}</small>}
+                </span>
+              </div>
+            )}
+            {requests.length > 0 && (
+              <section className="bot-island-section" aria-label="Recent tasks">
+                <h2>Recent tasks</h2>
+                <ul className="bot-island-list">
+                  {requests.map(request => (
+                    <li key={request.seq} className="bot-island-request">
+                      <MessageSquare size={15} aria-hidden="true" />
+                      <span title={request.label}>{request.label}</span>
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            )}
+            {files.length > 0 && (
+              <section className="bot-island-section" aria-label="Outputs">
+                <h2>Outputs</h2>
+                <ul className="bot-island-list">
+                  {files.map(file => (
+                    <li key={file.id || file.url}>
+                      <m.a {...controlMotion} className="bot-island-file" href={fileURL(bot.id, file)}
+                        target="_blank" rel="noreferrer noopener" title={file.name}>
+                        {file.mimeType.startsWith("image/") ? <Image size={16} aria-hidden="true" /> : <FileText size={16} aria-hidden="true" />}
+                        <span>{file.name}</span>
+                      </m.a>
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            )}
+            <BotChangeHistory key={bot.id} botId={bot.id} events={history} />
+          </IslandPane>
+        )}
+        </AnimatePresence>
+      </m.div>
+    </IslandShell>}
+    </AnimatePresence>
+  );
+}
+
+export default memo(BotIsland);

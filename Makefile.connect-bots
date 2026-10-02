@@ -1,0 +1,64 @@
+# Separate product targets keep the upstream cc-connect Makefile untouched.
+GO ?= go
+PNPM ?= pnpm
+BINARY ?= bin/connect-bots
+NODE_BINARY ?= bin/connect-bots-node
+NODE_RELEASE_DIR ?= dist/connect-bots
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || printf dev)
+LDFLAGS ?= -s -w -X main.version=$(VERSION)
+ADDR ?= 127.0.0.1:9830
+GO_TEST_FLAGS ?=
+
+.PHONY: all install-deps studio build build-node node-darwin-arm64 node-darwin-amd64 release-node-macos run dev-api dev-studio check check-upstream
+
+all: build
+
+install-deps:
+	$(PNPM) --dir studio install --frozen-lockfile
+
+studio: install-deps
+	$(PNPM) --dir studio run build
+
+build: studio
+	mkdir -p "$(dir $(BINARY))"
+	$(GO) build -trimpath -ldflags "$(LDFLAGS)" -o "$(BINARY)" ./cmd/connect-bots
+
+# Nodes are pure Go and do not import Studio or require Node.js/pnpm assets.
+build-node:
+	mkdir -p "$(dir $(NODE_BINARY))"
+	CGO_ENABLED=0 $(GO) build -trimpath -ldflags "$(LDFLAGS)" -o "$(NODE_BINARY)" ./cmd/connect-bots-node
+
+node-darwin-arm64:
+	mkdir -p "$(NODE_RELEASE_DIR)"
+	CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 $(GO) build -trimpath -ldflags "$(LDFLAGS)" -o "$(NODE_RELEASE_DIR)/connect-bots-node-darwin-arm64" ./cmd/connect-bots-node
+
+node-darwin-amd64:
+	mkdir -p "$(NODE_RELEASE_DIR)"
+	CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 $(GO) build -trimpath -ldflags "$(LDFLAGS)" -o "$(NODE_RELEASE_DIR)/connect-bots-node-darwin-amd64" ./cmd/connect-bots-node
+
+release-node-macos: node-darwin-arm64 node-darwin-amd64
+	mkdir -p "$(NODE_RELEASE_DIR)/.stage/darwin-arm64" "$(NODE_RELEASE_DIR)/.stage/darwin-amd64"
+	cp "$(NODE_RELEASE_DIR)/connect-bots-node-darwin-arm64" "$(NODE_RELEASE_DIR)/.stage/darwin-arm64/connect-bots-node"
+	cp "$(NODE_RELEASE_DIR)/connect-bots-node-darwin-amd64" "$(NODE_RELEASE_DIR)/.stage/darwin-amd64/connect-bots-node"
+	tar -czf "$(NODE_RELEASE_DIR)/connect-bots-node-darwin-arm64.tar.gz" -C "$(NODE_RELEASE_DIR)/.stage/darwin-arm64" connect-bots-node
+	tar -czf "$(NODE_RELEASE_DIR)/connect-bots-node-darwin-amd64.tar.gz" -C "$(NODE_RELEASE_DIR)/.stage/darwin-amd64" connect-bots-node
+	cd "$(NODE_RELEASE_DIR)" && if command -v sha256sum >/dev/null 2>&1; then sha256sum connect-bots-node-darwin-arm64 connect-bots-node-darwin-amd64 connect-bots-node-darwin-arm64.tar.gz connect-bots-node-darwin-amd64.tar.gz; else shasum -a 256 connect-bots-node-darwin-arm64 connect-bots-node-darwin-amd64 connect-bots-node-darwin-arm64.tar.gz connect-bots-node-darwin-amd64.tar.gz; fi > SHA256SUMS
+
+run: build
+	"$(abspath $(BINARY))" --addr "$(ADDR)"
+
+dev-api:
+	$(GO) run ./cmd/connect-bots --addr "$(ADDR)"
+
+dev-studio: install-deps
+	$(PNPM) --dir studio run dev
+
+check: studio
+	$(PNPM) --dir studio test
+	$(GO) vet -tags no_web ./...
+	$(GO) test -race ./bots ./core ./agent/codex ./agent/pi ./cmd/connect-bots ./cmd/connect-bots-node
+
+# The upstream suite includes legacy harnesses and their local CLI prerequisites.
+# CI uses their existing gates to skip real Cursor login/model/storage probes.
+check-upstream:
+	CI=1 PATH="$$HOME/.local/bin:$$PATH" $(GO) test -tags no_web $(GO_TEST_FLAGS) ./...

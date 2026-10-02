@@ -1,0 +1,18 @@
+[Unit]
+Description=Connect Bots persistent AI workspaces
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h
+Environment=PATH=%h/.local/bin:%h/bin:/usr/local/bin:/usr/bin:/bin
+EnvironmentFile=-%h/.config/connect-bots/environment
+ExecStart=%h/.local/bin/connect-bots --addr 127.0.0.1:9830
+UMask=0077
+KillMode=mixed
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target

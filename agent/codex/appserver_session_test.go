@@ -18,7 +18,7 @@ func TestAppServerSession_ApplyThreadRuntimeState(t *testing.T) {
 	s := &appServerSession{}
 	effort := "xhigh"
 
-	s.applyThreadRuntimeState("/tmp/project", "gpt-5.4", &effort)
+	s.applyThreadRuntimeState("/tmp/project", "gpt-5.4", &effort, nil)
 
 	if got := s.GetWorkDir(); got != "/tmp/project" {
 		t.Fatalf("GetWorkDir() = %q, want /tmp/project", got)

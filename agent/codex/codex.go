@@ -49,6 +49,7 @@ type Agent struct {
 	activeIdx       int      // -1 = no provider set
 	configEnv       []string // env vars from [projects.agent.options.env] — persists across SetSessionEnv calls
 	sessionEnv      []string
+	appServerNative appServerNativeOptions
 	mu              sync.RWMutex
 }
 
@@ -65,6 +66,21 @@ func New(opts map[string]any) (core.Agent, error) {
 	codexHome, _ := opts["codex_home"].(string)
 	systemPrompt, _ := opts["system_prompt"].(string)
 	appendPrompt, _ := opts["append_system_prompt"].(string)
+	developerInstructions, _ := opts["developer_instructions"].(string)
+	nativeEvents, _ := opts["native_events"].(bool)
+	appServerConfig, _ := opts["app_server_config"].(map[string]any)
+	var serviceTier *string
+	if value, configured := opts["service_tier"]; configured {
+		tier, ok := value.(string)
+		if !ok {
+			return nil, fmt.Errorf("codex: service_tier must be a string")
+		}
+		tier = strings.TrimSpace(tier)
+		serviceTier = &tier
+	}
+	if _, err := json.Marshal(appServerConfig); err != nil {
+		return nil, fmt.Errorf("codex: invalid app_server_config: %w", err)
+	}
 	mode = normalizeMode(mode)
 	backend = normalizeBackend(backend)
 	appServerURL = normalizeAppServerURL(appServerURL)
@@ -106,6 +122,12 @@ func New(opts map[string]any) (core.Agent, error) {
 		cliExtraArgs:    cliExtraArgs,
 		configEnv:       configEnv,
 		activeIdx:       -1,
+		appServerNative: appServerNativeOptions{
+			enabled:               nativeEvents,
+			config:                cloneAppServerMap(appServerConfig),
+			serviceTier:           serviceTier,
+			developerInstructions: strings.TrimSpace(developerInstructions),
+		},
 	}, nil
 }
 
@@ -159,6 +181,8 @@ func normalizeReasoningEffort(raw string) string {
 		return "xhigh"
 	case "max", "maximum":
 		return "max"
+	case "ultra":
+		return "ultra"
 	default:
 		return ""
 	}
@@ -478,6 +502,9 @@ func (a *Agent) StartSession(ctx context.Context, sessionID string) (core.AgentS
 	cliBin := a.cmd
 	cliExtraArgs := a.cliExtraArgs
 	workDir := a.workDir
+	native := a.appServerNative
+	native.config = cloneAppServerMap(native.config)
+	native.tools = cloneAppServerTools(native.tools)
 	// Order matters for MergeEnv override semantics (later wins):
 	//   1. configEnv — static env from [projects.agent.options.env]
 	//   2. providerEnv — per-provider keys (OPENAI_API_KEY etc.)
@@ -505,7 +532,7 @@ func (a *Agent) StartSession(ctx context.Context, sessionID string) (core.AgentS
 	}
 
 	if backend == "app_server" {
-		return newAppServerSession(ctx, appServerURL, workDir, model, reasoningEffort, mode, sessionID, baseURL, provName, extraEnv, codexHome, systemPrompt, appendPrompt)
+		return newAppServerSession(ctx, appServerURL, workDir, model, reasoningEffort, mode, sessionID, baseURL, provName, extraEnv, codexHome, systemPrompt, appendPrompt, native)
 	}
 	if codexHome != "" {
 		extraEnv = append(extraEnv, "CODEX_HOME="+codexHome)
@@ -575,6 +602,15 @@ func (a *Agent) WorkspaceAgentOptions() map[string]any {
 	}
 	if a.codexHome != "" {
 		opts["codex_home"] = a.codexHome
+	}
+	if a.appServerNative.enabled {
+		opts["native_events"] = true
+	}
+	if a.appServerNative.developerInstructions != "" {
+		opts["developer_instructions"] = a.appServerNative.developerInstructions
+	}
+	if len(a.appServerNative.config) != 0 {
+		opts["app_server_config"] = cloneAppServerMap(a.appServerNative.config)
 	}
 	return opts
 }

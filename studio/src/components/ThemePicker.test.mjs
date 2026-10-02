@@ -3,12 +3,13 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { runInNewContext } from 'node:vm';
 import ts from 'typescript';
+import { motionTestModule } from '../lib/motion-stub.mjs';
 
 const source = ts.transpileModule(readFileSync(new URL('./ThemePicker.tsx', import.meta.url), 'utf8'), {
   compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX },
 }).outputText;
 
-function picker(initial = 'system') {
+function picker(initial = 'system', present = true) {
   let cursor = 0;
   const values = [];
   const changes = [];
@@ -17,7 +18,7 @@ function picker(initial = 'system') {
     if (!(index in values)) values[index] = typeof initialValue === 'function' ? initialValue() : initialValue;
     return [values[index], next => { values[index] = typeof next === 'function' ? next(values[index]) : next; }];
   };
-  const element = (type, props) => ({ type, props });
+  const element = (type, props) => typeof type === 'function' ? type(props) : ({ type, props });
   const props = {
     value: initial,
     onChange: value => { changes.push(value); props.value = value; },
@@ -30,6 +31,7 @@ function picker(initial = 'system') {
     },
     'react/jsx-runtime': { jsx: element, jsxs: element, Fragment: 'fragment' },
     'lucide-react': new Proxy({}, { get: (_, name) => name }),
+    '../lib/motion': { ...motionTestModule(), useIsPresent: () => present },
   };
   const exports = {};
   runInNewContext(source, {
@@ -58,6 +60,7 @@ function picker(initial = 'system') {
   return {
     changes,
     root,
+    menu: () => find(node => node.props?.role === 'menu'),
     trigger,
     option,
     options: () => all(node => node.props?.role === 'menuitemradio'),
@@ -74,6 +77,25 @@ test('theme picker exposes system, light and dark as explicit choices', () => {
     'System', 'Light', 'Dark',
   ]);
   assert.equal(view.option('System').props['aria-checked'], true);
+});
+
+test('theme menu preserves Escape dismissal through animated presence', () => {
+  const view = picker('light');
+  view.open();
+  assert.equal(view.menu().props.inert, false);
+  let prevented = false;
+  view.menu().props.onKeyDown({ key: 'Escape', preventDefault() { prevented = true; } });
+  assert.equal(prevented, true);
+  assert.equal(view.trigger().props['aria-expanded'], false);
+  assert.equal(view.options().length, 0);
+});
+
+test('theme menu becomes inert and hidden from assistive technology during exit', () => {
+  const view = picker('dark', false);
+  view.open();
+  assert.equal(view.menu().props.inert, true);
+  assert.equal(view.menu().props['aria-hidden'], true);
+  assert.equal(view.trigger().type, 'button');
 });
 
 test('theme picker passes each selected preference and reflects it on reopen', () => {

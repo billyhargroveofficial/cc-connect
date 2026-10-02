@@ -7,6 +7,15 @@ import Login from "./components/Login";
 import Avatar from "./components/Avatar";
 import BotRoster from "./components/BotRoster";
 import { useTheme } from "./hooks/useTheme";
+import {
+  AnimatePresence,
+  controlMotion,
+  fade,
+  fadeUp,
+  m,
+  motionTransition,
+  useIsPresent,
+} from "./lib/motion";
 const ChatRoom = lazy(() => import("./features/chat/ChatRoom"));
 const SettingsDrawer = lazy(() =>
   import("./features/settings/SettingsDrawer").then((module) => ({
@@ -26,6 +35,63 @@ function currentBot() {
     return "";
   }
 }
+
+function FadingSurface({
+  children,
+  className,
+}: {
+  children: React.ReactNode;
+  className: string;
+}) {
+  const present = useIsPresent();
+  return (
+    <m.div
+      className={className}
+      variants={fade}
+      initial="hidden"
+      animate="visible"
+      exit="exit"
+      inert={!present}
+      aria-hidden={!present || undefined}
+    >
+      {children}
+    </m.div>
+  );
+}
+
+function WorkspaceToast({
+  message,
+  onDismiss,
+}: {
+  message: string;
+  onDismiss: () => void;
+}) {
+  const present = useIsPresent();
+  return (
+    <m.div
+      className="global-toast"
+      role="alert"
+      initial={{ opacity: 0, y: 10 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, y: 5, transition: motionTransition.exit }}
+      transition={motionTransition.enter}
+      inert={!present}
+      aria-hidden={!present || undefined}
+    >
+      <p>{message}</p>
+      <m.button
+        className="icon-button"
+        data-motion-control
+        {...controlMotion}
+        onClick={onDismiss}
+        aria-label="Dismiss notification"
+      >
+        <X size={16} />
+      </m.button>
+    </m.div>
+  );
+}
+
 export default function App() {
   const [selectedId, setSelectedId] = useState(currentBot);
   const workspace = useWorkspace(selectedId);
@@ -34,11 +100,21 @@ export default function App() {
   const [globalSettings, setGlobalSettings] = useState(false);
   const [creating, setCreating] = useState(false);
   const [historyLoading, setHistoryLoading] = useState(false);
+  const [mobileViewport, setMobileViewport] = useState(
+    () => window.matchMedia("(max-width: 700px)").matches,
+  );
   const bot = workspace.bots.find((bot) => bot.id === selectedId) || null;
+  useEffect(() => {
+    const query = window.matchMedia("(max-width: 700px)");
+    const update = () => setMobileViewport(query.matches);
+    query.addEventListener("change", update);
+    update();
+    return () => query.removeEventListener("change", update);
+  }, []);
   useEffect(() => {
     const onHash = () => {
       const id = currentBot();
-      setSelectedId(id);
+      if (id) setSelectedId(id);
       setMobileChat(!!id);
     };
     window.addEventListener("hashchange", onHash);
@@ -94,126 +170,168 @@ export default function App() {
     select(bot.id);
     setCreating(false);
   }
-  if (workspace.phase !== "ready")
-    return (
-      <Login
-        checking={workspace.phase === "checking"}
-        error={workspace.error}
-        onLogin={workspace.login}
-        onRetry={workspace.retry}
-      />
-    );
   return (
-    <div className={`workspace ${mobileChat ? "is-chat" : ""}`}>
-      <BotRoster
-        bots={workspace.bots}
-        events={workspace.events}
-        selectedId={selectedId}
-        onSelect={select}
-        onCreate={() => setCreating(true)}
-        onSettings={() => setGlobalSettings(true)}
-        onTheme={setTheme}
-        theme={theme}
-        onLogout={() =>
-          void workspace
-            .logout()
-            .catch((error) => workspace.setError(errorMessage(error)))
-        }
-        connection={workspace.connection}
-      />
-      <main className="workspace-content">
-        <Suspense
-          fallback={
-            <div className="chat-loading">
-              <LoaderCircle size={21} className="spin" />
-              <span>Opening conversation…</span>
-            </div>
-          }
+    <AnimatePresence mode="wait" initial={false}>
+      {workspace.phase !== "ready" ? (
+        <Login
+          key="login"
+          checking={workspace.phase === "checking"}
+          error={workspace.error}
+          onLogin={workspace.login}
+          onRetry={workspace.retry}
+        />
+      ) : (
+        <FadingSurface
+          key="workspace"
+          className={`workspace ${mobileChat ? "is-chat" : ""}`}
         >
-          {bot ? (
-            <ChatRoom
-              key={bot.id}
-              bot={bot}
-              events={workspace.events[bot.id] || []}
-              capabilities={workspace.capabilities}
-              loading={historyLoading}
-              suspended={globalSettings || creating}
-              onBack={() => {
-                setMobileChat(false);
-                location.hash = "";
-              }}
-              onBotChange={workspace.updateBot}
-              onArchive={workspace.archiveBot}
-              onError={workspace.setError}
-              onHistory={() =>
-                void workspace
-                  .loadHistory(bot.id)
-                  .catch((error) => workspace.setError(errorMessage(error)))
-              }
-            />
-          ) : (
-            <div className="workspace-empty">
-              {!workspace.loaded ? (
-                <>
-                  <LoaderCircle className="spin" size={28} />
-                  <p>Opening workspace…</p>
-                </>
-              ) : (
-                <>
-                  <Avatar avatar="lavender" size={80} />
-                  <span className="eyebrow">START WITH ONE ASSISTANT</span>
-                  <h1>Build your team.</h1>
-                  <p>
-                    Give your bot a name, a role, and its first task. It keeps
-                    its context and continues working after you close the page.
-                  </p>
-                  <button
-                    className="primary-button"
-                    onClick={() => setCreating(true)}
-                  >
-                    <Plus size={17} />
-                    Create bot
-                  </button>
-                </>
-              )}
-            </div>
-          )}
-        </Suspense>
-      </main>
-      {workspace.error && (
-        <div className="global-toast" role="alert">
-          <p>{workspace.error}</p>
-          <button
-            className="icon-button"
-            onClick={() => workspace.setError("")}
-            aria-label="Dismiss notification"
+          <BotRoster
+            mobileHidden={mobileViewport && mobileChat}
+            bots={workspace.bots}
+            events={workspace.events}
+            selectedId={selectedId}
+            onSelect={select}
+            onCreate={() => setCreating(true)}
+            onSettings={() => setGlobalSettings(true)}
+            onTheme={setTheme}
+            theme={theme}
+            onLogout={() =>
+              void workspace
+                .logout()
+                .catch((error) => workspace.setError(errorMessage(error)))
+            }
+            connection={workspace.connection}
+          />
+          <m.main
+            className="workspace-content"
+            initial={false}
+            animate={{ opacity: mobileViewport && !mobileChat ? 0 : 1 }}
+            transition={motionTransition.enter}
+            inert={mobileViewport && !mobileChat}
+            aria-hidden={(mobileViewport && !mobileChat) || undefined}
           >
-            <X size={16} />
-          </button>
-        </div>
+            <Suspense
+              fallback={
+                <m.div
+                  className="chat-loading"
+                  variants={fade}
+                  initial="hidden"
+                  animate="visible"
+                >
+                  <LoaderCircle size={21} className="spin" />
+                  <span>Opening conversation…</span>
+                </m.div>
+              }
+            >
+              <AnimatePresence initial={false} mode="wait">
+                {bot ? (
+                  <FadingSurface
+                    key={bot.id}
+                    className="workspace-conversation"
+                  >
+                    <ChatRoom
+                      bot={bot}
+                      events={workspace.events[bot.id] || []}
+                      capabilities={workspace.capabilities}
+                      loading={historyLoading}
+                      suspended={globalSettings || creating || (mobileViewport && !mobileChat)}
+                      onBack={() => {
+                        setMobileChat(false);
+                        location.hash = "";
+                      }}
+                      onBotChange={workspace.updateBot}
+                      onArchive={workspace.archiveBot}
+                      onError={workspace.setError}
+                      onHistory={() =>
+                        void workspace
+                          .loadHistory(bot.id)
+                          .catch((error) =>
+                            workspace.setError(errorMessage(error)),
+                          )
+                      }
+                    />
+                  </FadingSurface>
+                ) : (
+                  <FadingSurface
+                    key="empty-workspace"
+                    className="workspace-conversation"
+                  >
+                    <m.div
+                      className="workspace-empty"
+                      variants={fadeUp}
+                      initial="hidden"
+                      animate="visible"
+                    >
+                      {!workspace.loaded ? (
+                        <>
+                          <LoaderCircle className="spin" size={28} />
+                          <p>Opening workspace…</p>
+                        </>
+                      ) : (
+                        <>
+                          <Avatar avatar="lavender" size={80} />
+                          <span className="eyebrow">
+                            START WITH ONE ASSISTANT
+                          </span>
+                          <h1>Build your team.</h1>
+                          <p>
+                            Give your bot a name, a role, and its first task. It
+                            keeps its context and continues working after you
+                            close the page.
+                          </p>
+                          <m.button
+                            className="primary-button"
+                            data-motion-control
+                            {...controlMotion}
+                            onClick={() => setCreating(true)}
+                          >
+                            <Plus size={17} />
+                            Create bot
+                          </m.button>
+                        </>
+                      )}
+                    </m.div>
+                  </FadingSurface>
+                )}
+              </AnimatePresence>
+            </Suspense>
+          </m.main>
+          <AnimatePresence initial={false}>
+            {workspace.error && (
+              <div key="workspace-toast" className="global-toast-position">
+                <WorkspaceToast
+                  message={workspace.error}
+                  onDismiss={() => workspace.setError("")}
+                />
+              </div>
+            )}
+          </AnimatePresence>
+          <AnimatePresence>
+            {globalSettings && (
+              <Suspense key="global-settings" fallback={null}>
+                <SettingsDrawer
+                  bot={null}
+                  bots={workspace.allBots}
+                  global
+                  capabilities={workspace.capabilities}
+                  onClose={closeSettings}
+                  onBotChange={workspace.updateBot}
+                  onArchive={workspace.archiveBot}
+                />
+              </Suspense>
+            )}
+            {creating && (
+              <Suspense key="new-bot" fallback={null}>
+                <NewBotDialog
+                  capabilities={workspace.capabilities}
+                  onClose={closeCreate}
+                  onCreated={created}
+                />
+              </Suspense>
+            )}
+          </AnimatePresence>
+        </FadingSurface>
       )}
-      {globalSettings && (
-        <Suspense fallback={null}>
-          <SettingsDrawer
-            bot={null}
-            bots={workspace.allBots}
-            global
-            capabilities={workspace.capabilities}
-            onClose={closeSettings}
-            onBotChange={workspace.updateBot}
-            onArchive={workspace.archiveBot}
-          />
-        </Suspense>
-      )}{" "}
-      {creating && (
-        <Suspense fallback={null}>
-          <NewBotDialog
-            capabilities={workspace.capabilities}
-            onClose={closeCreate}
-            onCreated={created}
-          />
-        </Suspense>
-      )}
-    </div>
+    </AnimatePresence>
   );
 }

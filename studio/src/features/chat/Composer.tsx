@@ -12,9 +12,13 @@ import {
 } from "lucide-react";
 import type { Attachment, Bot, Capabilities } from "../../lib/types";
 import { api, errorMessage } from "../../lib/api";
-import ModelPicker, { useDialogFocus } from "./ModelPicker";
+import ModelPicker, { PresenceSurface, useDialogFocus } from "./ModelPicker";
 import ContextControl from "./ContextControl";
 import type { useBotContext } from "../../hooks/useBotContext";
+import {
+  AnimatePresence, m, useIsPresent, useReducedMotion,
+  controlMotion, fade, rowMotion, motionSpring, motionTransition,
+} from "../../lib/motion";
 import "./minimal-composer.css";
 interface Upload {
   key: string;
@@ -38,6 +42,7 @@ export default function Composer({
   onBotChange,
   onError,
   context,
+  suspended = false,
 }: {
   bot: Bot;
   capabilities: Capabilities | null;
@@ -47,7 +52,10 @@ export default function Composer({
   onBotChange: (bot: Bot) => void;
   onError: (error: string) => void;
   context: ReturnType<typeof useBotContext>;
+  suspended?: boolean;
 }) {
+  const present = useIsPresent();
+  const reducedMotion = useReducedMotion();
   const [text, setText] = useState(() => initialDraft(bot.id));
   const [uploads, setUploads] = useState<Upload[]>([]);
   const [sending, setSending] = useState(false);
@@ -70,16 +78,23 @@ export default function Composer({
   function closeActions() {
     setActionsOpen(false);
     setModelPickerOpen(false);
-    requestAnimationFrame(() => actionsTrigger.current?.focus());
+    requestAnimationFrame(() => {
+      if (present) actionsTrigger.current?.focus();
+    });
   }
-  useDialogFocus(actionsOpen && !modelPickerOpen, actionsDialog, closeActions);
+  useDialogFocus(actionsOpen && !modelPickerOpen && present && !suspended, actionsDialog, closeActions);
+  useEffect(() => {
+    if (!suspended) return;
+    setActionsOpen(false);
+    setModelPickerOpen(false);
+  }, [suspended]);
   useEffect(() => {
     try {
       localStorage.setItem(`connect-bots:draft:${bot.id}`, text);
     } catch {
       /* Private browsers may disable persistence. */
     }
-    if (textarea.current) {
+    if (textarea.current && !recording) {
       textarea.current.style.height = "auto";
       if (text) {
         textarea.current.style.height = `${Math.min(textarea.current.scrollHeight, 180)}px`;
@@ -88,7 +103,7 @@ export default function Composer({
         textarea.current.style.overflowY = "hidden";
       }
     }
-  }, [text, bot.id]);
+  }, [text, bot.id, recording]);
   useEffect(() => {
     if (!recording) return;
     setElapsed(0);
@@ -110,6 +125,8 @@ export default function Composer({
   );
   async function send() {
     if (
+      !present ||
+      suspended ||
       sending ||
       busy ||
       context.compacting || context.requesting ||
@@ -258,10 +275,26 @@ export default function Composer({
           }
         }}
       >
+        <AnimatePresence initial={false}>
         {uploads.length > 0 && (
+          <PresenceSurface
+            key="uploads"
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: "auto" }}
+            exit={{ opacity: 0, height: 0 }}
+            transition={reducedMotion ? { duration: 0 } : motionTransition.disclosure}
+            style={{ overflow: "hidden", minHeight: 0 }}
+          >
           <div className="upload-chips">
+            <AnimatePresence initial={false}>
             {uploads.map((upload) => (
-              <div
+              <PresenceSurface
+                layout="position"
+                variants={reducedMotion ? fade : rowMotion}
+                initial="hidden"
+                animate="visible"
+                exit="exit"
+                transition={{ layout: motionSpring.layout }}
                 className={`upload-chip ${upload.error ? "is-error" : ""}`}
                 key={upload.key}
               >
@@ -271,7 +304,8 @@ export default function Composer({
                   <FileText size={14} />
                 )}
                 <span title={upload.error || upload.name}>{upload.name}</span>
-                <button
+                <m.button
+                  {...controlMotion}
                   onClick={() =>
                     setUploads((current) =>
                       current.filter((u) => u.key !== upload.key),
@@ -280,20 +314,37 @@ export default function Composer({
                   aria-label={`Remove ${upload.name}`}
                 >
                   <X size={13} />
-                </button>
-              </div>
+                </m.button>
+              </PresenceSurface>
             ))}
+            </AnimatePresence>
           </div>
+          </PresenceSurface>
         )}
-        {recording ? (
-          <div className="recording-state">
-            <span className="recording-dot" />
+        </AnimatePresence>
+        <AnimatePresence initial={false}>
+        {recording && (
+          <PresenceSurface
+            key="recording"
+            className="recording-state"
+            initial={{ opacity: 0, height: 0, paddingTop: 0, paddingBottom: 0 }}
+            animate={{ opacity: 1, height: "auto", paddingTop: 2, paddingBottom: 4 }}
+            exit={{ opacity: 0, height: 0, paddingTop: 0, paddingBottom: 0 }}
+            transition={reducedMotion ? { duration: 0 } : motionTransition.disclosure}
+            style={{ overflow: "hidden", minHeight: 0 }}
+          >
+            <m.span
+              className="recording-dot"
+              animate={reducedMotion ? { opacity: 1 } : { opacity: [1, 0.4, 1] }}
+              transition={reducedMotion ? { duration: 0 } : { duration: 1.25, repeat: Infinity, ease: "easeInOut" }}
+            />
             <AudioLines size={19} />
             <span>Recording voice</span>
             <time>
               {Math.floor(elapsed / 60)}:{String(elapsed % 60).padStart(2, "0")}
             </time>
-            <button
+            <m.button
+              {...controlMotion}
               className="text-button"
               onClick={() => {
                 if (recorder.current) {
@@ -307,11 +358,14 @@ export default function Composer({
               }}
             >
               Cancel
-            </button>
-          </div>
-        ) : (
+            </m.button>
+          </PresenceSurface>
+        )}
+        </AnimatePresence>
           <textarea
             ref={textarea}
+            hidden={recording}
+            style={{ display: recording ? "none" : undefined }}
             value={text}
             onChange={(event) => {
               textRevision.current += 1;
@@ -347,19 +401,20 @@ export default function Composer({
             rows={1}
             disabled={transcribing}
           />
-        )}
         <div className="composer-toolbar">
           <div className="composer-tools">
-            <button
+            <m.button
+              {...controlMotion}
               className="icon-button"
               onClick={() => input.current?.click()}
               aria-label="Attach file"
               title="Attach file"
             >
               {pendingUploads ? <LoaderCircle size={18} className="spin" /> : <Plus size={19} />}
-            </button>
+            </m.button>
             {capabilities?.voice && (
-              <button
+              <m.button
+                {...controlMotion}
                 className={`icon-button ${recording ? "is-recording" : ""}`}
                 onClick={() => void microphone()}
                 disabled={transcribing || sending}
@@ -377,13 +432,14 @@ export default function Composer({
                 ) : (
                   <Mic size={18} />
                 )}
-              </button>
+              </m.button>
             )}
           </div>
           <div className="composer-trailing">
-            <ContextControl state={context} busy={busy || sending} onError={onError} />
+            <ContextControl state={context} busy={busy || sending} suspended={suspended} onError={onError} />
             <div className="composer-actions">
-              <button
+              <m.button
+                {...controlMotion}
                 ref={actionsTrigger}
                 className="composer-actions-trigger"
                 onClick={() => setActionsOpen(!actionsOpen)}
@@ -392,10 +448,17 @@ export default function Composer({
                 aria-haspopup="dialog"
                 aria-controls={actionsOpen ? actionsId : undefined}
                 title="More actions"
-              ><MoreHorizontal size={19} /></button>
-              {actionsOpen && <>
+              ><MoreHorizontal size={19} /></m.button>
+              {actionsOpen && present && !suspended && (
                 <button className="popover-backdrop" tabIndex={-1} onClick={closeActions} aria-label="Close actions" />
-                <div className="composer-actions-menu" ref={actionsDialog} tabIndex={-1} id={actionsId} role="dialog" aria-modal={!modelPickerOpen} aria-label="Message actions">
+              )}
+              <AnimatePresence initial={false}>
+                {actionsOpen && present && !suspended && <PresenceSurface
+                  key="actions"
+                  variants={fade}
+                  initial="hidden" animate="visible" exit="exit"
+                  className="composer-actions-menu" ref={actionsDialog} tabIndex={-1} id={actionsId} role="dialog" modal={!modelPickerOpen} aria-label="Message actions"
+                >
                   <ModelPicker
                     bot={bot}
                     capabilities={capabilities}
@@ -404,35 +467,22 @@ export default function Composer({
                     onOpenChange={setModelPickerOpen}
                     onError={onError}
                   />
-                  {capabilities?.voice && <button
+                  {capabilities?.voice && <m.button
+                    {...controlMotion}
                     onClick={() => {
                       closeActions();
                       audioInput.current?.click();
                     }}
                     disabled={transcribing}
-                  ><AudioLines size={16} /><span>Transcribe audio file</span></button>}
-                </div>
-              </>}
+                  ><AudioLines size={16} /><span>Transcribe audio file</span></m.button>}
+                </PresenceSurface>}
+              </AnimatePresence>
             </div>
-          {busy ? (
-            <button
-              className="send-button stop-button"
-              onClick={() => void stop()}
-              disabled={stopping}
-              aria-label="Stop bot"
-              title="Stop"
-            >
-              {stopping ? (
-                <LoaderCircle size={16} className="spin" />
-              ) : (
-                <Square size={14} fill="currentColor" />
-              )}
-            </button>
-          ) : (
-            <button
-              className="send-button"
-              onClick={() => void send()}
-              disabled={
+            <m.button
+              {...controlMotion}
+              className={`send-button ${busy ? "stop-button" : ""}`.trim()}
+              onClick={() => void (busy ? stop() : send())}
+              disabled={busy ? stopping :
                 sending ||
                 context.compacting || context.requesting ||
                 pendingUploads ||
@@ -440,16 +490,23 @@ export default function Composer({
                 recording ||
                 (!text.trim() && !uploads.some((u) => u.attachment))
               }
-              aria-label="Send message"
-              title="Send"
+              aria-label={busy ? "Stop bot" : "Send message"}
+              title={busy ? "Stop" : "Send"}
             >
-              {sending ? (
-                <LoaderCircle size={16} className="spin" />
-              ) : (
-                <ArrowUp size={20} />
-              )}
-            </button>
-          )}
+              <span className="composer-send-icon">
+                <AnimatePresence initial={false} mode="popLayout">
+                  <m.span
+                    key={busy ? stopping ? "stopping" : "stop" : sending ? "sending" : "send"}
+                    initial={{ opacity: 0, scale: reducedMotion ? 1 : 0.7, rotate: reducedMotion ? 0 : -12 }}
+                    animate={{ opacity: 1, scale: 1, rotate: 0 }}
+                    exit={{ opacity: 0, scale: reducedMotion ? 1 : 0.7, rotate: reducedMotion ? 0 : 12 }}
+                    transition={reducedMotion ? { duration: 0 } : motionTransition.quick}
+                  >
+                    {busy ? stopping ? <LoaderCircle size={16} className="spin" /> : <Square size={14} fill="currentColor" /> : sending ? <LoaderCircle size={16} className="spin" /> : <ArrowUp size={20} />}
+                  </m.span>
+                </AnimatePresence>
+              </span>
+            </m.button>
           </div>
         </div>
       </div>

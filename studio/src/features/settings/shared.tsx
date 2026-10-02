@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useId, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { LoaderCircle, X } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
@@ -6,6 +6,7 @@ import remarkGfm from 'remark-gfm'
 import type { Bot, Capabilities } from '../../lib/types'
 import { avatarStyles } from '../../lib/avatars'
 import Avatar from '../../components/Avatar'
+import { AnimatePresence, LayoutGroup, m, useIsPresent, useReducedMotion, backdropMotion, modalMotion, controlMotion, motionSpring, motionTransition } from '../../lib/motion'
 import './settings.css'
 
 export const avatarColors = avatarStyles
@@ -53,24 +54,45 @@ export function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : 'Could not complete the action. Please try again.'
 }
 
+let modalBodyLocks = 0
+let unlockedBodyOverflow = ''
+
+function lockModalBody() {
+  if (modalBodyLocks === 0) unlockedBodyOverflow = document.body.style.overflow
+  modalBodyLocks += 1
+  document.body.style.overflow = 'hidden'
+  return () => {
+    modalBodyLocks = Math.max(0, modalBodyLocks - 1)
+    if (modalBodyLocks === 0) document.body.style.overflow = unlockedBodyOverflow
+  }
+}
+
 export function ModalShell({ title, subtitle, onClose, children, footer, drawer = false, wide = false }: {
   title: string; subtitle?: string; onClose: () => void; children: ReactNode;
   footer?: ReactNode; drawer?: boolean; wide?: boolean;
 }) {
   const panel = useRef<HTMLDivElement>(null)
+  const present = useIsPresent()
+  const returnTarget = useRef(typeof HTMLElement !== 'undefined' && document.activeElement instanceof HTMLElement ? document.activeElement : null)
+  const returnFrame = useRef<number | null>(null)
   const close = useRef(onClose)
   close.current = onClose
   useEffect(() => {
-    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null
-    const previousOverflow = document.body.style.overflow
-    document.body.style.overflow = 'hidden'
+    if (!present) return
+    if (returnFrame.current !== null) {
+      window.cancelAnimationFrame(returnFrame.current)
+      returnFrame.current = null
+    }
+    const previousFocus = returnTarget.current
+    const element = panel.current
+    const unlockBody = lockModalBody()
     panel.current?.focus()
     const onKey = (event: KeyboardEvent) => {
       if (event.key === 'Escape') { event.preventDefault(); close.current(); return }
       if (event.key !== 'Tab' || !panel.current) return
       const items = Array.from(panel.current.querySelectorAll<HTMLElement>(
         'button:not(:disabled), [href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex="0"]',
-      )).filter((element) => element.getClientRects().length > 0)
+      )).filter((element) => element.tabIndex >= 0 && !element.closest('[inert]') && element.getClientRects().length > 0)
       const first = items[0]
       const last = items[items.length - 1]
       if (!first) { event.preventDefault(); return }
@@ -83,54 +105,78 @@ export function ModalShell({ title, subtitle, onClose, children, footer, drawer 
     document.addEventListener('keydown', onKey)
     return () => {
       document.removeEventListener('keydown', onKey)
-      document.body.style.overflow = previousOverflow
-      if (previousFocus?.isConnected) previousFocus.focus()
+      unlockBody()
+      returnFrame.current = window.requestAnimationFrame(() => {
+        returnFrame.current = null
+        if (!previousFocus?.isConnected || previousFocus.closest('[inert]')) return
+        // An exit applies inert before effect cleanup and can clear focus to
+        // BODY. Wait for that commit while preserving a newly opened dialog.
+        const otherModal = Array.from(document.querySelectorAll<HTMLElement>('[role="dialog"][aria-modal="true"]'))
+          .some((dialog) => dialog !== element && !dialog.closest('[inert]') && dialog.getClientRects().length > 0 && !dialog.contains(previousFocus))
+        const focused = document.activeElement
+        if (!otherModal && (element?.contains(focused) || focused === document.body || !focused)) previousFocus.focus({ preventScroll: true })
+      })
     }
-  }, [])
+  }, [present])
   return createPortal(
-    <div className={`cb-settings-overlay ${drawer ? 'cb-settings-overlay--drawer' : ''}`}
+    <m.div className={`cb-settings-overlay ${drawer ? 'cb-settings-overlay--drawer' : ''}`}
+      variants={backdropMotion} initial="hidden" animate="visible" exit="exit" inert={!present}
       onClick={(event) => { if (event.target === event.currentTarget) onClose() }}>
-      <div className={`cb-settings-panel${drawer ? ' cb-settings-panel--drawer' : ''}${wide ? ' cb-settings-panel--wide' : ''}`}
+      <m.div className={`cb-settings-panel${drawer ? ' cb-settings-panel--drawer' : ''}${wide ? ' cb-settings-panel--wide' : ''}`}
+        variants={modalMotion} initial="hidden" animate="visible" exit="exit"
         ref={panel} tabIndex={-1} role="dialog" aria-modal="true" aria-label={title}>
         <header className="cb-settings-header">
           <div><h2>{title}</h2>{subtitle && <p>{subtitle}</p>}</div>
-          <button type="button" className="cb-settings-icon-button" onClick={onClose} aria-label={`Close ${title}`}><X size={20} /></button>
+          <m.button {...controlMotion} type="button" className="cb-settings-icon-button" onClick={onClose} aria-label={`Close ${title}`}><X size={20} /></m.button>
         </header>
         {children}
         {footer && <footer className="cb-settings-footer">{footer}</footer>}
-      </div>
-    </div>, document.body,
+      </m.div>
+    </m.div>, document.body,
   )
 }
 
 export function Notice({ error, success }: { error?: string; success?: string }) {
-  if (!error && !success) return null
-  return <div className={`cb-settings-notice ${error ? 'cb-settings-notice--error' : ''}`}
-    role={error ? 'alert' : 'status'}>{error || success}</div>
+  const reduced = useReducedMotion()
+  return <AnimatePresence initial={false}>
+    {(error || success) && <m.div key={error ? 'error' : 'success'} className="cb-settings-notice-wrap"
+      initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }}
+      transition={reduced ? { duration: 0 } : motionTransition.disclosure}>
+      <div className={`cb-settings-notice ${error ? 'cb-settings-notice--error' : ''}`}
+        role={error ? 'alert' : 'status'}>{error || success}</div>
+    </m.div>}
+  </AnimatePresence>
 }
 
 export function SaveButton({ busy, children = 'Save', disabled = false }: {
   busy: boolean; children?: ReactNode; disabled?: boolean;
 }) {
-  return <button type="submit" className="cb-settings-button cb-settings-button--primary" disabled={busy || disabled}>
-    {busy && <LoaderCircle size={16} className="cb-settings-spin" />}{children}
-  </button>
+  const reduced = useReducedMotion()
+  return <m.button {...(!busy && !disabled ? controlMotion : {})} type="submit" className="cb-settings-button cb-settings-button--primary" disabled={busy || disabled}>
+    <AnimatePresence initial={false}>{busy && <m.span key="busy" className="cb-settings-button-spinner"
+      initial={{ width: 0, opacity: 0 }} animate={{ width: 16, opacity: 1 }} exit={{ width: 0, opacity: 0 }} transition={reduced ? { duration: 0 } : motionTransition.quick}>
+      <LoaderCircle size={16} className="cb-settings-spin" />
+    </m.span>}</AnimatePresence>{children}
+  </m.button>
 }
 
 export function BotFields({ value, onChange, capabilities, running = false }: {
   value: BotDraft; onChange: (value: BotDraft) => void;
   capabilities: Capabilities | null; running?: boolean;
 }) {
+  const paletteId = useId()
   const update = <K extends keyof BotDraft>(key: K, next: BotDraft[K]) => onChange({ ...value, [key]: next })
   return <>
-    <div className="cb-settings-avatar-palette" role="group" aria-label="Avatar style">
-      {avatarColors.map((avatar) => <button key={avatar.id} type="button" title={avatar.name}
+    <LayoutGroup id={paletteId}><div className="cb-settings-avatar-palette" role="group" aria-label="Avatar style">
+      {avatarColors.map((avatar) => <m.button key={avatar.id} type="button" title={avatar.name}
+        whileHover={{ y: -2 }} whileTap={{ scale: 0.94 }} transition={motionSpring.control}
         aria-label={avatar.name} aria-pressed={value.avatar === avatar.id}
         className={`cb-settings-avatar-option ${value.avatar === avatar.id ? 'is-selected' : ''}`}
         onClick={() => update('avatar', avatar.id)}>
+        {value.avatar === avatar.id && <m.span className="cb-settings-avatar-ring" layoutId="avatar-selection" transition={motionSpring.control} />}
         <Avatar avatar={avatar.id} identity={`avatar-style-${avatar.id}`} size={40} />
-      </button>)}
-    </div>
+      </m.button>)}
+    </div></LayoutGroup>
     <label className="cb-settings-field">Name
       <input value={value.name} onChange={(event) => update('name', event.target.value)} required maxLength={80} placeholder="What is your bot's name?" autoComplete="off" />
     </label>
@@ -155,20 +201,30 @@ export function BotFields({ value, onChange, capabilities, running = false }: {
         <input type="checkbox" className="cb-settings-switch" checked={value.telegramEnabled}
           onChange={(event) => update('telegramEnabled', event.target.checked)} />
       </label>
-      {value.telegramEnabled && <div className="cb-settings-nested-fields">
-        <label className="cb-settings-field">Token environment variable
-          <input value={value.telegramTokenEnv} onChange={(event) => update('telegramTokenEnv', event.target.value)}
-            placeholder="TELEGRAM_BOT_TOKEN" required pattern="[A-Za-z_][A-Za-z0-9_]*" autoComplete="off" spellCheck={false} />
-          <small>Set the BotFather token in the server environment. Only the variable name is stored here.</small>
-        </label>
-        <label className="cb-settings-field">Allowed user IDs
-          <input value={value.telegramAllowedUserIds} onChange={(event) => update('telegramAllowedUserIds', event.target.value)}
-            placeholder="123456789" required pattern="[0-9 ,;\s]+" inputMode="numeric" autoComplete="off" />
-          <small>Comma-separated numeric Telegram IDs. The bot only responds to these users.</small>
-        </label>
-      </div>}
+      <AnimatePresence initial={false}>{value.telegramEnabled && <TelegramFields key="telegram" value={value} onChange={onChange} />}</AnimatePresence>
     </section>
   </>
+}
+
+function TelegramFields({ value, onChange }: { value: BotDraft; onChange: (value: BotDraft) => void }) {
+  const present = useIsPresent()
+  const reduced = useReducedMotion()
+  return <m.div className="cb-settings-disclosure" inert={!present}
+    initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }}
+    transition={reduced ? { duration: 0 } : motionTransition.disclosure}>
+    <div className="cb-settings-nested-fields">
+      <label className="cb-settings-field">Token environment variable
+        <input value={value.telegramTokenEnv} onChange={(event) => onChange({ ...value, telegramTokenEnv: event.target.value })}
+          placeholder="TELEGRAM_BOT_TOKEN" required disabled={!present} pattern="[A-Za-z_][A-Za-z0-9_]*" autoComplete="off" spellCheck={false} />
+        <small>Set the BotFather token in the server environment. Only the variable name is stored here.</small>
+      </label>
+      <label className="cb-settings-field">Allowed user IDs
+        <input value={value.telegramAllowedUserIds} onChange={(event) => onChange({ ...value, telegramAllowedUserIds: event.target.value })}
+          placeholder="123456789" required disabled={!present} pattern="[0-9 ,;\s]+" inputMode="numeric" autoComplete="off" />
+        <small>Comma-separated numeric Telegram IDs. The bot only responds to these users.</small>
+      </label>
+    </div>
+  </m.div>
 }
 
 export function RuntimeFields({ backend, model, effort, capabilities, disabled = false, excludedEfforts = [], onChange }: {
@@ -217,13 +273,19 @@ export function MarkdownEditor({ content, onChange, readOnly = false, label = 'C
     <div className="cb-settings-editor-toolbar">
       <span>{label}</span>
       <div className="cb-settings-segment" aria-label="Editor mode">
-        <button type="button" onClick={() => setPreview(false)} aria-pressed={!preview}>{readOnly ? 'Source' : 'Editor'}</button>
-        <button type="button" onClick={() => setPreview(true)} aria-pressed={preview}>Preview</button>
+        <m.button {...controlMotion} type="button" onClick={() => setPreview(false)} aria-pressed={!preview}>{readOnly ? 'Source' : 'Editor'}</m.button>
+        <m.button {...controlMotion} type="button" onClick={() => setPreview(true)} aria-pressed={preview}>Preview</m.button>
       </div>
     </div>
-    {preview
+    <AnimatePresence initial={false} mode="wait"><EditorSurface key={preview ? 'preview' : 'source'}>{preview
       ? <div className="cb-settings-markdown"><ReactMarkdown remarkPlugins={[remarkGfm]}>{content || '*Nothing here yet*'}</ReactMarkdown></div>
       : <textarea aria-label={label} value={content} onChange={(event) => onChange(event.target.value)} readOnly={readOnly}
-        placeholder={placeholder} rows={18} spellCheck={false} className="cb-settings-source" />}
+        placeholder={placeholder} rows={18} spellCheck={false} className="cb-settings-source" />}</EditorSurface></AnimatePresence>
   </div>
+}
+
+function EditorSurface({ children }: { children: ReactNode }) {
+  const present = useIsPresent()
+  return <m.div inert={!present} initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+    transition={motionTransition.quick}>{children}</m.div>
 }

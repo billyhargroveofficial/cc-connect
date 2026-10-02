@@ -3,6 +3,9 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { runInNewContext } from 'node:vm';
 import ts from 'typescript';
+import { motionTestModule } from '../../lib/motion-stub.mjs';
+
+const tabTitle = node => Array.isArray(node.props.children) ? node.props.children[0] : node.props.children;
 
 const source = ts.transpileModule(readFileSync(new URL('./SettingsDrawer.tsx', import.meta.url), 'utf8'), {
   compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX },
@@ -22,6 +25,7 @@ function panel() {
     'react/jsx-runtime': { jsx: element, jsxs: element, Fragment: 'fragment' },
     'lucide-react': new Proxy({}, { get: (_, name) => name }),
     '../../lib/api': { api: {} },
+    '../../lib/motion': motionTestModule(),
     '../../lib/events': { isWorking: () => false, telegramLabel: () => 'Connected' },
     './shared': {
       BotFields: 'BotFields', MarkdownEditor: 'MarkdownEditor', ModalShell: 'ModalShell',
@@ -51,7 +55,7 @@ function panel() {
       if (match(node)) matches.push(node);
       // Expand the real shared tab controller while leaving the independent
       // pane workflows as component boundaries, as React would render them.
-      if (typeof node.type === 'function' && node.type.name === 'SettingsContent') {
+      if (typeof node.type === 'function' && ['SettingsContent', 'SettingsTabPanel'].includes(node.type.name)) {
         visit(node.type(node.props));
         return;
       }
@@ -65,7 +69,7 @@ function panel() {
   return {
     props, calls, find, all,
     reconcileBotDraft: exports.reconcileBotDraft,
-    tab: title => find(node => node.props?.role === 'tab' && node.props.children === title),
+    tab: title => find(node => node.props?.role === 'tab' && tabTitle(node) === title),
     pane: () => find(node => typeof node.type === 'function' && node.type.name.endsWith('Pane')),
   };
 }
@@ -74,7 +78,7 @@ test('embedded bot settings expose profile, instructions and skills inside the i
   const view = panel();
   assert.equal(view.find(node => node.type === 'ModalShell'), undefined);
   assert.equal(view.find(node => node.props?.role === 'dialog'), undefined, 'the island owns modal behavior');
-  assert.deepEqual(view.all(node => node.props?.role === 'tab').map(node => node.props.children), [
+  assert.deepEqual(view.all(node => node.props?.role === 'tab').map(tabTitle), [
     'Profile', 'Instructions', 'Skills',
   ]);
   assert.equal(view.tab('Profile').props['aria-selected'], true);

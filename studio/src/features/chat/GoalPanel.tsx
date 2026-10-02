@@ -12,6 +12,7 @@ import {
 import type { Bot, Event, Goal, GoalSnapshot } from "../../lib/types";
 import { api, errorMessage } from "../../lib/api";
 import { currentGoalUpdate, goalActionRevision, goalFromSnapshot } from "../../lib/currentGoal";
+import { m, useIsPresent, useReducedMotion, backdropMotion, modalMotion, controlMotion, motionTransition } from "../../lib/motion";
 const labels: Record<string, string> = {
   active: "Active",
   paused: "Paused",
@@ -69,10 +70,11 @@ export function GoalSummary({
   goal: Goal;
   onOpen: () => void;
 }) {
+  const reduced = useReducedMotion();
   const used = typeof goal.tokensUsed === "number" ? goal.tokensUsed : 0;
   const budget = typeof goal.tokenBudget === "number" ? goal.tokenBudget : 0;
   return (
-    <button className="goal-summary" onClick={onOpen}>
+    <m.button {...controlMotion} className="goal-summary" onClick={onOpen}>
       <span
         className={`goal-summary-icon ${goal.status === "complete" ? "is-complete" : ""}`}
       >
@@ -92,11 +94,12 @@ export function GoalSummary({
       </span>
       {budget > 0 && (
         <span className="goal-progress">
-          <span style={{ width: `${Math.min(100, (used / budget) * 100)}%` }} />
+          <m.span initial={false} animate={{ width: `${Math.min(100, (used / budget) * 100)}%` }}
+            transition={reduced ? { duration: 0 } : motionTransition.disclosure} />
         </span>
       )}
       <ChevronRight size={15} />
-    </button>
+    </m.button>
   );
 }
 export function GoalDialog({
@@ -117,6 +120,7 @@ export function GoalDialog({
     goal?.tokenBudget ? String(goal.tokenBudget) : "",
   );
   const [busy, setBusy] = useState(false);
+  const present = useIsPresent();
   const dialog = useRef<HTMLElement>(null);
   const previousFocus = useRef(
     document.activeElement instanceof HTMLElement ? document.activeElement : null,
@@ -124,6 +128,7 @@ export function GoalDialog({
   const closeRef = useRef(onClose);
   closeRef.current = onClose;
   useEffect(() => {
+    if (!present) return;
     const previous = previousFocus.current;
     dialog.current?.querySelector<HTMLTextAreaElement>("textarea")?.focus();
     const keyboard = (event: KeyboardEvent) => {
@@ -143,9 +148,10 @@ export function GoalDialog({
     window.addEventListener("keydown", keyboard);
     return () => {
       window.removeEventListener("keydown", keyboard);
-      if (previous?.isConnected) previous.focus();
+      const focused = document.activeElement;
+      if (previous?.isConnected && (dialog.current?.contains(focused) || focused === document.body)) previous.focus();
     };
-  }, []);
+  }, [present]);
   async function save(fields: Goal) {
     setBusy(true);
     try {
@@ -169,16 +175,18 @@ export function GoalDialog({
     }
   }
   return (
-    <div
+    <m.div
       className="dialog-layer"
+      variants={backdropMotion} initial="hidden" animate="visible" exit="exit" inert={!present}
       role="presentation"
       onClick={(event) => {
         if (event.target === event.currentTarget) onClose();
       }}
     >
-      <section
+      <m.section
         ref={dialog}
         className="goal-dialog"
+        variants={modalMotion} initial="hidden" animate="visible" exit="exit"
         role="dialog"
         aria-modal="true"
         aria-labelledby="goal-title"
@@ -187,13 +195,13 @@ export function GoalDialog({
           <span className="goal-dialog-symbol">
             <Target size={21} />
           </span>
-          <button
+          <m.button {...controlMotion}
             className="icon-button"
             onClick={onClose}
             aria-label="Close goal"
           >
             <X size={18} />
-          </button>
+          </m.button>
         </header>
         <h2 id="goal-title">{goal ? "Bot goal" : "What is the goal?"}</h2>
         <p>
@@ -249,7 +257,7 @@ export function GoalDialog({
           <div className="goal-dialog-actions">
             {goal && (
               <>
-                <button
+                <m.button {...(!busy ? controlMotion : {})}
                   type="button"
                   className="icon-button danger-button"
                   disabled={busy}
@@ -257,9 +265,9 @@ export function GoalDialog({
                   aria-label="Delete goal"
                 >
                   <Trash2 size={17} />
-                </button>
+                </m.button>
                 {goal.status === "active" ? (
-                  <button
+                  <m.button {...(!busy ? controlMotion : {})}
                     type="button"
                     className="secondary-button"
                     disabled={busy}
@@ -267,9 +275,9 @@ export function GoalDialog({
                   >
                     <Pause size={14} />
                     Pause
-                  </button>
+                  </m.button>
                 ) : goal.status !== "complete" ? (
-                  <button
+                  <m.button {...(!busy ? controlMotion : {})}
                     type="button"
                     className="secondary-button"
                     disabled={busy}
@@ -277,11 +285,11 @@ export function GoalDialog({
                   >
                     <Play size={14} />
                     Resume
-                  </button>
+                  </m.button>
                 ) : null}
               </>
             )}
-            <button
+            <m.button {...(!busy && objective.trim() ? controlMotion : {})}
               className="primary-button"
               type="submit"
               disabled={busy || !objective.trim()}
@@ -291,10 +299,10 @@ export function GoalDialog({
               ) : (
                 "Save goal"
               )}
-            </button>
+            </m.button>
           </div>
         </form>
-      </section>
-    </div>
+      </m.section>
+    </m.div>
   );
 }

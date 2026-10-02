@@ -1,8 +1,25 @@
 import { useEffect, useId, useRef, useState } from "react";
-import type { RefObject } from "react";
+import type { ComponentProps, RefObject } from "react";
 import { ChevronDown, Check, Zap, X, Cpu } from "lucide-react";
 import type { Bot, Capabilities, Model } from "../../lib/types";
 import { api, errorMessage } from "../../lib/api";
+import {
+  AnimatePresence, m, useIsPresent, useReducedMotion,
+  controlMotion, fade, popoverMotion, motionTransition,
+} from "../../lib/motion";
+
+// Presence keeps a closing surface in the DOM for its exit animation. Remove
+// its interaction and modal semantics as soon as it leaves the active UI.
+export function PresenceSurface({ modal, ...props }: ComponentProps<typeof m.div> & { modal?: boolean }) {
+  const present = useIsPresent();
+  return <m.div
+    {...props}
+    inert={!present}
+    aria-hidden={!present || undefined}
+    aria-modal={present && modal ? true : undefined}
+    style={{ ...props.style, pointerEvents: present ? props.style?.pointerEvents : "none" }}
+  />;
+}
 
 export function useDialogFocus(
   active: boolean,
@@ -71,6 +88,8 @@ export default function ModelPicker({
   onOpenChange?: (open: boolean) => void;
   onError: (error: string) => void;
 }) {
+  const present = useIsPresent();
+  const reducedMotion = useReducedMotion();
   const [open, setOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const trigger = useRef<HTMLButtonElement>(null);
@@ -82,9 +101,11 @@ export default function ModelPicker({
   }
   function close() {
     updateOpen(false);
-    requestAnimationFrame(() => trigger.current?.focus());
+    requestAnimationFrame(() => {
+      if (present) trigger.current?.focus();
+    });
   }
-  useDialogFocus(open, dialog, close);
+  useDialogFocus(open && present, dialog, close);
   const models = capabilities?.models || [];
   const current = models.find(
     (model) => model.backend === bot.backend && model.id === bot.model,
@@ -98,7 +119,7 @@ export default function ModelPicker({
   const showServiceTier = serviceTiers.length > 0 || (bot.backend === "codex" && !!bot.serviceTier);
   async function choose(model: Model) {
     const backend = capabilities?.backends[model.backend];
-    if (!backend?.available || disabled || saving) return;
+    if (!backend?.available || disabled || saving || !present) return;
     setSaving(true);
     try {
       const effort = model.efforts.includes(bot.effort)
@@ -124,7 +145,7 @@ export default function ModelPicker({
     }
   }
   async function changeEffort(effort: string) {
-    if (disabled || saving) return;
+    if (disabled || saving || !present) return;
     setSaving(true);
     try {
       onBotChange(await api.updateBot(bot.id, { effort }));
@@ -135,7 +156,7 @@ export default function ModelPicker({
     }
   }
   async function changeServiceTier(serviceTier: string) {
-    if (disabled || saving || (serviceTier && !serviceTiers.some((tier) => tier.id === serviceTier))) return;
+    if (disabled || saving || !present || (serviceTier && !serviceTiers.some((tier) => tier.id === serviceTier))) return;
     setSaving(true);
     try {
       onBotChange(await api.updateBot(bot.id, { serviceTier }));
@@ -147,7 +168,8 @@ export default function ModelPicker({
   }
   return (
     <div className="model-controls model-controls-in-menu">
-      <button
+      <m.button
+        {...controlMotion}
         className="model-trigger"
         ref={trigger}
         onClick={() => updateOpen(!open)}
@@ -176,34 +198,44 @@ export default function ModelPicker({
             {showServiceTier && <span className="model-current-tier">{tierName}</span>}
           </small>
         </span>
-        <ChevronDown size={12} />
-      </button>
-      {open && (
-        <>
+        <m.span style={{ display: "inline-flex" }} animate={{ rotate: open ? 180 : 0 }} transition={reducedMotion ? { duration: 0 } : motionTransition.quick}>
+          <ChevronDown size={12} />
+        </m.span>
+      </m.button>
+      {open && present && (
           <button
             className="popover-backdrop"
             tabIndex={-1}
             onClick={close}
             aria-label="Close model picker"
           />
-          <div
+      )}
+      <AnimatePresence initial={false}>
+        {open && present && (
+          <PresenceSurface
+            key="model-picker"
+            variants={reducedMotion ? fade : popoverMotion}
+            initial="hidden"
+            animate="visible"
+            exit="exit"
             className="model-popover"
             ref={dialog}
             tabIndex={-1}
             id={popoverId}
             role="dialog"
-            aria-modal="true"
+            modal
             aria-label="Model, effort and service tier"
           >
             <header>
               <span>Model</span>
-              <button
+              <m.button
+                {...controlMotion}
                 className="icon-button"
                 onClick={close}
                 aria-label="Close"
               >
                 <X size={15} />
-              </button>
+              </m.button>
             </header>
             {(efforts.length > 0 || showServiceTier) && <div className={`model-settings ${efforts.length && showServiceTier ? "has-two-settings" : ""}`}>
             {efforts.length > 0 && (
@@ -270,7 +302,8 @@ export default function ModelPicker({
                     </p>
                   )}
                   {choices.map((model) => (
-                    <button
+                    <m.button
+                      {...controlMotion}
                       key={`${model.backend}:${model.id}`}
                       className="model-choice"
                       aria-pressed={bot.backend === model.backend && bot.model === model.id}
@@ -280,17 +313,22 @@ export default function ModelPicker({
                       <span>
                         <strong>{model.name || model.id}{model.efforts.includes("ultra") && <Zap size={11} aria-label="Supports Ultra" />}</strong>
                       </span>
-                      {bot.backend === model.backend &&
-                        bot.model === model.id && <Check size={16} />}
-                    </button>
+                      <AnimatePresence initial={false}>
+                        {bot.backend === model.backend && bot.model === model.id && (
+                          <m.span key="selected" variants={fade} initial="hidden" animate="visible" exit="exit" style={{ display: "inline-flex" }}>
+                            <Check size={16} />
+                          </m.span>
+                        )}
+                      </AnimatePresence>
+                    </m.button>
                   ))}
                 </section>
               );
             })}
             <footer>Conversation history is preserved when you change models.</footer>
-          </div>
-        </>
-      )}
+          </PresenceSurface>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

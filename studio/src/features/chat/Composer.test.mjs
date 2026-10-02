@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { runInNewContext } from 'node:vm';
 import ts from 'typescript';
+import { motionTestModule } from '../../lib/motion-stub.mjs';
 
 const source = ts.transpileModule(readFileSync(new URL('./Composer.tsx', import.meta.url), 'utf8'), {
   compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX },
@@ -20,8 +21,10 @@ function deferred() {
 // JSX plumbing is stubbed; the send/upload workflow comes from Composer.tsx.
 function composer() {
   let cursor = 0, nextUpload = 0, uploadsPaused = false;
+  let effectCursor = 0;
   const uploadGate = deferred();
   const values = [], requests = [], uploads = [], errors = [];
+  const effects = [], pendingEffects = [], traps = [];
   const state = initial => {
     const index = cursor++;
     if (!(index in values)) values[index] = typeof initial === 'function' ? initial() : initial;
@@ -33,7 +36,17 @@ function composer() {
       useState: state,
       useRef: initial => state(() => ({ current: initial }))[0],
       useId: () => state('composer-test')[0],
-      useEffect() {},
+      useEffect(callback, dependencies) {
+        const index = effectCursor++;
+        const previous = effects[index];
+        if (!previous || !dependencies || dependencies.some((value, offset) => !Object.is(value, previous.dependencies?.[offset]))) {
+          pendingEffects.push(() => {
+            previous?.cleanup?.();
+            effects[index] = { dependencies, cleanup: callback() };
+          });
+        }
+      },
+      createElement: (type, props, ...children) => element(type, { ...props, children }),
     },
     'react/jsx-runtime': { jsx: element, jsxs: element, Fragment: 'fragment' },
     'lucide-react': new Proxy({}, { get: (_, name) => name }),
@@ -46,7 +59,8 @@ function composer() {
       } },
       errorMessage: error => error.message,
     },
-    './ModelPicker': { default: 'ModelPicker', useDialogFocus() {} },
+    '../../lib/motion': motionTestModule(),
+    './ModelPicker': { default: 'ModelPicker', PresenceSurface: 'div', useDialogFocus: active => traps.push(active) },
     './ContextControl': { default: 'ContextControl' },
     './minimal-composer.css': {},
   };
@@ -70,30 +84,38 @@ function composer() {
     },
     onStop: async () => {}, onBotChange() {}, onError: error => errors.push(error),
   };
-  const render = () => { cursor = 0; return exports.default(props); };
-  function find(match) {
+  const render = () => {
+    cursor = 0; effectCursor = 0;
+    const tree = exports.default(props);
+    for (const effect of pendingEffects.splice(0)) effect();
+    return tree;
+  };
+  function all(match) {
+    const matches = [];
     function visit(node) {
-      if (!node || typeof node !== 'object') return undefined;
-      if (match(node)) return node;
+      if (!node || typeof node !== 'object') return;
+      if (match(node)) matches.push(node);
       const children = Array.isArray(node.props?.children) ? node.props.children : [node.props?.children];
-      for (const child of children.flat(Infinity)) {
-        const result = visit(child);
-        if (result) return result;
-      }
+      for (const child of children.flat(Infinity)) visit(child);
     }
-    return visit(render());
+    visit(render());
+    return matches;
   }
+  const find = match => all(match)[0];
   return {
     requests, errors,
+    suspend: suspended => { props.suspended = suspended; render(); },
+    openActions: () => find(node => node.props?.['aria-label'] === 'More actions').props.onClick(),
+    actionsOpen: () => !!find(node => node.props?.className === 'composer-actions-menu'),
+    trapActive: () => { render(); return traps.at(-1); },
+    contextSuspended: () => find(node => node.type === 'ContextControl').props.suspended,
     pauseUploads: () => { uploadsPaused = true; },
     resumeUploads: async () => { uploadsPaused = false; uploadGate.resolve(); await settled(); },
     edit: value => find(node => node.type === 'textarea').props.onChange({ target: { value } }),
     send: () => find(node => node.props?.['aria-label'] === 'Send message').props.onClick(),
     draft: () => find(node => node.type === 'textarea').props.value,
-    uploadNames: () => {
-      const chips = find(node => node.props?.className === 'upload-chips');
-      return chips ? Array.from(chips.props.children, chip => chip.props.children[1].props.children) : [];
-    },
+    uploadNames: () => all(node => node.props?.className?.split(' ').includes('upload-chip'))
+      .map(chip => chip.props.children[1].props.children),
     upload: async name => {
       find(node => node.type === 'input' && node.props.multiple).props.onChange({
         target: { files: [{ name, type: 'text/plain' }] },
@@ -103,6 +125,35 @@ function composer() {
     },
   };
 }
+
+test('suspending a retained mobile composer releases popup focus and keeps draft files', async () => {
+  const view = composer();
+  view.edit('Keep this mobile draft');
+  const attachment = await view.upload('draft.txt');
+  view.openActions();
+  assert.equal(view.actionsOpen(), true);
+  assert.equal(view.trapActive(), true);
+
+  view.suspend(true);
+  assert.equal(view.trapActive(), false);
+  assert.equal(view.actionsOpen(), false);
+  assert.equal(view.contextSuspended(), true);
+  assert.equal(view.draft(), 'Keep this mobile draft');
+  assert.deepEqual(view.uploadNames(), ['draft.txt']);
+  view.send();
+  assert.equal(view.requests.length, 0, 'a hidden conversation cannot submit its retained draft');
+
+  view.suspend(false);
+  assert.equal(view.trapActive(), false);
+  assert.equal(view.actionsOpen(), false, 'the dismissed popup does not reopen on return');
+  assert.equal(view.contextSuspended(), false);
+  view.send();
+  assert.equal(view.requests[0].text, 'Keep this mobile draft');
+  assert.deepEqual(Array.from(view.requests[0].attachments, file => file.id), [attachment.id]);
+  view.requests[0].resolve();
+  await view.requests[0].promise;
+  await settled();
+});
 
 test('message acknowledgement preserves draft edits and files added during POST', async () => {
   const view = composer();

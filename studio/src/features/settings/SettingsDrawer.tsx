@@ -1,8 +1,9 @@
-import { useEffect, useId, useRef, useState, type FormEvent } from 'react'
+import { useEffect, useId, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { Archive, ArrowLeft, Check, Clock3, FileText, FolderOpen, LoaderCircle, Plus, RefreshCw, Search, Shield, Wrench, X } from 'lucide-react'
 import type { Bot, Capabilities, Maintenance, MaintenanceRun, Skill } from '../../lib/types'
 import { api } from '../../lib/api'
 import { isWorking,telegramLabel } from '../../lib/events'
+import { AnimatePresence, LayoutGroup, m, useIsPresent, useReducedMotion, fadeUp, controlMotion, motionSpring, motionTransition } from '../../lib/motion'
 import { BotFields, botPayload, draftFromBot, errorMessage, MarkdownEditor, ModalShell, Notice, RuntimeFields, SaveButton, type BotDraft } from './shared'
 
 interface SettingsDrawerProps {
@@ -30,10 +31,11 @@ export function BotSettingsPanel({ bot, capabilities, onClose, onBotChange, onAr
   bot: Bot; capabilities: Capabilities | null; onClose: () => void;
   onBotChange: (bot: Bot) => void; onArchive: (id: string) => void;
 }) {
-  return <div className="cb-settings-embedded">
+  const present = useIsPresent()
+  return <div className="cb-settings-embedded" inert={!present}>
     <header className="cb-settings-header">
       <div><h2>{bot.name}</h2><p>Your bot's workspace.</p></div>
-      <button type="button" className="cb-settings-icon-button" onClick={onClose} aria-label="Close bot settings"><X size={20} /></button>
+      <m.button {...controlMotion} type="button" className="cb-settings-icon-button" onClick={onClose} aria-label="Close bot settings"><X size={20} /></m.button>
     </header>
     <SettingsContent key={bot.id} bot={bot} capabilities={capabilities} onClose={onClose}
       onBotChange={onBotChange} onArchive={onArchive} />
@@ -48,20 +50,36 @@ function SettingsContent({ bot, bots = [], capabilities, onClose, onBotChange, o
   const tabsId = useId()
   const scopeId = global ? undefined : bot?.id
   return <>
-    <nav className="cb-settings-tabs" role="tablist" aria-label="Settings sections">
-      {tabs.map((entry) => <button key={entry.id} type="button" role="tab" aria-selected={tab === entry.id}
+    <LayoutGroup id={tabsId}><nav className="cb-settings-tabs" role="tablist" aria-label="Settings sections">
+      {tabs.map((entry) => <m.button key={entry.id} type="button" role="tab" aria-selected={tab === entry.id}
         aria-controls={`${tabsId}-tab-${entry.id}`} id={`${tabsId}-tab-button-${entry.id}`}
-        className={tab === entry.id ? 'is-active' : ''} onClick={() => setTab(entry.id)}>{entry.title}</button>)}
-    </nav>
-    <div className="cb-settings-tab-content" role="tabpanel" id={`${tabsId}-tab-${tab}`}
-      aria-labelledby={`${tabsId}-tab-button-${tab}`}>
+        whileTap={{ scale: 0.97 }} transition={motionSpring.control}
+        className={tab === entry.id ? 'is-active' : ''} onClick={() => setTab(entry.id)}>{entry.title}
+        {tab === entry.id && <m.span className="cb-settings-tab-indicator" layoutId="settings-active-tab" transition={motionSpring.control} />}
+      </m.button>)}
+    </nav></LayoutGroup>
+    <AnimatePresence initial={false} mode="wait">
+    <SettingsTabPanel key={tab} id={`${tabsId}-tab-${tab}`} labelledBy={`${tabsId}-tab-button-${tab}`}>
       {tab === 'profile' && bot && <ProfilePane key={bot.id} bot={bot} capabilities={capabilities} onBotChange={onBotChange}
         onArchive={(id) => { onArchive(id); onClose() }} />}
       {tab === 'instructions' && <InstructionsPane key={scopeId ?? 'shared'} id={scopeId} />}
       {tab === 'skills' && <SkillsPane key={scopeId ?? 'shared'} bot={global ? null : bot} onBotChange={onBotChange} />}
       {tab === 'maintenance' && <MaintenancePane capabilities={capabilities} bots={bots} />}
-    </div>
+    </SettingsTabPanel>
+    </AnimatePresence>
   </>
+}
+
+function SettingsTabPanel({ id, labelledBy, children }: { id: string; labelledBy: string; children: ReactNode }) {
+  const present = useIsPresent()
+  return <m.div className="cb-settings-tab-content" role="tabpanel" id={id} aria-labelledby={labelledBy}
+    inert={!present} variants={fadeUp} initial="hidden" animate="visible" exit="exit">{children}</m.div>
+}
+
+function SettingsView({ children }: { children: ReactNode }) {
+  const present = useIsPresent()
+  return <m.div className="cb-settings-pane-motion" inert={!present}
+    variants={fadeUp} initial="hidden" animate="visible" exit="exit">{children}</m.div>
 }
 
 function ProfilePane({ bot, capabilities, onBotChange, onArchive }: {
@@ -104,22 +122,33 @@ function ProfilePane({ bot, capabilities, onBotChange, onArchive }: {
       </div>}
       <div className="cb-settings-location"><FolderOpen size={16} /><span>{bot.workDir}</span></div>
       <section className="cb-settings-section cb-settings-archive-section">
-        {confirmArchive ? <>
-          <p>The bot will leave the list. Its history and workspace files will be kept.</p>
-          <div className="cb-settings-inline-actions">
-            <button type="button" className="cb-settings-button" onClick={() => setConfirmArchive(false)} disabled={busy}>Cancel</button>
-            <button type="button" className="cb-settings-button cb-settings-button--danger" onClick={archive} disabled={busy}>
-              {busy ? <LoaderCircle size={15} className="cb-settings-spin" /> : <Archive size={15} />}Archive
-            </button>
-          </div>
-        </> : <button type="button" className="cb-settings-text-button" onClick={() => setConfirmArchive(true)} disabled={busy}>
+        <AnimatePresence initial={false} mode="wait">{confirmArchive ?
+          <ArchiveConfirmation key="confirmation" busy={busy} onCancel={() => setConfirmArchive(false)} onArchive={archive} />
+        : <m.button {...(!busy ? controlMotion : {})} key="archive" type="button" className="cb-settings-text-button"
+          variants={fadeUp} initial="hidden" animate="visible" exit="exit" onClick={() => setConfirmArchive(true)} disabled={busy}>
           <Archive size={15} />Archive bot
-        </button>}
+        </m.button>}</AnimatePresence>
       </section>
       <Notice error={error} success={success} />
     </div>
     <footer className="cb-settings-footer"><span /><SaveButton busy={busy} disabled={!draft.name.trim()} /></footer>
   </form>
+}
+
+function ArchiveConfirmation({ busy, onCancel, onArchive }: { busy: boolean; onCancel: () => void; onArchive: () => void }) {
+  const present = useIsPresent()
+  const reduced = useReducedMotion()
+  return <m.div className="cb-settings-disclosure" inert={!present}
+    initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }}
+    transition={reduced ? { duration: 0 } : motionTransition.disclosure}>
+    <p>The bot will leave the list. Its history and workspace files will be kept.</p>
+    <div className="cb-settings-inline-actions">
+      <m.button {...(!busy ? controlMotion : {})} type="button" className="cb-settings-button" onClick={onCancel} disabled={busy || !present}>Cancel</m.button>
+      <m.button {...(!busy ? controlMotion : {})} type="button" className="cb-settings-button cb-settings-button--danger" onClick={onArchive} disabled={busy || !present}>
+        {busy ? <LoaderCircle size={15} className="cb-settings-spin" /> : <Archive size={15} />}Archive
+      </m.button>
+    </div>
+  </m.div>
 }
 
 export function reconcileBotDraft(current: BotDraft, previous: BotDraft, next: BotDraft): BotDraft {
@@ -231,36 +260,55 @@ function SkillsPane({ bot, onBotChange }: { bot: Bot | null; onBotChange: (bot: 
     setCreating(false); setEditing(null)
     try { await load() } catch (cause) { setError(errorMessage(cause)) }
   }
-  if (creating || editing) return <SkillEditor skill={editing} botId={id} onBack={() => { setCreating(false); setEditing(null) }} onSaved={edited} />
   const filtered = skills.filter((skill) => `${skill.name} ${skill.description}`.toLocaleLowerCase().includes(query.toLocaleLowerCase()))
   const changed = bot && [...disabled].sort().join('\n') !== [...(bot.disabledSkills ?? [])].sort().join('\n')
-  return <form onSubmit={save} className="cb-settings-form">
+  return <AnimatePresence initial={false} mode="wait">
+    {creating || editing ? <SettingsView key="skill-editor">
+      <SkillEditor skill={editing} botId={id} onBack={() => { setCreating(false); setEditing(null) }} onSaved={edited} />
+    </SettingsView> : <SettingsView key="skill-list"><form onSubmit={save} className="cb-settings-form">
     <div className="cb-settings-scroll">
       <div className="cb-settings-intro"><Shield size={20} /><p>{bot
         ? 'Choose the skills available to this bot. Shared and user skills are inherited; you can also disable them here.'
         : 'Shared skills are available to every bot. Built-in and user skills are also listed here.'}</p></div>
       <div className="cb-settings-skill-toolbar">
         <label className="cb-settings-search"><Search size={16} /><input aria-label="Search skills" placeholder="Find a skill" value={query} onChange={(event) => setQuery(event.target.value)} /></label>
-        <button type="button" className="cb-settings-button" onClick={() => setCreating(true)}><Plus size={16} />Add</button>
+        <m.button {...controlMotion} type="button" className="cb-settings-button" onClick={() => setCreating(true)}><Plus size={16} />Add</m.button>
       </div>
       {loading ? <Loading /> : <div className="cb-settings-skill-list">
-        {filtered.map((skill) => <div className="cb-settings-skill-row" key={skill.id}>
-          <button className="cb-settings-skill-info" type="button" onClick={() => setEditing(skill)}>
-            <span><strong>{skill.name}</strong><em>{scopeNames[skill.scope] ?? skill.scope}</em></span>
-            <p>{skill.description || 'No description provided.'}</p>
-            {!skill.editable && <small>Read-only</small>}
-          </button>
-          {bot && <label className="cb-settings-switch-target"><input type="checkbox" className="cb-settings-switch" aria-label={`Enable skill ${skill.name}`}
-            checked={!disabled.includes(skill.id)} disabled={busy}
-            onChange={(event) => { setDisabled((previous) => event.target.checked ? previous.filter((entry) => entry !== skill.id) : [...new Set([...previous, skill.id])]); setSuccess('') }} /></label>}
-        </div>)}
+        <AnimatePresence initial={false}>
+        {filtered.map((skill) => <SkillRow key={skill.id} skill={skill} toggle={!!bot} busy={busy} enabled={!disabled.includes(skill.id)}
+          onEdit={() => setEditing(skill)} onEnable={(enabled) => {
+            setDisabled((previous) => enabled ? previous.filter((entry) => entry !== skill.id) : [...new Set([...previous, skill.id])]); setSuccess('')
+          }} />)}
+        </AnimatePresence>
         {filtered.length === 0 && <p className="cb-settings-empty">{query ? 'No skills match this name.' : 'No skills yet. Add your first one.'}</p>}
       </div>}
       <Notice error={error} success={success} />
     </div>
     {bot && <footer className="cb-settings-footer"><span className="cb-settings-hint">This selection only applies to this bot.</span>
       <SaveButton busy={busy} disabled={loading || !changed} /></footer>}
-  </form>
+  </form></SettingsView>}
+  </AnimatePresence>
+}
+
+function SkillRow({ skill, toggle, busy, enabled, onEdit, onEnable }: {
+  skill: Skill; toggle: boolean; busy: boolean; enabled: boolean; onEdit: () => void; onEnable: (enabled: boolean) => void;
+}) {
+  const present = useIsPresent()
+  const reduced = useReducedMotion()
+  return <m.div className="cb-settings-skill-entry" inert={!present}
+    initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }}
+    transition={reduced ? { duration: 0 } : motionTransition.disclosure}>
+    <div className="cb-settings-skill-row">
+      <m.button whileTap={{ scale: 0.99 }} transition={motionSpring.control} className="cb-settings-skill-info" type="button" onClick={onEdit} disabled={!present}>
+        <span><strong>{skill.name}</strong><em>{scopeNames[skill.scope] ?? skill.scope}</em></span>
+        <p>{skill.description || 'No description provided.'}</p>
+        {!skill.editable && <small>Read-only</small>}
+      </m.button>
+      {toggle && <label className="cb-settings-switch-target"><input type="checkbox" className="cb-settings-switch" aria-label={`Enable skill ${skill.name}`}
+        checked={enabled} disabled={busy || !present} onChange={(event) => onEnable(event.target.checked)} /></label>}
+    </div>
+  </m.div>
 }
 
 function SkillEditor({ skill, botId, onBack, onSaved }: { skill: Skill | null; botId?: string; onBack: () => void; onSaved: () => void }) {
@@ -300,7 +348,7 @@ function SkillEditor({ skill, botId, onBack, onSaved }: { skill: Skill | null; b
   }
   return <form onSubmit={save} className="cb-settings-form">
     <div className="cb-settings-scroll">
-      <button type="button" className="cb-settings-text-button cb-settings-back" onClick={onBack}><ArrowLeft size={16} />All skills</button>
+      <m.button {...controlMotion} type="button" className="cb-settings-text-button cb-settings-back" onClick={onBack}><ArrowLeft size={16} />All skills</m.button>
       <h3 className="cb-settings-pane-heading">{skill?.name ?? 'New skill'}</h3>
       {!skill && <>
         <label className="cb-settings-field">Skill folder name
@@ -386,9 +434,9 @@ function MaintenancePane({ capabilities, bots }: { capabilities: Capabilities | 
         </section>
         <section className="cb-settings-section">
           <div className="cb-settings-section-heading"><h3>Recent checks</h3>
-            <button type="button" className="cb-settings-button" onClick={run} disabled={running || Boolean(value?.running)}>
+            <m.button {...(!running && !value?.running ? controlMotion : {})} type="button" className="cb-settings-button" onClick={run} disabled={running || Boolean(value?.running)}>
               {running || value?.running ? <LoaderCircle size={15} className="cb-settings-spin" /> : <RefreshCw size={15} />}Run
-            </button>
+            </m.button>
           </div>
           {lastRunAt && <p className="cb-settings-hint">Last run: {formatDate(lastRunAt)}</p>}
           {reports.length === 0 ? <p className="cb-settings-empty">No inventory runs yet.</p> : <div className="cb-settings-report-list">
@@ -406,6 +454,7 @@ function MaintenancePane({ capabilities, bots }: { capabilities: Capabilities | 
 }
 
 function MaintenanceReport({ report, botName, expanded, onToggle }: { report: MaintenanceRun; botName?: string; expanded: boolean; onToggle: () => void }) {
+  const reduced = useReducedMotion()
   const failed = report.status === 'failed' || report.status === 'error' || report.status === 'interrupted' || Boolean(report.error)
   const inProgress = report.status === 'running'
   const deferred = report.status === 'deferred'
@@ -413,17 +462,19 @@ function MaintenanceReport({ report, botName, expanded, onToggle }: { report: Ma
   const bytesRemoved = typeof report.bytesRemoved === 'number' ? report.bytesRemoved : undefined
   const inventory = Array.isArray(report.inventory) ? report.inventory.filter((entry): entry is string => typeof entry === 'string') : []
   return <div className={`cb-settings-report ${failed ? 'is-failed' : ''}`}>
-    <button type="button" className="cb-settings-report-header" aria-expanded={expanded} onClick={onToggle}>
+    <m.button whileTap={{ scale: 0.995 }} transition={motionSpring.control} type="button" className="cb-settings-report-header" aria-expanded={expanded} onClick={onToggle}>
       {inProgress ? <LoaderCircle size={15} className="cb-settings-spin" /> : failed ? <Wrench size={15} /> : deferred ? <Clock3 size={15} /> : <Check size={15} />}
       <span><strong>{botName ?? report.botName ?? (report.botId ? 'Archived bot' : 'All bots')}</strong><small>{formatDate(report.startedAt ?? report.time ?? '')}</small></span>
       <em>{inProgress ? 'Checking' : failed ? 'Error' : deferred ? 'After response' : 'Done'}</em>
-    </button>
-    {expanded && <div className="cb-settings-report-details">
+    </m.button>
+    <AnimatePresence initial={false}>{expanded && <m.div key="report" className="cb-settings-disclosure"
+      initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }}
+      transition={reduced ? { duration: 0 } : motionTransition.disclosure}><div className="cb-settings-report-details">
       {report.summary && <p>{report.summary}</p>}
       {removedFiles !== undefined && <p>Temporary files removed: {removedFiles}{bytesRemoved !== undefined ? ` · ${formatBytes(bytesRemoved)}` : ''}</p>}
       {inventory.length > 0 && <ul>{inventory.map((file) => <li key={file}>{file}</li>)}</ul>}
       {report.error && <p className="cb-settings-report-error">{report.error}</p>}
-    </div>}
+    </div></m.div>}</AnimatePresence>
   </div>
 }
 

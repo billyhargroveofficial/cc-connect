@@ -1,6 +1,16 @@
 import { useEffect, useRef, useState } from "react";
 import { Check, Monitor, Moon, Sun } from "lucide-react";
 import type { ThemePreference } from "../lib/theme";
+import {
+  AnimatePresence,
+  controlMotion,
+  LayoutGroup,
+  m,
+  motionSpring,
+  motionTransition,
+  popoverMotion,
+  useIsPresent,
+} from "../lib/motion";
 
 const options: {
   id: ThemePreference;
@@ -11,6 +21,36 @@ const options: {
   { id: "light", label: "Light", icon: Sun },
   { id: "dark", label: "Dark", icon: Moon },
 ];
+
+function ThemeMenu({
+  children,
+  menuRef,
+  onKeyDown,
+}: {
+  children: React.ReactNode;
+  menuRef: React.RefObject<HTMLDivElement | null>;
+  onKeyDown: (event: React.KeyboardEvent) => void;
+}) {
+  const present = useIsPresent();
+  return (
+    <m.div
+      className="theme-menu"
+      ref={menuRef}
+      role="menu"
+      aria-label="Theme"
+      onKeyDown={onKeyDown}
+      variants={popoverMotion}
+      initial="hidden"
+      animate="visible"
+      exit="exit"
+      style={{ originX: 1, originY: 1 }}
+      inert={!present}
+      aria-hidden={!present || undefined}
+    >
+      {children}
+    </m.div>
+  );
+}
 
 export default function ThemePicker({
   value,
@@ -29,7 +69,9 @@ export default function ThemePicker({
   useEffect(() => {
     if (!open) return;
     const frame = requestAnimationFrame(() => {
-      menu.current?.querySelector<HTMLButtonElement>('[aria-checked="true"]')?.focus();
+      menu.current
+        ?.querySelector<HTMLButtonElement>('[aria-checked="true"]')
+        ?.focus();
     });
     const outside = (event: PointerEvent) => {
       if (!root.current?.contains(event.target as Node)) setOpen(false);
@@ -59,14 +101,18 @@ export default function ThemePicker({
     }
     if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
     event.preventDefault();
-    const items = Array.from(menu.current?.querySelectorAll<HTMLButtonElement>("button") || []);
+    const items = Array.from(
+      menu.current?.querySelectorAll<HTMLButtonElement>("button") || [],
+    );
     if (!items.length) return;
     const current = items.indexOf(document.activeElement as HTMLButtonElement);
-    const index = event.key === "Home"
-      ? 0
-      : event.key === "End"
-        ? items.length - 1
-        : (current + (event.key === "ArrowDown" ? 1 : -1) + items.length) % items.length;
+    const index =
+      event.key === "Home"
+        ? 0
+        : event.key === "End"
+          ? items.length - 1
+          : (current + (event.key === "ArrowDown" ? 1 : -1) + items.length) %
+            items.length;
     items[index]?.focus();
   }
 
@@ -80,7 +126,7 @@ export default function ThemePicker({
         }
       }}
     >
-      <button
+      <m.button
         ref={trigger}
         type="button"
         className={`icon-button theme-trigger${open ? " is-open" : ""}`}
@@ -95,31 +141,72 @@ export default function ThemePicker({
         title={`Theme: ${selected.label}`}
         aria-haspopup="menu"
         aria-expanded={open}
+        data-motion-control
+        {...controlMotion}
       >
-        <TriggerIcon size={17} />
-      </button>
-      {open && (
-        <div className="theme-menu" ref={menu} role="menu" aria-label="Theme" onKeyDown={menuKeyDown}>
-          {options.map((option) => {
-            const Icon = option.icon;
-            const active = value === option.id;
-            return (
-              <button
-                key={option.id}
-                type="button"
-                role="menuitemradio"
-                aria-checked={active}
-                className={active ? "is-selected" : ""}
-                onClick={() => select(option.id)}
-              >
-                <Icon size={16} />
-                <span>{option.label}</span>
-                {active && <Check size={15} className="theme-check" />}
-              </button>
-            );
-          })}
-        </div>
-      )}
+        <AnimatePresence initial={false} mode="wait">
+          <m.span
+            key={selected.id}
+            className="theme-trigger-icon"
+            initial={{ opacity: 0, rotate: -15, scale: 0.9 }}
+            animate={{ opacity: 1, rotate: 0, scale: 1 }}
+            exit={{ opacity: 0, rotate: 15, scale: 0.9 }}
+            transition={motionTransition.quick}
+          >
+            <TriggerIcon size={17} />
+          </m.span>
+        </AnimatePresence>
+      </m.button>
+      <LayoutGroup id="theme-picker">
+        <AnimatePresence initial={false}>
+          {open && (
+            <ThemeMenu key="theme-menu" menuRef={menu} onKeyDown={menuKeyDown}>
+              {options.map((option) => {
+                const Icon = option.icon;
+                const active = value === option.id;
+                return (
+                  <m.button
+                    key={option.id}
+                    type="button"
+                    role="menuitemradio"
+                    aria-checked={active}
+                    className={active ? "is-selected" : ""}
+                    onClick={() => select(option.id)}
+                    whileHover={{ x: 1 }}
+                    whileTap={{ scale: 0.98 }}
+                    transition={motionSpring.control}
+                    data-motion-control
+                  >
+                    <Icon size={16} />
+                    <span>{option.label}</span>
+                    <AnimatePresence initial={false}>
+                      {active && (
+                        <m.span
+                          className="theme-check"
+                          initial={{ opacity: 0, scale: 0.7 }}
+                          animate={{ opacity: 1, scale: 1 }}
+                          exit={{ opacity: 0, scale: 0.7 }}
+                          transition={motionTransition.quick}
+                        >
+                          <Check size={15} />
+                        </m.span>
+                      )}
+                    </AnimatePresence>
+                    {active && (
+                      <m.span
+                        className="theme-option-selection"
+                        layoutId="selected-theme"
+                        transition={motionSpring.layout}
+                        aria-hidden="true"
+                      />
+                    )}
+                  </m.button>
+                );
+              })}
+            </ThemeMenu>
+          )}
+        </AnimatePresence>
+      </LayoutGroup>
     </div>
   );
 }

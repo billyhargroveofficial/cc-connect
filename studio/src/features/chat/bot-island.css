@@ -16,7 +16,7 @@
   align-self: flex-end;
   flex: 0 0 auto;
   width: 100%;
-  height: var(--bot-island-compact-height, auto);
+  height: auto;
   min-height: 0;
   max-height: 100%;
   padding: 22px 18px;
@@ -27,11 +27,7 @@
   border-radius: 21px;
   background: var(--surface-raised);
   box-shadow: 0 3px 20px #00000012;
-  transition:
-    width 280ms cubic-bezier(.2,.8,.2,1),
-    height 280ms cubic-bezier(.2,.8,.2,1),
-    padding 220ms cubic-bezier(.2,.8,.2,1),
-    box-shadow 220ms ease;
+  transition: box-shadow 220ms ease;
 }
 
 .bot-island-shell.is-settings {
@@ -48,7 +44,14 @@
 
 .bot-island-overview {
   min-width: 0;
-  animation: bot-island-overview-enter 160ms cubic-bezier(.2,.8,.2,1) both;
+}
+
+.bot-island-settings {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
 }
 
 .bot-island-backdrop,
@@ -257,7 +260,6 @@
     inset: 0;
     background: #00000030;
     touch-action: none;
-    animation: bot-island-fade 160ms ease-out both;
   }
 
   .bot-island-card {
@@ -266,7 +268,6 @@
     max-width: 320px;
     max-height: 100%;
     box-shadow: 0 6px 28px #00000020;
-    animation: bot-island-enter 180ms cubic-bezier(.2,.8,.2,1) both;
   }
 
   .bot-island-shell.is-open.is-settings .bot-island-card {
@@ -296,21 +297,6 @@
     min-height: 44px;
     align-items: center;
   }
-}
-
-@keyframes bot-island-enter {
-  from { opacity: 0; transform: translateX(8px); }
-  to { opacity: 1; transform: translateX(0); }
-}
-
-@keyframes bot-island-fade {
-  from { opacity: 0; }
-  to { opacity: 1; }
-}
-
-@keyframes bot-island-overview-enter {
-  from { opacity: 0; transform: translateX(-5px); }
-  to { opacity: 1; transform: none; }
 }
 
 @media (prefers-reduced-motion: reduce) {

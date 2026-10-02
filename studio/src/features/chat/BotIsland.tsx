@@ -1,16 +1,31 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { RefObject } from "react";
+import type { ComponentProps, ReactNode, Ref, RefObject } from "react";
 import { FileText, Image, MessageSquare, Send, Settings2, Target, X } from "lucide-react";
 import Avatar from "../../components/Avatar";
 import { fileURL } from "../../lib/api";
 import { botMessagePresentation, telegramLabel, telegramTitle } from "../../lib/events";
 import type { Attachment, Bot, Capabilities, Event } from "../../lib/types";
+import { AnimatePresence, m, useIsPresent, useReducedMotion, fade, fadeUp, popoverMotion, controlMotion, motionSpring } from "../../lib/motion";
 import { BotSettingsPanel } from "../settings/SettingsDrawer";
 import { useDialogFocus } from "./ModelPicker";
 import "./bot-island.css";
 
 const desktopQuery = "(min-width: 1100px)";
 const avatarPriorityStatuses = new Set(["blocked", "waiting", "interrupted", "failed", "error"]);
+
+function IslandShell(props: ComponentProps<typeof m.aside>) {
+  const present = useIsPresent();
+  return <m.aside {...props}
+    inert={!present || props.inert}
+    aria-hidden={!present || props["aria-hidden"]}
+    style={{ ...props.style, pointerEvents: present ? props.style?.pointerEvents : "none" }} />;
+}
+
+function IslandPane({ className, children, ref }: { className: string; children: ReactNode; ref?: Ref<HTMLDivElement> }) {
+  const present = useIsPresent();
+  return <m.div ref={ref} className={className} layout="position" variants={fadeUp} initial="hidden" animate="visible" exit="exit"
+    inert={!present} aria-hidden={!present || undefined}>{children}</m.div>;
+}
 
 function attachmentURL(value: unknown): string | undefined {
   if (typeof value !== "string" || !value) return undefined;
@@ -91,8 +106,8 @@ export default function BotIsland({
   );
   const dialog = useRef<HTMLDivElement>(null);
   const settingsTrigger = useRef<HTMLButtonElement>(null);
-  const collapseTimer = useRef<number | undefined>(undefined);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const reduced = useReducedMotion();
   const visible = open || settingsOpen;
   const overlay = visible && !desktop && !suspended;
   const { requests, files } = useMemo(() => botIslandContent(events, bot.id), [events, bot.id]);
@@ -116,41 +131,33 @@ export default function BotIsland({
     }
   }, [desktop, triggerRef]);
 
-  useEffect(() => () => window.clearTimeout(collapseTimer.current), []);
+  useEffect(() => {
+    if (dialog.current) dialog.current.inert = suspended || (!desktop && !overlay);
+  }, [desktop, overlay, suspended]);
+
+  useEffect(() => {
+    if (suspended) setSettingsOpen(false);
+  }, [suspended]);
 
   const close = useCallback(() => {
-    window.clearTimeout(collapseTimer.current);
-    dialog.current?.style.removeProperty("--bot-island-compact-height");
+    if (!desktop && dialog.current) dialog.current.inert = true;
     setSettingsOpen(false);
     onClose();
     window.setTimeout(() => triggerRef.current?.focus(), 0);
-  }, [onClose, triggerRef]);
+  }, [desktop, onClose, triggerRef]);
 
   const closeSettings = useCallback(() => {
     setSettingsOpen(false);
-    window.clearTimeout(collapseTimer.current);
-    collapseTimer.current = window.setTimeout(() => {
-      dialog.current?.style.removeProperty("--bot-island-compact-height");
-    }, 300);
     window.requestAnimationFrame(() => settingsTrigger.current?.focus());
   }, []);
 
   const openSettings = useCallback(() => {
-    window.clearTimeout(collapseTimer.current);
-    const card = dialog.current;
-    if (card) {
-      card.style.setProperty(
-        "--bot-island-compact-height",
-        `${Math.round(card.getBoundingClientRect().height)}px`,
-      );
-      void card.offsetHeight;
-    }
-    if (!open) onOpen();
+    if (!desktop && !open) onOpen();
     setSettingsOpen(true);
     window.requestAnimationFrame(() => {
       dialog.current?.querySelector<HTMLButtonElement>(".cb-settings-icon-button")?.focus();
     });
-  }, [open, onOpen]);
+  }, [desktop, open, onOpen]);
 
   useEffect(() => {
     if (!desktop || !settingsOpen || suspended) return;
@@ -168,6 +175,7 @@ export default function BotIsland({
       action();
       return;
     }
+    if (dialog.current) dialog.current.inert = true;
     onClose();
     // Let the island's trap finish before the next dialog captures its return target.
     window.setTimeout(() => {
@@ -179,19 +187,27 @@ export default function BotIsland({
   useDialogFocus(overlay, dialog, settingsOpen ? closeSettings : close);
 
   return (
-    <aside className={`bot-island-shell${visible ? " is-open" : ""}${settingsOpen ? " is-settings" : ""}`}
+    <AnimatePresence initial={false}>
+    {(desktop || visible) && <IslandShell key="bot-island" className={`bot-island-shell${visible ? " is-open" : ""}${settingsOpen ? " is-settings" : ""}`}
+      variants={fade} initial={desktop ? false : "hidden"} animate="visible" exit="exit"
       aria-label={settingsOpen ? "Bot settings" : "Bot details"} inert={suspended || (!desktop && !visible)}>
-      <div className="bot-island-backdrop" onClick={close} aria-hidden="true" />
-      <div className="bot-island-card" ref={dialog} tabIndex={-1}
+      <m.div className="bot-island-backdrop" variants={fade} onClick={close} aria-hidden="true" />
+      <m.div className="bot-island-card" ref={dialog} tabIndex={-1}
+        layout={!reduced} layoutDependency={`${desktop}-${settingsOpen}-${bot.id}`} layoutScroll
+        variants={popoverMotion} initial={desktop ? false : "hidden"} animate="visible" exit="exit"
+        transition={{ layout: motionSpring.layout }} style={{ transformOrigin: "top right" }}
         role={overlay ? "dialog" : undefined} aria-modal={overlay || undefined}
         aria-label={overlay ? settingsOpen ? "Bot settings" : "Bot details" : undefined}>
+        <AnimatePresence initial={false} mode="popLayout">
         {settingsOpen ? (
+          <IslandPane key="settings" className="bot-island-settings">
           <BotSettingsPanel key={bot.id} bot={bot} capabilities={capabilities}
             onClose={closeSettings} onBotChange={onBotChange} onArchive={onArchive} />
+          </IslandPane>
         ) : (
-          <div className="bot-island-overview">
-            <button type="button" className="icon-button bot-island-close" onClick={close}
-              aria-label="Close bot details"><X size={18} /></button>
+          <IslandPane key="overview" className="bot-island-overview">
+            <m.button {...controlMotion} type="button" className="icon-button bot-island-close" onClick={close}
+              aria-label="Close bot details"><X size={18} /></m.button>
             <div className="bot-island-profile">
               <Avatar bot={bot} size={52} status={avatarStatus} />
               <div className="bot-island-identity">
@@ -204,14 +220,14 @@ export default function BotIsland({
             </div>
             {bot.role && <p className="bot-island-role" title={bot.role}>{bot.role}</p>}
             <div className="bot-island-actions">
-              <button ref={settingsTrigger} type="button" className="bot-island-action" onClick={openSettings}
-                aria-label="Bot settings"><Settings2 size={16} />Settings</button>
+              <m.button {...controlMotion} ref={settingsTrigger} type="button" className="bot-island-action" onClick={openSettings}
+                aria-label="Bot settings"><Settings2 size={16} />Settings</m.button>
               {supportsGoal && (
-                <button type="button" className={`bot-island-action${hasGoal ? " has-goal" : ""}`}
+                <m.button {...controlMotion} type="button" className={`bot-island-action${hasGoal ? " has-goal" : ""}`}
                   onClick={() => openAction(onGoal)} aria-label="Bot goal"
                   title={hasGoal ? "View bot goal" : "Set bot goal"}>
                   <Target size={16} />Goal{hasGoal && <span className="bot-island-goal-dot" aria-hidden="true" />}
-                </button>
+                </m.button>
               )}
             </div>
             {bot.telegram?.enabled && (
@@ -242,19 +258,21 @@ export default function BotIsland({
                 <ul className="bot-island-list">
                   {files.map(file => (
                     <li key={file.id || file.url}>
-                      <a className="bot-island-file" href={fileURL(bot.id, file)}
+                      <m.a {...controlMotion} className="bot-island-file" href={fileURL(bot.id, file)}
                         target="_blank" rel="noreferrer noopener" title={file.name}>
                         {file.mimeType.startsWith("image/") ? <Image size={16} aria-hidden="true" /> : <FileText size={16} aria-hidden="true" />}
                         <span>{file.name}</span>
-                      </a>
+                      </m.a>
                     </li>
                   ))}
                 </ul>
               </section>
             )}
-          </div>
+          </IslandPane>
         )}
-      </div>
-    </aside>
+        </AnimatePresence>
+      </m.div>
+    </IslandShell>}
+    </AnimatePresence>
   );
 }

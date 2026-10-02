@@ -38,6 +38,7 @@
   color: var(--text);
   background: var(--bg);
   color-scheme: dark;
+  transition: background-color 180ms ease, color 180ms ease;
 }
 :root[data-theme="light"] {
   --bg: #fcfcfc;
@@ -170,8 +171,7 @@ svg {
   background: transparent;
   transition:
     background 0.15s,
-    color 0.15s,
-    transform 0.15s cubic-bezier(.2,.8,.2,1);
+    color 0.15s;
 }
 .icon-button:hover {
   background: var(--surface-hover);
@@ -180,8 +180,8 @@ svg {
 .icon-button:disabled {
   opacity: 0.4;
 }
-.icon-button:active:not(:disabled) {
-  transform: scale(.93);
+.icon-button[data-motion-control] {
+  transition: background 0.15s, color 0.15s;
 }
 .primary-button,
 .secondary-button {
@@ -525,6 +525,21 @@ svg {
 .login-submit svg {
   margin-left: auto;
 }
+.login-submit-content {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+}
+.login-submit-content.is-busy {
+  justify-content: center;
+}
+.login-submit-content.is-busy svg {
+  margin-left: 0;
+}
+.login-notice {
+  overflow: hidden;
+}
 .login-card small {
   display: block;
   color: var(--faint);
@@ -551,6 +566,7 @@ svg {
   width: 100%;
   display: flex;
   overflow: hidden;
+  position: relative;
 }
 .roster {
   width: 284px;
@@ -579,12 +595,28 @@ svg {
   text-align: left;
   background: transparent;
   transition: background 0.15s;
+  position: relative;
+  isolation: isolate;
 }
-.bot-row:hover {
+.bot-row:hover:not(.is-selected) {
   background: var(--surface-hover);
 }
 .bot-row.is-selected {
+  background: transparent;
+}
+.bot-row-selection {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  border-radius: inherit;
   background: var(--surface-hover);
+  pointer-events: none;
+}
+.bot-row > .bot-avatar,
+.bot-row-copy,
+.row-working-dot {
+  position: relative;
+  z-index: 1;
 }
 .bot-row-copy {
   flex: 1;
@@ -677,6 +709,12 @@ svg {
   color: var(--text);
   background: var(--surface-hover);
 }
+.theme-trigger-icon {
+  display: grid;
+  place-items: center;
+  width: 17px;
+  height: 17px;
+}
 .theme-menu {
   position: absolute;
   z-index: 20;
@@ -688,7 +726,6 @@ svg {
   border-radius: 12px;
   background: var(--surface-raised);
   box-shadow: 0 14px 40px rgb(0 0 0 / 0.24);
-  animation: theme-menu-enter 140ms cubic-bezier(.2,.8,.2,1);
 }
 .theme-menu button {
   width: 100%;
@@ -704,11 +741,16 @@ svg {
   text-align: left;
   font-size: 12px;
   transition: color 120ms, background 120ms;
+  position: relative;
+  isolation: isolate;
 }
 .theme-menu button:hover,
 .theme-menu button:focus-visible,
 .theme-menu button.is-selected {
   color: var(--text);
+}
+.theme-menu button:hover:not(.is-selected),
+.theme-menu button:focus-visible:not(.is-selected) {
   background: var(--surface-hover);
 }
 .theme-menu button:focus-visible {
@@ -717,10 +759,21 @@ svg {
 .theme-check {
   justify-self: end;
   color: var(--accent);
+  display: grid;
+  place-items: center;
 }
-@keyframes theme-menu-enter {
-  from { opacity: 0; transform: translateY(4px) scale(.98); }
-  to { opacity: 1; transform: none; }
+.theme-menu button > svg,
+.theme-menu button > span:not(.theme-option-selection) {
+  position: relative;
+  z-index: 1;
+}
+.theme-option-selection {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  border-radius: inherit;
+  background: var(--surface-hover);
+  pointer-events: none;
 }
 .footer-settings {
   display: flex;
@@ -739,6 +792,10 @@ svg {
   flex: 1;
   min-width: 0;
   position: relative;
+}
+.workspace-conversation {
+  height: 100%;
+  min-width: 0;
 }
 .workspace-empty {
   height: 100%;
@@ -765,13 +822,19 @@ svg {
   line-height: 1.7;
   margin-bottom: 24px;
 }
-.global-toast {
+.global-toast-position {
   position: fixed;
   bottom: 26px;
   left: calc(50% + 130px);
   transform: translateX(-50%);
   z-index: 60;
+  width: max-content;
   max-width: min(580px, calc(100vw - 32px));
+  pointer-events: none;
+}
+.global-toast {
+  max-width: 100%;
+  pointer-events: auto;
   background: var(--surface-raised);
   border: 1px solid var(--border);
   box-shadow: var(--shadow);
@@ -792,6 +855,12 @@ svg {
 }
 .global-toast p {
   margin: 0;
+}
+.roster,
+.login-card,
+.theme-menu,
+.global-toast {
+  transition: background-color 180ms ease, border-color 180ms ease, color 180ms ease;
 }
 /* Conversation */
 .chat-room {
@@ -997,7 +1066,6 @@ svg {
   color: var(--bg);
   transition:
     opacity 0.15s,
-    transform 0.15s cubic-bezier(.2,.8,.2,1),
     background 0.15s,
     color 0.15s;
 }
@@ -1007,9 +1075,6 @@ svg {
 .send-button:disabled {
   background: var(--surface-hover);
   color: var(--faint);
-}
-.send-button:active:not(:disabled) {
-  transform: scale(.9);
 }
 .stop-button {
   background: var(--text);
@@ -1487,15 +1552,20 @@ svg {
     width: 100%;
     border: none;
     padding: 0 15px;
+    position: absolute;
+    inset: 0;
   }
   .workspace.is-chat > .roster {
-    display: none;
+    pointer-events: none;
+  }
+  .workspace > .workspace-content {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
   }
   .workspace:not(.is-chat) > .workspace-content {
-    display: none;
-  }
-  .workspace.is-chat > .workspace-content {
-    display: block;
+    pointer-events: none;
   }
   .roster-list {
     padding-top: max(10px, env(safe-area-inset-top));
@@ -1611,11 +1681,12 @@ svg {
     width: min(290px, calc(100vw - 32px));
     bottom: 42px;
   }
-  .global-toast {
+  .global-toast-position {
     bottom: calc(18px + env(safe-area-inset-bottom));
     left: 50%;
     width: calc(100% - 28px);
   }
+  .global-toast { width: 100%; }
   .chat-empty {
     min-height: 230px;
     padding: 0 10px 15px;

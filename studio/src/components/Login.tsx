@@ -3,6 +3,60 @@ import { ArrowRight, KeyRound, LoaderCircle, RefreshCw } from "lucide-react";
 import Brand from "./Brand";
 import Avatar from "./Avatar";
 import { errorMessage } from "../lib/api";
+import {
+  AnimatePresence,
+  controlMotion,
+  fade,
+  fadeUp,
+  m,
+  motionTransition,
+  useIsPresent,
+  useReducedMotion,
+} from "../lib/motion";
+
+const welcomeReveal = {
+  hidden: {},
+  visible: { transition: { staggerChildren: 0.055, delayChildren: 0.025 } },
+};
+
+function LoginNotice({
+  message,
+  retry,
+}: {
+  message: string;
+  retry?: () => void;
+}) {
+  const present = useIsPresent();
+  const reduced = useReducedMotion();
+  return (
+    <m.div
+      className="login-notice"
+      initial={{ height: 0, opacity: 0 }}
+      animate={{ height: "auto", opacity: 1 }}
+      exit={{ height: 0, opacity: 0 }}
+      transition={reduced ? { duration: 0 } : motionTransition.disclosure}
+      inert={!present}
+      aria-hidden={!present || undefined}
+    >
+      <div className="notice is-error" role="alert">
+        {message}
+        {retry && (
+          <m.button
+            type="button"
+            className="text-button"
+            onClick={retry}
+            data-motion-control
+            {...controlMotion}
+          >
+            <RefreshCw size={13} />
+            Retry
+          </m.button>
+        )}
+      </div>
+    </m.div>
+  );
+}
+
 export default function Login({
   checking,
   error,
@@ -14,9 +68,11 @@ export default function Login({
   onLogin: (token: string) => Promise<void>;
   onRetry: () => void;
 }) {
+  const present = useIsPresent();
   const [token, setToken] = useState("");
   const [busy, setBusy] = useState(false);
   const [localError, setLocalError] = useState("");
+  const pending = checking || busy;
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     if (!token.trim()) return;
@@ -32,37 +88,53 @@ export default function Login({
     }
   }
   return (
-    <main className="welcome">
-      <header>
+    <m.main
+      className="welcome"
+      variants={fade}
+      initial="hidden"
+      animate="visible"
+      exit="exit"
+      inert={!present}
+      aria-hidden={!present || undefined}
+    >
+      <m.header variants={fadeUp}>
         <Brand />
         <span className="welcome-local">
           <span className="status-dot" />
           On your machine
         </span>
-      </header>
-      <div className="welcome-layout">
-        <section className="welcome-copy">
-          <div className="welcome-avatars">
-            <Avatar avatar="lavender" size={50} />
-            <Avatar avatar="mint" size={44} />
-            <Avatar avatar="peach" size={42} />
-          </div>
-          <span className="eyebrow">YOUR TEAM. YOUR WORKSPACE.</span>
-          <h1>
+      </m.header>
+      <m.div className="welcome-layout" variants={welcomeReveal}>
+        <m.section className="welcome-copy" variants={welcomeReveal}>
+          <m.div className="welcome-avatars" variants={welcomeReveal}>
+            <m.div variants={fadeUp}>
+              <Avatar avatar="lavender" size={50} />
+            </m.div>
+            <m.div variants={fadeUp}>
+              <Avatar avatar="mint" size={44} />
+            </m.div>
+            <m.div variants={fadeUp}>
+              <Avatar avatar="peach" size={42} />
+            </m.div>
+          </m.div>
+          <m.span className="eyebrow" variants={fadeUp}>
+            YOUR TEAM. YOUR WORKSPACE.
+          </m.span>
+          <m.h1 variants={fadeUp}>
             Give them direction.
             <br />
             <span>Bots take it from there.</span>
-          </h1>
-          <p>
+          </m.h1>
+          <m.p variants={fadeUp}>
             Persistent assistants with memory and tasks of their own.
-            <br className="desktop-break" /> They work together, share
-            results, and stay connected.
-          </p>
-          <div className="welcome-footnote">
+            <br className="desktop-break" /> They work together, share results,
+            and stay connected.
+          </m.p>
+          <m.div className="welcome-footnote" variants={fadeUp}>
             Codex & Pi <span>·</span> On your server or computer
-          </div>
-        </section>
-        <form className="login-card" onSubmit={submit}>
+          </m.div>
+        </m.section>
+        <m.form className="login-card" onSubmit={submit} variants={fadeUp}>
           <div className="login-key">
             <KeyRound size={20} />
           </div>
@@ -76,38 +148,57 @@ export default function Login({
             type="password"
             autoComplete="current-password"
             placeholder="Paste your key"
-            disabled={checking || busy}
+            disabled={pending}
           />
-          <button
+          <m.button
             type="submit"
             className="primary-button login-submit"
-            disabled={!token.trim() || checking || busy}
+            disabled={!token.trim() || pending}
+            aria-busy={pending}
+            aria-label={
+              checking ? "Checking connection" : busy ? "Signing in" : "Sign in"
+            }
+            data-motion-control
+            {...(!token.trim() || pending ? {} : controlMotion)}
           >
-            {checking || busy ? (
-              <LoaderCircle size={17} className="spin" />
-            ) : (
-              <>
-                Sign in <ArrowRight size={17} />
-              </>
+            <AnimatePresence initial={false} mode="wait">
+              <m.span
+                key={pending ? "pending" : "ready"}
+                className={`login-submit-content${pending ? " is-busy" : ""}`}
+                variants={fade}
+                initial="hidden"
+                animate="visible"
+                exit="exit"
+                transition={motionTransition.quick}
+              >
+                {pending ? (
+                  <>
+                    <LoaderCircle size={17} className="spin" />
+                    <span>{checking ? "Checking…" : "Signing in…"}</span>
+                  </>
+                ) : (
+                  <>
+                    Sign in <ArrowRight size={17} />
+                  </>
+                )}
+              </m.span>
+            </AnimatePresence>
+          </m.button>
+          <AnimatePresence initial={false}>
+            {(localError || error) && (
+              <LoginNotice
+                key="login-error"
+                message={localError || error}
+                retry={error && !localError ? onRetry : undefined}
+              />
             )}
-          </button>
-          {(localError || error) && (
-            <div className="notice is-error" role="alert">
-              {localError || error}
-              {error && !localError && (
-                <button type="button" className="text-button" onClick={onRetry}>
-                  <RefreshCw size={13} />
-                  Retry
-                </button>
-              )}
-            </div>
-          )}
+          </AnimatePresence>
           <small>Your bots and files stay on your machine.</small>
-        </form>
-      </div>
-      <footer>
+        </m.form>
+      </m.div>
+      <m.footer variants={fade}>
         Connect Bots <span>Persistent bots. Clear workflows.</span>
-      </footer>
-    </main>
+      </m.footer>
+    </m.main>
   );
 }

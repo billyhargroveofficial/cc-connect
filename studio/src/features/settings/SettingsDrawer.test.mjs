@@ -3,6 +3,9 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { runInNewContext } from 'node:vm';
 import ts from 'typescript';
+import { motionTestModule } from '../../lib/motion-stub.mjs';
+
+const tabTitle = node => Array.isArray(node.props.children) ? node.props.children[0] : node.props.children;
 
 // Render the real settings tab controller and ModalShell. Pane workflows stay
 // as component boundaries so this regression only exercises opening Settings.
@@ -26,6 +29,7 @@ function sharedSettings() {
     'react-markdown': { default: 'ReactMarkdown' },
     'remark-gfm': { default: 'remarkGfm' },
     '../../lib/api': { api: {} },
+    '../../lib/motion': motionTestModule(),
     '../../lib/events': { isWorking: () => false, telegramLabel: () => 'Connected' },
     '../../lib/avatars': { avatarStyles: [] },
     '../../components/Avatar': { default: 'Avatar' },
@@ -57,7 +61,7 @@ function sharedSettings() {
     function visit(node) {
       if (!node || typeof node !== 'object') return;
       if (match(node)) matches.push(node);
-      if (typeof node.type === 'function' && ['ModalShell', 'SettingsContent'].includes(node.type.name)) {
+      if (typeof node.type === 'function' && ['ModalShell', 'SettingsContent', 'SettingsTabPanel'].includes(node.type.name)) {
         visit(node.type(node.props));
         return;
       }
@@ -70,7 +74,7 @@ function sharedSettings() {
   const find = match => all(match)[0];
   return {
     props, calls, all, find,
-    tab: title => find(node => node.props?.role === 'tab' && node.props.children === title),
+    tab: title => find(node => node.props?.role === 'tab' && tabTitle(node) === title),
     pane: () => find(node => typeof node.type === 'function' && node.type.name.endsWith('Pane')),
   };
 }
@@ -83,7 +87,7 @@ test('shared Settings opens a modal instead of a side drawer and keeps shared in
   assert.equal(dialog.props['aria-label'], 'Shared settings');
   assert.equal(view.all(node => typeof node.props?.className === 'string' && node.props.className.includes('--drawer')).length, 0,
     'Desktop Shared settings must not use the slide-out drawer presentation');
-  assert.deepEqual(view.all(node => node.props?.role === 'tab').map(node => node.props.children), [
+  assert.deepEqual(view.all(node => node.props?.role === 'tab').map(tabTitle), [
     'Instructions', 'Skills', 'Maintenance',
   ]);
   assert.equal(view.pane().type.name, 'InstructionsPane');

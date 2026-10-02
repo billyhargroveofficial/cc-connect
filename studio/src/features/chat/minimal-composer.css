@@ -44,7 +44,7 @@
   border-radius: 12px;
   background: transparent;
   color: var(--muted);
-  transition: color 150ms ease, background-color 150ms ease, transform 150ms ease;
+  transition: color 150ms ease, background-color 150ms ease;
 }
 
 .composer-minimal .composer-tools .icon-button:first-child {
@@ -55,11 +55,6 @@
 .context-trigger:hover {
   color: var(--text);
   background: var(--surface-hover);
-}
-
-.composer-actions-trigger:active,
-.context-trigger:active {
-  transform: scale(.94);
 }
 
 .composer-minimal .send-button {
@@ -80,15 +75,7 @@
   border-radius: 50%;
   background: var(--text);
   z-index: -1;
-  transition: transform 150ms ease, background-color 150ms ease;
-}
-
-.composer-minimal .send-button:hover:not(:disabled)::before {
-  transform: scale(1.06);
-}
-
-.composer-minimal .send-button:active:not(:disabled)::before {
-  transform: scale(.94);
+  transition: background-color 150ms ease;
 }
 
 .composer-minimal .send-button:disabled::before {
@@ -116,6 +103,34 @@
   white-space: nowrap;
 }
 
+.context-indicator,
+.composer-send-icon {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.context-indicator {
+  width: 14px;
+  height: 14px;
+}
+
+.composer-send-icon {
+  width: 20px;
+  height: 20px;
+}
+
+.context-indicator > span,
+.composer-send-icon > span {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+}
+
 .context-control.is-compacting .context-trigger {
   color: var(--accent);
 }
@@ -131,6 +146,11 @@
   background: var(--surface-raised);
   box-shadow: var(--shadow);
   color: var(--text);
+}
+
+.context-popover,
+.composer-minimal .model-popover {
+  transform-origin: bottom right;
 }
 
 .context-popover {
@@ -413,6 +433,10 @@
   gap: 7px;
 }
 
+.composer-minimal .recording-dot {
+  animation: none;
+}
+
 .composer-minimal .recording-state .text-button {
   min-height: 44px;
   padding-inline: 4px;
@@ -427,28 +451,6 @@
   overflow: hidden;
   clip-path: inset(50%);
   white-space: nowrap;
-}
-
-@keyframes composer-pop-in {
-  from { opacity: 0; transform: translateY(5px) scale(.985); }
-  to { opacity: 1; transform: translateY(0) scale(1); }
-}
-
-@keyframes composer-menu-in {
-  from { opacity: 0; }
-  to { opacity: 1; }
-}
-
-@media (prefers-reduced-motion: no-preference) {
-  .composer-minimal .context-popover,
-  .composer-minimal .model-popover {
-    animation: composer-pop-in 160ms cubic-bezier(.2,.8,.2,1);
-    transform-origin: bottom right;
-  }
-
-  .composer-minimal .composer-actions-menu {
-    animation: composer-menu-in 120ms ease;
-  }
 }
 
 @media (max-width: 700px) {

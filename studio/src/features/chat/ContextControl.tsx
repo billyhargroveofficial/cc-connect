@@ -1,15 +1,22 @@
-import { useId, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { Gauge, LoaderCircle, Shrink, X } from "lucide-react";
 import { errorMessage } from "../../lib/api";
 import { contextNumbers } from "../../lib/contextState";
 import type { useBotContext } from "../../hooks/useBotContext";
-import { useDialogFocus } from "./ModelPicker";
+import { PresenceSurface, useDialogFocus } from "./ModelPicker";
+import {
+  AnimatePresence, m, useIsPresent, useReducedMotion,
+  controlMotion, fade, popoverMotion, motionTransition,
+} from "../../lib/motion";
 
-export default function ContextControl({ state, busy, onError }: {
+export default function ContextControl({ state, busy, suspended = false, onError }: {
   state: ReturnType<typeof useBotContext>;
   busy: boolean;
+  suspended?: boolean;
   onError: (message: string) => void;
 }) {
+  const present = useIsPresent();
+  const reducedMotion = useReducedMotion();
   const [open, setOpen] = useState(false);
   const trigger = useRef<HTMLButtonElement>(null);
   const dialog = useRef<HTMLDivElement>(null);
@@ -18,9 +25,14 @@ export default function ContextControl({ state, busy, onError }: {
   const { used, window: contextWindow, remaining, percent } = contextNumbers(context);
   function close() {
     setOpen(false);
-    requestAnimationFrame(() => trigger.current?.focus());
+    requestAnimationFrame(() => {
+      if (present) trigger.current?.focus();
+    });
   }
-  useDialogFocus(open, dialog, close);
+  useDialogFocus(open && present && !suspended, dialog, close);
+  useEffect(() => {
+    if (suspended) setOpen(false);
+  }, [suspended]);
   const format = (value: number | undefined) => value === undefined
     ? "—"
     : Math.round(value).toLocaleString("en-US");
@@ -32,7 +44,8 @@ export default function ContextControl({ state, busy, onError }: {
     error,
   ].filter(Boolean).join("\n");
   return <div className={`context-control ${compacting || requesting ? "is-compacting" : ""}`}>
-    <button
+    <m.button
+      {...controlMotion}
       ref={trigger}
       className="context-trigger"
       title={title}
@@ -42,15 +55,37 @@ export default function ContextControl({ state, busy, onError }: {
       aria-controls={open ? popoverId : undefined}
       onClick={() => setOpen(!open)}
     >
-      {compacting || requesting ? <LoaderCircle size={13} className="spin" /> : <Gauge size={13} />}
-      <span>{compacting || requesting ? "…" : percent === undefined ? "—" : `${context?.estimated ? "≈ " : ""}${Math.round(percent)}%`}</span>
-    </button>
-    {open && <>
+      <span className="context-indicator">
+        <AnimatePresence initial={false} mode="popLayout">
+          <m.span
+            key={compacting || requesting ? "compacting" : "usage"}
+            variants={fade}
+            initial="hidden"
+            animate="visible"
+            exit="exit"
+            transition={reducedMotion ? { duration: 0 } : motionTransition.quick}
+          >
+            {compacting || requesting ? <LoaderCircle size={13} className="spin" /> : <Gauge size={13} />}
+          </m.span>
+        </AnimatePresence>
+      </span>
+      <m.span key={compacting || requesting ? "compacting" : percent === undefined ? "unknown" : "reported"} variants={fade} initial="hidden" animate="visible">
+        {compacting || requesting ? "…" : percent === undefined ? "—" : `${context?.estimated ? "≈ " : ""}${Math.round(percent)}%`}
+      </m.span>
+    </m.button>
+    {open && present && !suspended && (
       <button className="popover-backdrop" tabIndex={-1} onClick={close} aria-label="Close context" />
-      <div className="context-popover" ref={dialog} tabIndex={-1} id={popoverId} role="dialog" aria-modal="true" aria-label="Conversation context">
+    )}
+    <AnimatePresence initial={false}>
+      {open && present && !suspended && <PresenceSurface
+        key="context"
+        variants={reducedMotion ? fade : popoverMotion}
+        initial="hidden" animate="visible" exit="exit"
+        className="context-popover" ref={dialog} tabIndex={-1} id={popoverId} role="dialog" modal aria-label="Conversation context"
+      >
         <header>
           <span>Context</span>
-          <button className="icon-button" onClick={close} aria-label="Close context"><X size={15} /></button>
+          <m.button {...controlMotion} className="icon-button" onClick={close} aria-label="Close context"><X size={15} /></m.button>
         </header>
         <dl>
           <div><dt>Used</dt><dd>{format(used)}</dd></div>
@@ -58,7 +93,8 @@ export default function ContextControl({ state, busy, onError }: {
           <div><dt>Remaining</dt><dd>{format(remaining)}</dd></div>
         </dl>
         {(used === undefined || context?.estimated) && <p>{used === undefined ? error || "The provider has not reported context usage yet." : "Context usage is estimated by the provider."}</p>}
-        <button
+        <m.button
+          {...controlMotion}
           className="compact-button"
           disabled={!context || busy || compacting || requesting}
           title={compacting ? "The provider is compacting context" : requesting ? "Requesting compaction" : busy ? "You can compact context after the bot responds" : !context ? error || "Loading context status" : "Compact context"}
@@ -70,8 +106,8 @@ export default function ContextControl({ state, busy, onError }: {
         >
           {compacting || requesting ? <LoaderCircle size={14} className="spin" /> : <Shrink size={14} />}
           <span>{compacting ? "Compacting context…" : requesting ? "Sending request…" : "Compact context"}</span>
-        </button>
-      </div>
-    </>}
+        </m.button>
+      </PresenceSurface>}
+    </AnimatePresence>
   </div>;
 }

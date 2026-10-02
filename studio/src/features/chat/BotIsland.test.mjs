@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { runInNewContext } from 'node:vm';
 import ts from 'typescript';
+import { motionTestModule } from '../../lib/motion-stub.mjs';
 
 const source = ts.transpileModule(readFileSync(new URL('./BotIsland.tsx', import.meta.url), 'utf8'), {
   compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX },
@@ -20,27 +21,33 @@ function findIn(root, match) {
 
 // Exercise the island's actual open/close handlers. JSX and hooks are stubbed;
 // preserving the host card's position/ref is also checked in the browser.
-function island({ desktop = true } = {}) {
-  let cursor = 0, focusTrap;
+function island({ desktop = true, shellPresent = true, panePresent = true } = {}) {
+  let cursor = 0, focusTrap, effects = [], callbacks = [];
   const values = [], calls = [], timers = [];
   const state = initial => {
     const index = cursor++;
     if (!(index in values)) values[index] = typeof initial === 'function' ? initial() : initial;
     return [values[index], next => { values[index] = typeof next === 'function' ? next(values[index]) : next; }];
   };
-  const element = (type, props) => ({ type, props });
+  const rendering = [];
+  const element = (type, props) => {
+    if (typeof type !== 'function') return { type, props };
+    rendering.push(type.name);
+    try { return type(props); } finally { rendering.pop(); }
+  };
   const modules = {
     react: {
       useState: state,
       useRef: initial => state(() => ({ current: initial }))[0],
-      useEffect() {},
+      useEffect(effect) { effects.push(effect); },
       useMemo: value => value(),
-      useCallback: callback => callback,
+      useCallback: (callback, dependencies) => { callbacks.push({ callback, dependencies }); return callback; },
     },
     'react/jsx-runtime': { jsx: element, jsxs: element, Fragment: 'fragment' },
     'lucide-react': new Proxy({}, { get: (_, name) => name }),
     '../../components/Avatar': { default: 'Avatar' },
     '../../lib/api': { fileURL: () => '/file' },
+    '../../lib/motion': { ...motionTestModule(), useIsPresent: () => rendering.at(-1) === 'IslandPane' ? panePresent : shellPresent },
     '../../lib/events': {
       botMessagePresentation: () => undefined,
       telegramLabel: () => 'Connected',
@@ -58,11 +65,12 @@ function island({ desktop = true } = {}) {
       return modules[name];
     },
     window: {
-      matchMedia: () => ({ matches: desktop }),
+      matchMedia: () => ({ matches: desktop, addEventListener() {}, removeEventListener() {} }),
       requestAnimationFrame: callback => callback(),
       setTimeout: callback => { timers.push(callback); return timers.length; },
       clearTimeout() {},
     },
+    document: { activeElement: null },
   }, { filename: 'BotIsland.tsx' });
   const props = {
     bot: { id: 'bot-1', name: 'Researcher', status: 'idle', role: 'Find primary sources.' },
@@ -80,13 +88,16 @@ function island({ desktop = true } = {}) {
     // The old implementation delegated settings to an external drawer.
     onSettings: () => calls.push('external-settings'),
   };
-  const render = () => { cursor = 0; return exports.default(props); };
+  const render = () => { cursor = 0; effects = []; callbacks = []; return exports.default(props); };
   const find = match => findIn(render(), match);
   const card = () => find(node => node.props?.className === 'bot-island-card');
   const panel = () => find(node => node.type === 'BotSettingsPanel');
   return {
     calls, props, card, panel,
-    shell: () => render(),
+    shell: () => find(node => node.props?.className?.split(' ').includes('bot-island-shell')),
+    pane: () => find(node => ['bot-island-overview', 'bot-island-settings'].includes(node.props?.className)),
+    flushEffects: () => { render(); effects.forEach(effect => effect()); },
+    openSettings: () => { render(); callbacks.find(entry => entry.dependencies.includes(props.onOpen)).callback(); },
     focusTrap: () => { render(); return focusTrap; },
     settings: () => find(node => node.props?.['aria-label'] === 'Bot settings' && node.type === 'button').props.onClick(),
   };
@@ -98,10 +109,11 @@ for (const desktop of [true, false]) {
     const cardRef = view.card().props.ref;
     assert.equal(view.panel(), undefined);
     view.settings();
+    assert.equal(view.props.open, !desktop, 'desktop settings do not arm the mobile overlay state');
 
     assert.ok(view.panel(), 'Settings must appear inside the island');
     const expandedCard = view.card();
-    assert.equal(findIn(expandedCard, node => node.type === 'BotSettingsPanel'), expandedCard.props.children,
+    assert.ok(findIn(expandedCard, node => node.type === 'BotSettingsPanel'),
       'the settings panel belongs to the existing card');
     assert.equal(view.card().props.ref, cardRef, 'the host card ref survives expansion');
     assert.equal(view.panel().props.bot, view.props.bot);
@@ -124,6 +136,17 @@ for (const desktop of [true, false]) {
   });
 }
 
+test('opening settings only requests the bot details overlay on mobile', () => {
+  const desktop = island();
+  desktop.openSettings();
+  assert.equal(desktop.props.open, false, 'desktop settings must not survive resize as an open mobile overlay');
+  const mobile = island({ desktop: false });
+  mobile.props.open = false;
+  mobile.openSettings();
+  assert.equal(mobile.props.open, true, 'the mobile settings controller opens the host details overlay');
+  assert.ok(mobile.panel());
+});
+
 test('mobile Escape first returns from bot settings to details, then closes details', () => {
   const view = island({ desktop: false });
   view.settings();
@@ -135,3 +158,43 @@ test('mobile Escape first returns from bot settings to details, then closes deta
   assert.equal(view.props.open, false);
   assert.deepEqual(view.calls, ['close-island']);
 });
+
+for (const settings of [false, true]) {
+  test(`exiting island ${settings ? 'settings' : 'overview'} immediately blocks interaction and assistive technology`, () => {
+    const active = island();
+    if (settings) active.settings();
+    assert.equal(active.shell().props.inert, false);
+    assert.equal(active.pane().props.inert, false);
+    assert.equal(active.pane().props['aria-hidden'], undefined);
+
+    const exiting = island({ panePresent: false });
+    if (settings) exiting.settings();
+    assert.equal(exiting.shell().props.inert, false, 'only the closing pane is disabled, so the new pane can remain active');
+    assert.equal(exiting.pane().props.inert, true);
+    assert.equal(exiting.pane().props['aria-hidden'], true);
+    assert.ok(settings ? exiting.panel() : exiting.pane(), 'the closing pane remains mounted only for its exit animation');
+  });
+}
+
+test('exiting mobile island shell immediately becomes inert and hidden even while its last open props are retained', () => {
+  const exiting = island({ desktop: false, shellPresent: false });
+  assert.equal(exiting.props.open, true, 'AnimatePresence retains the last open props during exit');
+  assert.equal(exiting.shell().props.inert, true);
+  assert.equal(exiting.shell().props['aria-hidden'], true);
+  assert.equal(exiting.shell().props.style.pointerEvents, 'none');
+});
+
+for (const desktop of [true, false]) {
+  test(`shared modal suspension clears ${desktop ? 'desktop' : 'mobile'} island settings before returning`, () => {
+    const view = island({ desktop });
+    view.settings();
+    assert.ok(view.panel());
+    view.props.suspended = true;
+    view.flushEffects();
+    assert.equal(view.panel(), undefined, 'the suspended island drops the active settings view');
+    view.props.suspended = false;
+    view.flushEffects();
+    assert.equal(view.panel(), undefined, 'closing the shared modal must not reopen old settings');
+    assert.deepEqual(view.calls, [], 'clearing settings does not close the bot island or affect the bot');
+  });
+}

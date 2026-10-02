@@ -4,15 +4,16 @@ import test from 'node:test';
 import { runInNewContext } from 'node:vm';
 import ts from 'typescript';
 import * as reducer from './reducer.ts';
+import { motionTestModule } from '../../lib/motion-stub.mjs';
 
 const source = ts.transpileModule(
-  `${readFileSync(new URL('./Transcript.tsx', import.meta.url), 'utf8')}\nexport { ActivityItem, TurnActivity, Attachments, Message };`,
+  `${readFileSync(new URL('./Transcript.tsx', import.meta.url), 'utf8')}\nexport { ActivityItem, TurnActivity, Attachments, Message, RawDetails, JournalItem, RawJournal, RequestCard, Goal };`,
   { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX } },
 ).outputText;
 
 // Exercise the disclosure's actual handlers and hooks, including the exit
 // timer. Rendering and markdown internals are outside this state test.
-function disclosure(component, initialProps) {
+function disclosure(component, initialProps, motionOverrides = {}) {
   let cursor = 0, nextTimer = 0;
   const values = [], effects = [], pendingEffects = [], timers = new Map();
   const state = initial => {
@@ -40,6 +41,7 @@ function disclosure(component, initialProps) {
     'lucide-react': new Proxy({}, { get: (_, name) => name }),
     'react-markdown': {}, 'remark-gfm': {}, 'remark-math': {}, 'rehype-highlight': {}, 'rehype-katex': {},
     '../../components/Avatar': {}, '../../lib/events': { botMessagePresentation: () => null },
+    '../../lib/motion': { ...motionTestModule(), ...motionOverrides },
     './reducer': reducer, './transcript.css': {},
   };
   const exports = {};
@@ -50,7 +52,7 @@ function disclosure(component, initialProps) {
       return modules[name];
     },
     window: {
-      setTimeout: callback => { timers.set(++nextTimer, callback); return nextTimer; },
+      setTimeout: (callback, delay) => { timers.set(++nextTimer, { callback, delay }); return nextTimer; },
       clearTimeout: id => timers.delete(id),
     },
   }, { filename: 'Transcript.tsx' });
@@ -91,8 +93,9 @@ function disclosure(component, initialProps) {
     toggle: () => find(node => node.type === 'button' && node.props['aria-controls']).props.onClick(),
     finishExit: () => {
       const callbacks = [...timers.values()]; timers.clear();
-      callbacks.forEach(callback => callback());
+      callbacks.forEach(({ callback }) => callback());
     },
+    timerDelays: () => [...timers.values()].map(({ delay }) => delay),
     panel: () => find(node => node.props?.className?.startsWith('transcript-disclosure') && node.props.id),
   };
 }
@@ -197,4 +200,83 @@ test('completed turn details show the recorded service tier beside model and eff
 
   view.update({ turn: { ...turn, serviceTier: 'custom-tier' } });
   assert.ok(view.find(node => node.type === 'span' && node.props.children === 'Codex · gpt-test · max · custom-tier'));
+});
+
+test('disclosure motion measures open content and collapses immediately for reduced motion', () => {
+  const view = disclosure('ActivityItem', { activity, onPermission() {} }, { useReducedMotion: () => true });
+  assert.equal(view.panel().props.initial, false);
+  assert.equal(view.panel().props.animate.height, 0);
+  assert.equal(view.panel().props.transition.duration, 0);
+  view.toggle();
+  assert.equal(view.panel().props.animate.height, 'auto');
+  assert.equal(view.panel().props.animate.opacity, 1);
+  view.toggle();
+  assert.equal(view.panel().props.inert, true);
+  assert.equal(view.panel().props.animate.height, 0);
+  assert.deepEqual(view.timerDelays(), [0]);
+  view.finishExit();
+  assert.equal(view.find(node => node.props?.className === 'transcript-activity-content'), undefined);
+});
+
+test('raw data and journal panels keep lazy payloads while closing and expose accessible controls', () => {
+  const event = { seq: 1, type: 'native', time: '2026-10-02T12:00:00Z', data: { method: 'item/completed' } };
+  for (const [component, props, content] of [
+    ['RawDetails', { value: { output: 'preserved' } }, node => node.props?.label === 'JSON'],
+    ['JournalItem', { event }, node => node.props?.label === 'Event'],
+    ['RawJournal', { events: [event] }, node => node.props?.className === 'transcript-journal-body'],
+  ]) {
+    const view = disclosure(component, props);
+    assert.equal(view.panel().props.inert, true, `${component} starts closed`);
+    assert.equal(view.find(content), undefined, `${component} does not mount hidden data`);
+    view.toggle();
+    assert.equal(view.panel().props['aria-hidden'], false);
+    assert.ok(view.find(content));
+    view.toggle();
+    assert.equal(view.panel().props['aria-hidden'], true);
+    assert.equal(view.panel().props.inert, true);
+    assert.ok(view.find(content), `${component} retains data during its closing motion`);
+    view.finishExit();
+    assert.equal(view.find(content), undefined);
+    view.toggle();
+    assert.ok(view.find(content), `${component} can reopen the same data`);
+  }
+});
+
+test('resolved and exiting request forms become inaccessible before their closing animation finishes', () => {
+  const request = { id: 'request-1', title: 'Allow command', method: 'permission', questions: [], resolved: false };
+  let present = true;
+  const view = disclosure('RequestCard', { request, onPermission() {} }, { useIsPresent: () => present });
+  const decision = () => view.find(node => node.props?.className === 'transcript-disclosure transcript-request-decision');
+  const submit = () => view.find(node => node.type === 'button' && node.props.type === 'submit');
+  assert.equal(decision().props.inert, false);
+  assert.equal(submit().props.disabled, false);
+  view.update({ request: { ...request, resolved: true } });
+  assert.equal(decision().props.inert, true);
+  assert.equal(decision().props['aria-hidden'], true);
+  assert.equal(submit().props.disabled, true);
+  assert.ok(view.find(node => node.type === 'form'), 'retain the form only for closing motion');
+  view.finishExit();
+  assert.equal(view.find(node => node.type === 'form'), undefined);
+
+  view.update({ request });
+  assert.equal(submit().props.disabled, false);
+  present = false;
+  view.update({});
+  const card = view.find(node => node.props?.className === 'transcript-request');
+  assert.equal(card.props.inert, true);
+  assert.equal(card.props['aria-hidden'], true);
+  assert.equal(decision().props.inert, true);
+  assert.equal(submit().props.disabled, true);
+});
+
+test('animated goal budget retains accessible progress values and caps the fill at its budget', () => {
+  const view = disclosure('Goal', { activity: { text: '', data: { tokensUsed: 250, tokenBudget: 200 } } }, { useReducedMotion: () => true });
+  const progress = view.find(node => node.props?.role === 'progressbar');
+  assert.equal(progress.props['aria-valuemin'], 0);
+  assert.equal(progress.props['aria-valuemax'], 200);
+  assert.equal(progress.props['aria-valuenow'], 200);
+  assert.equal(progress.props['aria-label'], 'Tokens used from the goal budget');
+  assert.equal(progress.props.children.props.initial, false);
+  assert.equal(progress.props.children.props.animate.scaleX, 1);
+  assert.equal(progress.props.children.props.transition.duration, 0);
 });

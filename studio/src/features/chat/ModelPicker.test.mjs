@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { runInNewContext } from 'node:vm';
 import ts from 'typescript';
+import { motionTestModule } from '../../lib/motion-stub.mjs';
 
 const source = ts.transpileModule(readFileSync(new URL('./ModelPicker.tsx', import.meta.url), 'utf8'), {
   compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX },
@@ -15,6 +16,7 @@ const standard = { id: 'standard', name: 'Standard', description: 'Standard infe
 // machinery is stubbed; model-specific catalog values and handlers are real.
 function picker({ model = {}, bot = {}, disabled = false } = {}) {
   let cursor = 0;
+  let present = true;
   const values = [], requests = [], errors = [];
   const state = initial => {
     const index = cursor++;
@@ -22,6 +24,8 @@ function picker({ model = {}, bot = {}, disabled = false } = {}) {
     return [values[index], next => { values[index] = typeof next === 'function' ? next(values[index]) : next; }];
   };
   const element = (type, props) => ({ type, props });
+  const motion = motionTestModule();
+  motion.useIsPresent = () => present;
   const props = {
     bot: { id: 'bot', backend: 'codex', model: 'current', effort: 'max', serviceTier: '', ...bot },
     capabilities: {
@@ -36,9 +40,10 @@ function picker({ model = {}, bot = {}, disabled = false } = {}) {
     onOpenChange() {}, onError: error => errors.push(error),
   };
   const modules = {
-    react: { useState: state, useRef: initial => state(() => ({ current: initial }))[0], useId: () => state('model-test')[0], useEffect() {} },
+    react: { useState: state, useRef: initial => state(() => ({ current: initial }))[0], useId: () => state('model-test')[0], useEffect() {}, createElement: (type, props, ...children) => element(type, { ...props, children }) },
     'react/jsx-runtime': { jsx: element, jsxs: element, Fragment: 'fragment' },
     'lucide-react': new Proxy({}, { get: (_, name) => name }),
+    '../../lib/motion': motion,
     '../../lib/api': { api: { updateBot: async (_, patch) => {
       requests.push(patch);
       return { ...props.bot, ...patch };
@@ -63,6 +68,8 @@ function picker({ model = {}, bot = {}, disabled = false } = {}) {
   const find = match => all(match)[0];
   return {
     props, requests, errors, find, all,
+    present: next => { present = next; },
+    surface: fields => exports.PresenceSurface(fields),
     open: () => find(node => node.props?.className === 'model-trigger').props.onClick(),
     tier: () => find(node => node.type === 'select' && node.props['aria-label'] === 'Service tier'),
     changeTier: async value => {
@@ -75,6 +82,22 @@ function picker({ model = {}, bot = {}, disabled = false } = {}) {
     },
   };
 }
+
+test('exiting popovers immediately become inert and lose modal semantics', () => {
+  const view = picker();
+  const active = view.surface({ modal: true, role: 'dialog', style: { color: 'red' } });
+  assert.equal(active.props.inert, false);
+  assert.equal(active.props['aria-hidden'], undefined);
+  assert.equal(active.props['aria-modal'], true);
+
+  view.present(false);
+  const exiting = view.surface({ modal: true, role: 'dialog', style: { color: 'red' } });
+  assert.equal(exiting.props.inert, true);
+  assert.equal(exiting.props['aria-hidden'], true);
+  assert.equal(exiting.props['aria-modal'], undefined);
+  assert.equal(exiting.props.style.pointerEvents, 'none');
+  assert.equal(exiting.props.style.color, 'red');
+});
 
 test('service tier uses the current model catalog and persists explicit and automatic choices', async () => {
   const view = picker();

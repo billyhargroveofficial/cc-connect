@@ -14,6 +14,28 @@ import { GoalDialog, useGoal } from "./GoalPanel";
 import Transcript from "../transcript/Transcript";
 import { useBotContext } from "../../hooks/useBotContext";
 import BotIsland from "./BotIsland";
+import { PresenceSurface } from "./ModelPicker";
+import {
+  AnimatePresence, m, useIsPresent, useReducedMotion,
+  controlMotion, fade, fadeUp, popoverMotion, motionTransition,
+} from "../../lib/motion";
+
+function LatestButton({ onClick }: { onClick: () => void }) {
+  const present = useIsPresent();
+  const reducedMotion = useReducedMotion();
+  return <m.button
+    {...controlMotion}
+    className="scroll-latest"
+    style={{ x: "-50%", pointerEvents: present ? "auto" : "none" }}
+    variants={reducedMotion ? fade : popoverMotion}
+    initial="hidden" animate="visible" exit="exit"
+    inert={!present}
+    aria-hidden={!present || undefined}
+    onClick={onClick}
+  >
+    <ArrowDown size={14} />Jump to latest
+  </m.button>;
+}
 function turnStats(events: Event[]) {
   for (let i = events.length - 1; i >= 0; i--)
     if (events[i].type === "turn") return events[i].data;
@@ -43,6 +65,8 @@ export default function ChatRoom({
   onHistory?: () => void;
 }) {
   const scroll = useRef<HTMLDivElement>(null);
+  const content = useRef<HTMLDivElement>(null);
+  const reducedMotion = useReducedMotion();
   const nearBottom = useRef(true);
   const [showScroll, setShowScroll] = useState(false);
   const [goalOpen, setGoalOpen] = useState(false);
@@ -56,6 +80,11 @@ export default function ChatRoom({
   const working =
     isWorking(bot.status) || isWorking(String(stats.status || "")) || !!pending;
   useEffect(() => {
+    if (!suspended) return;
+    setGoalOpen(false);
+    setDetailsOpen(false);
+  }, [suspended]);
+  useEffect(() => {
     if (
       pending &&
       events.some((event) => event.turnId === pending && event.type === "turn")
@@ -67,6 +96,18 @@ export default function ChatRoom({
       scroll.current.scrollTop = scroll.current.scrollHeight;
     else setShowScroll(true);
   }, [events.length, events.at(-1)?.seq]);
+  useLayoutEffect(() => {
+    if (typeof ResizeObserver === "undefined" || !content.current || !scroll.current) return;
+    const observer = new ResizeObserver(() => {
+      const container = scroll.current;
+      // Keep streaming and disclosure animations pinned only while the reader
+      // is already following the latest message.
+      if (container && nearBottom.current) container.scrollTop = container.scrollHeight;
+    });
+    observer.observe(content.current);
+    observer.observe(scroll.current);
+    return () => observer.disconnect();
+  }, []);
   async function send(text: string, attachments: Attachment[]) {
     const response = await api.send(bot.id, text, attachments);
     setPending(response.turnId);
@@ -91,14 +132,16 @@ export default function ChatRoom({
   return (
     <section className="chat-room">
       <div className="chat-dialog">
-        <button
+        <m.button
+          {...controlMotion}
           className="icon-button chat-corner-control chat-corner-back"
           onClick={onBack}
           aria-label="Back to bots"
         >
           <ArrowLeft size={21} />
-        </button>
-        <button
+        </m.button>
+        <m.button
+          {...controlMotion}
           ref={detailsTrigger}
           className="icon-button chat-corner-control chat-corner-details"
           onClick={() => setDetailsOpen(true)}
@@ -107,7 +150,7 @@ export default function ChatRoom({
           aria-haspopup="dialog"
         >
           <PanelRight size={20} />
-        </button>
+        </m.button>
       <div
         className="chat-scroll"
         ref={scroll}
@@ -123,25 +166,34 @@ export default function ChatRoom({
           }
         }}
       >
+        <div className="chat-content" ref={content} style={{ height: events.length ? undefined : "100%" }}>
+        <AnimatePresence initial={false} mode="wait">
         {loading && !events.length ? (
-          <div className="chat-loading">
+          <m.div key="loading" className="chat-loading" variants={fade} initial="hidden" animate="visible" exit="exit">
             <LoaderCircle size={23} className="spin" />
             <span>Opening conversation…</span>
-          </div>
+          </m.div>
         ) : !events.length ? (
-          <div className="chat-empty">
-            <Avatar bot={bot} size={76} />
-            <span className="eyebrow">
+          <m.div
+            key="empty"
+            className="chat-empty"
+            variants={reducedMotion ? fade : fadeUp}
+            initial="hidden" animate="visible" exit="exit"
+          >
+            <m.div variants={reducedMotion ? fade : fadeUp}>
+              <Avatar bot={bot} size={76} />
+            </m.div>
+            <m.span className="eyebrow" variants={fade}>
               {bot.chief ? "YOUR COORDINATOR" : "YOUR PERSISTENT ASSISTANT"}
-            </span>
-            <h1>{bot.name} is here.</h1>
-            <p>
+            </m.span>
+            <m.h1 variants={reducedMotion ? fade : fadeUp}>{bot.name} is here.</m.h1>
+            <m.p variants={fade}>
               {bot.role ||
                 "Give your first task. Context and results stay in this conversation."}
-            </p>
-          </div>
+            </m.p>
+          </m.div>
         ) : (
-          <div className="conversation">
+          <m.div key="conversation" className="conversation" variants={fade} initial="hidden" animate="visible" exit="exit">
             <Transcript
               bot={bot}
               events={events}
@@ -149,33 +201,46 @@ export default function ChatRoom({
               onQuestion={permission}
               onRetry={onHistory ? () => onHistory() : undefined}
             />
-          </div>
+          </m.div>
         )}
+        </AnimatePresence>
+        <AnimatePresence initial={false}>
         {pending && (
-          <div className="accepted-message" aria-live="polite">
+          <PresenceSurface
+            key="pending"
+            className="accepted-message" aria-live="polite"
+            initial={{ opacity: 0, height: 0, paddingTop: 0, paddingBottom: 0 }}
+            animate={{ opacity: 1, height: "auto", paddingTop: 4, paddingBottom: 14 }}
+            exit={{ opacity: 0, height: 0, paddingTop: 0, paddingBottom: 0 }}
+            transition={reducedMotion ? { duration: 0 } : motionTransition.disclosure}
+            style={{ overflow: "hidden" }}
+          >
             <LoaderCircle size={14} className="spin" />
             Starting work…
-          </div>
+          </PresenceSurface>
         )}
+        </AnimatePresence>
+        </div>
       </div>
       <div className="chat-input-area">
+      <AnimatePresence initial={false}>
       {showScroll && (
-        <button
-          className="scroll-latest"
+        <LatestButton
+          key="latest"
           onClick={() => {
             nearBottom.current = true;
             scroll.current?.scrollTo({
               top: scroll.current.scrollHeight,
-              behavior: "smooth",
+              behavior: reducedMotion ? "auto" : "smooth",
             });
             setShowScroll(false);
           }}
-        >
-          <ArrowDown size={14} />Jump to latest
-        </button>
+        />
       )}
+      </AnimatePresence>
       <Composer
         key={bot.id}
+        suspended={suspended}
         bot={bot}
         capabilities={capabilities}
         busy={working}
@@ -210,8 +275,10 @@ export default function ChatRoom({
           setGoalOpen(true);
         }}
       />
-      {goalOpen && (
+      <AnimatePresence>
+      {goalOpen && !suspended && (
         <GoalDialog
+          key="goal"
           bot={bot}
           goal={goal}
           onChange={setGoal}
@@ -219,6 +286,7 @@ export default function ChatRoom({
           onError={onError}
         />
       )}
+      </AnimatePresence>
     </section>
   );
 }

@@ -671,98 +671,41 @@ svg {
 .chat-room {
   height: 100%;
   display: flex;
-  flex-direction: column;
   position: relative;
   min-width: 0;
   animation: chat-room-enter 180ms cubic-bezier(.2,.8,.2,1) both;
 }
 @keyframes chat-room-enter {
-  from { opacity: 0; transform: translateY(4px); }
-  to { opacity: 1; transform: translateY(0); }
+  from { opacity: 0; }
+  to { opacity: 1; }
 }
-.chat-header {
-  height: 61px;
-  flex-shrink: 0;
-  padding: 0 34px;
-  border-bottom: 1px solid var(--border);
+.chat-dialog {
   display: flex;
-  align-items: center;
-  gap: 15px;
-}
-.chat-profile {
-  background: transparent;
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  text-align: left;
-  padding: 0;
-}
-.chat-profile > span:last-child {
-  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
   flex-direction: column;
-  gap: 2px;
-}
-.chat-profile strong {
-  font-size: 14px;
-  font-weight: 560;
-  letter-spacing: -0.02em;
-  display: flex;
-  align-items: center;
-  gap: 9px;
-}
-.chat-profile strong svg {
-  color: var(--faint);
-}
-.chat-profile small {
-  font-size: 10px;
-  color: var(--muted);
-}
-.chat-profile small.is-working {
-  color: var(--accent);
-}
-.chat-header-actions {
-  display: flex;
-  gap: 4px;
-  align-items: center;
-  margin-left: auto;
-}
-.header-telegram {
-  display: inline-flex;
-  gap: 6px;
-  align-items: center;
-  color: #78b7df;
-  font-size: 10px;
-  margin-right: 9px;
-}
-.throughput {
-  display: inline-flex;
-  gap: 6px;
-  align-items: center;
-  font-size: 10px;
-  color: var(--muted);
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-}
-.throughput > span {
-  font-size: 9px;
-  color: var(--faint);
-}
-.chat-header .has-goal {
-  color: var(--accent);
   position: relative;
 }
-.chat-header .has-goal::after {
-  content: "";
-  position: absolute;
-  right: 7px;
-  top: 7px;
-  width: 4px;
-  height: 4px;
-  border-radius: 50%;
-  background: currentColor;
-}
-.mobile-back {
+.chat-corner-control {
   display: none;
+  position: absolute;
+  top: 8px;
+  width: 44px;
+  height: 44px;
+  min-width: 44px;
+  border-radius: 50%;
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  box-shadow: 0 2px 8px #00000006;
+  z-index: 5;
+}
+.chat-corner-back { left: 10px; }
+.chat-corner-details { right: 10px; }
+@media (max-width: 1099px) {
+  .chat-corner-details { display: inline-flex; }
+  .chat-dialog > .chat-scroll { padding-top: 60px; }
 }
 .chat-scroll {
   flex: 1;
@@ -1373,9 +1316,6 @@ svg {
   .roster {
     width: 300px;
   }
-  .chat-header {
-    padding: 0 40px;
-  }
   .composer-wrap {
     padding-bottom: 26px;
   }
@@ -1387,21 +1327,12 @@ svg {
   .roster {
     width: 258px;
   }
-  .chat-header {
-    padding: 0 23px;
-  }
   .composer-wrap {
     width: calc(100% - 46px);
   }
   .chat-scroll {
     padding-left: 23px;
     padding-right: 23px;
-  }
-  .header-telegram > span {
-    display: none;
-  }
-  .header-telegram {
-    margin-right: 0;
   }
   .welcome-layout {
     gap: 34px;
@@ -1478,60 +1409,8 @@ svg {
   .roster-connection {
     font-size: 10px;
   }
-  .chat-header {
-    height: 54px;
-    padding: 0 10px 0 5px;
-    gap: 6px;
-  }
-  .mobile-back {
+  .chat-corner-back {
     display: inline-flex;
-    width: 37px;
-    height: 44px;
-    flex-shrink: 0;
-  }
-  .chat-profile {
-    flex: 1;
-    min-width: 0;
-    gap: 10px;
-  }
-  .chat-profile > span:last-child {
-    flex: 1;
-    min-width: 0;
-  }
-  .chat-profile strong {
-    display: block;
-    position: relative;
-    padding-right: 22px;
-    font-size: 14px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  .chat-profile strong svg {
-    position: absolute;
-    right: 0;
-    top: 50%;
-    transform: translateY(-50%);
-  }
-  .chat-profile small {
-    font-size: 10px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  .chat-header-actions {
-    flex-shrink: 0;
-    gap: 1px;
-  }
-  .chat-header-actions .icon-button {
-    width: 37px;
-    height: 42px;
-  }
-  .header-telegram {
-    display: none;
-  }
-  .throughput {
-    display: none;
   }
   .chat-scroll {
     padding: 10px 14px 12px;
@@ -1710,10 +1589,6 @@ svg {
   }
   .welcome > footer > span {
     display: none;
-  }
-  .chat-profile .bot-avatar {
-    width: 33px !important;
-    height: 33px !important;
   }
 }
 @media (prefers-reduced-motion: reduce) {

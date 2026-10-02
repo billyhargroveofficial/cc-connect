@@ -35,6 +35,11 @@ choose. These settings apply to subsequent turns in the same conversation.
 For manual compaction, open the context indicator in that toolbar and choose
 “Сжать контекст” while the bot is idle.
 
+The conversation has no profile header. Bot identity, status, settings, goals,
+recent requests and published files live in a floating card on the right.
+On narrow screens, open it with the panel button in the upper-right corner;
+the upper-left arrow returns to the bot list on mobile.
+
 One installation belongs to one owner. Bots run with that owner's local harness
 credentials and filesystem access. No screen streaming or cloud control plane is
 required.

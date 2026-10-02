@@ -118,10 +118,14 @@ export function GoalDialog({
   );
   const [busy, setBusy] = useState(false);
   const dialog = useRef<HTMLElement>(null);
+  const previousFocus = useRef(
+    document.activeElement instanceof HTMLElement ? document.activeElement : null,
+  );
   const closeRef = useRef(onClose);
   closeRef.current = onClose;
   useEffect(() => {
-    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const previous = previousFocus.current;
+    dialog.current?.querySelector<HTMLTextAreaElement>("textarea")?.focus();
     const keyboard = (event: KeyboardEvent) => {
       if (event.key === "Escape") closeRef.current();
       if (event.key !== "Tab" || !dialog.current) return;

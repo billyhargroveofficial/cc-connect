@@ -1,21 +1,19 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   ArrowLeft,
-  ChevronDown,
-  Ellipsis,
-  Send,
-  Target,
+  PanelRight,
   LoaderCircle,
   ArrowDown,
 } from "lucide-react";
 import type { Attachment, Bot, Capabilities, Event } from "../../lib/types";
 import { api, errorMessage } from "../../lib/api";
-import { isWorking, statusLabel, telegramTitle } from "../../lib/events";
+import { isWorking, statusLabel } from "../../lib/events";
 import Avatar from "../../components/Avatar";
 import Composer from "./Composer";
 import { GoalDialog, useGoal } from "./GoalPanel";
 import Transcript from "../transcript/Transcript";
 import { useBotContext } from "../../hooks/useBotContext";
+import BotIsland from "./BotIsland";
 function turnStats(events: Event[]) {
   for (let i = events.length - 1; i >= 0; i--)
     if (events[i].type === "turn") return events[i].data;
@@ -46,6 +44,8 @@ export default function ChatRoom({
   const nearBottom = useRef(true);
   const [showScroll, setShowScroll] = useState(false);
   const [goalOpen, setGoalOpen] = useState(false);
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const detailsTrigger = useRef<HTMLButtonElement>(null);
   const [pending, setPending] = useState("");
   const supportsGoal = !!capabilities?.backends[bot.backend]?.goals;
   const { goal, setGoal } = useGoal(bot, events, supportsGoal);
@@ -88,56 +88,24 @@ export default function ChatRoom({
     : statusLabel(bot.status);
   return (
     <section className="chat-room">
-      <header className="chat-header">
+      <div className="chat-dialog">
         <button
-          className="icon-button mobile-back"
+          className="icon-button chat-corner-control chat-corner-back"
           onClick={onBack}
           aria-label="К списку ботов"
         >
           <ArrowLeft size={21} />
         </button>
-        <button className="chat-profile" onClick={onSettings}>
-          <Avatar bot={bot} size={36} />
-          <span>
-            <strong>
-              {bot.name}
-              <ChevronDown size={13} />
-            </strong>
-            <small className={working ? "is-working" : ""}>
-              {status}
-            </small>
-          </span>
+        <button
+          ref={detailsTrigger}
+          className="icon-button chat-corner-control chat-corner-details"
+          onClick={() => setDetailsOpen(true)}
+          aria-label="Сведения о боте"
+          aria-expanded={detailsOpen}
+          aria-haspopup="dialog"
+        >
+          <PanelRight size={20} />
         </button>
-        <div className="chat-header-actions">
-          {bot.telegram?.enabled && (
-            <span
-              className={`header-telegram telegram-status-${bot.telegram.status || "configured"}`}
-              title={telegramTitle(bot.telegram)}
-            >
-              <Send size={14} />
-              <span>Telegram</span>
-            </span>
-          )}
-          {supportsGoal && (
-            <button
-              className={`icon-button ${goal ? "has-goal" : ""}`}
-              onClick={() => setGoalOpen(true)}
-              title="Цель"
-              aria-label="Цель бота"
-            >
-              <Target size={19} />
-            </button>
-          )}
-          <button
-            className="icon-button"
-            onClick={onSettings}
-            title="Настройки бота"
-            aria-label="Настройки бота"
-          >
-            <Ellipsis size={20} />
-          </button>
-        </div>
-      </header>
       <div
         className="chat-scroll"
         ref={scroll}
@@ -219,6 +187,26 @@ export default function ChatRoom({
         onError={onError}
       />
       </div>
+      </div>
+      <BotIsland
+        bot={bot}
+        events={events}
+        status={status}
+        working={working}
+        supportsGoal={supportsGoal}
+        hasGoal={!!goal}
+        open={detailsOpen}
+        onClose={() => setDetailsOpen(false)}
+        triggerRef={detailsTrigger}
+        onGoal={() => {
+          setDetailsOpen(false);
+          setGoalOpen(true);
+        }}
+        onSettings={() => {
+          setDetailsOpen(false);
+          onSettings();
+        }}
+      />
       {goalOpen && (
         <GoalDialog
           bot={bot}

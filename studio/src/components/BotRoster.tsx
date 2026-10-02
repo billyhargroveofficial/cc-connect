@@ -1,14 +1,11 @@
-import { useState } from "react";
 import {
   Plus,
-  Search,
   Settings2,
   Sun,
   Moon,
   LogOut,
   Crown,
   Send,
-  ChevronsRight,
 } from "lucide-react";
 import type { Bot, Event } from "../lib/types";
 import {
@@ -18,7 +15,6 @@ import {
   telegramTitle,
 } from "../lib/events";
 import Avatar from "./Avatar";
-import Brand from "./Brand";
 function lastMessageTime(events: Event[]) {
   const event = [...events].reverse().find(event => event.type === "message" && event.data.source !== "goal_context");
   if (!event) return null;
@@ -56,22 +52,14 @@ export default function BotRoster({
   onLogout: () => void;
   connection: string;
 }) {
-  const [query, setQuery] = useState("");
-  const visible = [...bots]
-    .sort(
-      (a, b) =>
-        Number(b.chief) - Number(a.chief) ||
-        a.createdAt.localeCompare(b.createdAt),
-    )
-    .filter((bot) =>
-      `${bot.name} ${bot.role}`
-        .toLocaleLowerCase()
-        .includes(query.toLocaleLowerCase()),
-    );
+  const sortedBots = [...bots].sort(
+    (a, b) =>
+      Number(b.chief) - Number(a.chief) ||
+      a.createdAt.localeCompare(b.createdAt),
+  );
   return (
     <aside className="roster">
-      <header className="roster-brand">
-        <Brand />
+      <header className="roster-toolbar">
         <button
           className="icon-button"
           onClick={onCreate}
@@ -81,21 +69,8 @@ export default function BotRoster({
           <Plus size={19} />
         </button>
       </header>
-      <div className="roster-search">
-        <Search size={15} />
-        <input
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder="Найти бота"
-          aria-label="Поиск ботов"
-        />
-        <kbd>⌘ K</kbd>
-      </div>
-      <div className="roster-label">
-        Ваша команда <span>{bots.length}</span>
-      </div>
       <nav aria-label="Боты" className="roster-list">
-        {visible.map((bot) => {
+        {sortedBots.map((bot) => {
           const busy = isWorking(bot.status);
           const time = lastMessageTime(events[bot.id] || []);
           const preview = busy
@@ -135,17 +110,12 @@ export default function BotRoster({
             </button>
           );
         })}
-        {!visible.length && (
+        {!sortedBots.length && (
           <div className="roster-empty">
-            {query ? "Ничего не найдено." : "Здесь появится ваша команда."}
+            Здесь появится ваша команда.
           </div>
         )}
       </nav>
-      <button className="create-row" onClick={onCreate}>
-        <Plus size={16} />
-        Добавить бота
-        <ChevronsRight size={14} />
-      </button>
       <footer className="roster-footer">
         <div className="roster-connection">
           <span

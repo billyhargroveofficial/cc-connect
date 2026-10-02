@@ -88,13 +88,6 @@ export default function App() {
   }, [bot?.id, workspace.loadHistory, workspace.setError]);
   useEffect(() => {
     function keyboard(event: KeyboardEvent) {
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
-        event.preventDefault();
-        setMobileChat(false);
-        document
-          .querySelector<HTMLInputElement>(".roster-search input")
-          ?.focus();
-      }
       if (event.key === "Escape") {
         setSettings(null);
         setCreating(false);

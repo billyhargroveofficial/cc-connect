@@ -486,57 +486,13 @@ svg {
   height: 100%;
   padding: 0 12px;
 }
-.roster-brand {
-  height: 66px;
+.roster-toolbar {
+  height: 48px;
   padding: 0 7px;
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
   flex-shrink: 0;
-}
-.roster-search {
-  height: 35px;
-  display: flex;
-  gap: 9px;
-  align-items: center;
-  color: var(--faint);
-  border: 1px solid transparent;
-  background: var(--surface-hover);
-  border-radius: 8px;
-  margin: 0 7px 22px;
-  padding: 0 10px;
-}
-.roster-search input {
-  background: transparent;
-  border: 0;
-  color: var(--text);
-  width: 100%;
-  min-width: 0;
-  outline: none;
-  font-size: 12px;
-  padding: 0;
-}
-.roster-search input::placeholder {
-  color: var(--faint);
-}
-.roster-search kbd {
-  font-size: 9px;
-  color: var(--faint);
-  white-space: nowrap;
-}
-.roster-label {
-  padding: 0 10px;
-  margin-bottom: 13px;
-  font-size: 10px;
-  font-weight: 560;
-  color: var(--faint);
-  letter-spacing: 0.04em;
-  display: flex;
-  justify-content: space-between;
-}
-.roster-label span {
-  color: var(--faint);
-  font-weight: 400;
 }
 .roster-list {
   flex: 1;
@@ -621,27 +577,6 @@ svg {
   line-height: 1.6;
   color: var(--faint);
   padding: 18px 10px;
-}
-.create-row {
-  height: 42px;
-  padding: 0 12px;
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  background: transparent;
-  font-size: 12px;
-  color: var(--muted);
-  text-align: left;
-  border-radius: 10px;
-  margin: 8px 0 17px;
-}
-.create-row:hover {
-  background: var(--surface-hover);
-  color: var(--text);
-}
-.create-row svg:last-child {
-  margin-left: auto;
-  opacity: 0.5;
 }
 .roster-footer {
   border-top: 1px solid var(--border);
@@ -942,6 +877,7 @@ svg {
 .composer textarea {
   display: block;
   resize: none;
+  overflow-x: hidden;
   border: none;
   outline: none;
   width: 100%;
@@ -1503,30 +1439,13 @@ svg {
   .workspace.is-chat > .workspace-content {
     display: block;
   }
-  .roster-brand {
-    height: 81px;
+  .roster-toolbar {
+    height: 56px;
     padding: 0 6px;
   }
-  .roster-brand .brand {
-    font-size: 21px;
-  }
-  .roster-brand .icon-button {
-    width: 40px;
-    height: 40px;
-  }
-  .roster-search {
-    height: 42px;
-    margin-bottom: 29px;
-    border-radius: 12px;
-  }
-  .roster-search input {
-    font-size: 16px;
-  }
-  .roster-search kbd {
-    display: none;
-  }
-  .roster-label {
-    font-size: 11px;
+  .roster-toolbar .icon-button {
+    width: 44px;
+    height: 44px;
   }
   .bot-row {
     padding: 14px 10px;
@@ -1558,10 +1477,6 @@ svg {
   }
   .roster-connection {
     font-size: 10px;
-  }
-  .create-row {
-    height: 47px;
-    font-size: 13px;
   }
   .chat-header {
     height: 54px;

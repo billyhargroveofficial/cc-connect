@@ -2,7 +2,7 @@ import { useEffect, useId, useMemo, useState } from 'react';
 import type { FormEvent, ReactNode } from 'react';
 import {
   ArrowUpRight, Check, CheckCheck, ChevronDown, Code2, Copy, Download,
-  File, FilePenLine, Globe2, LoaderCircle, MessageSquare, Paperclip, Search,
+  File, FilePenLine, Globe2, LoaderCircle, MessageSquare, Search,
   ShieldCheck, Sparkles, Target, Terminal, Users, X, CircleAlert,
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
@@ -122,19 +122,39 @@ function attachmentUrl(botId: string, attachment: TranscriptAttachment) {
     : safeUrl(attachment.url || '', true);
 }
 
+function attachmentKind(mimeType: string) {
+  if (mimeType.startsWith('image/')) return 'image';
+  if (mimeType.startsWith('audio/')) return 'audio';
+  if (mimeType.startsWith('video/')) return 'video';
+  return 'file';
+}
+
+function attachmentFormat(attachment: TranscriptAttachment, kind: string) {
+  const extension = attachment.name.match(/\.([^.]{1,10})$/)?.[1];
+  const format = extension || attachment.mimeType.split('/')[1]?.split(/[;+]/)[0];
+  const noun = kind === 'image' ? 'image' : kind === 'audio' ? 'audio' : kind === 'video' ? 'video' : 'file';
+  return format ? `${format.toUpperCase()} ${noun}` : noun[0].toUpperCase() + noun.slice(1);
+}
+
 function Attachments({ botId, attachments }: { botId: string; attachments: TranscriptAttachment[] }) {
   if (!attachments.length) return null;
   return <div className="transcript-attachments">{attachments.map((attachment, index) => {
     const url = attachmentUrl(botId, attachment);
-    return <div className="transcript-attachment" key={attachment.id || `${attachment.name}-${index}`}>
-      {url && attachment.mimeType.startsWith('image/') && <a href={url} target="_blank" rel="noreferrer" className="transcript-image-link">
+    const kind = attachmentKind(attachment.mimeType);
+    const media = kind === 'audio' || kind === 'video';
+    return <div className={`transcript-attachment is-${kind}`} key={attachment.id || `${attachment.name}-${index}`}>
+      {kind === 'image' && url ? <a href={url} target="_blank" rel="noreferrer noopener"
+        className="transcript-attachment-preview" aria-label={`Open ${attachment.name}`}>
         <img src={url} alt={attachment.name} loading="lazy" />
-      </a>}
-      {url && attachment.mimeType.startsWith('audio/') && <audio src={url} controls preload="metadata" />}
-      {url && attachment.mimeType.startsWith('video/') && <video src={url} controls preload="metadata" />}
-      {url ? <a href={url} download={attachment.name} className="transcript-file-link" aria-label={`Download ${attachment.name}`}>
-        <Paperclip size={14} /><span>{attachment.name}</span><Download size={14} />
-      </a> : <span className="transcript-file-link"><File size={14} />{attachment.name}</span>}
+      </a> : !media && <span className="transcript-attachment-preview is-file" aria-hidden="true"><File size={20} /></span>}
+      {url && kind === 'audio' && <audio src={url} controls preload="metadata" />}
+      {url && kind === 'video' && <video src={url} controls preload="metadata" />}
+      <span className="transcript-attachment-copy">
+        <span title={attachment.name}>{attachment.name}</span>
+        <small>{attachmentFormat(attachment, kind)}</small>
+      </span>
+      {url && <a href={url} download={attachment.name} className="transcript-attachment-download"
+        aria-label={`Download ${attachment.name}`} title={`Download ${attachment.name}`}><Download size={15} /></a>}
     </div>;
   })}</div>;
 }

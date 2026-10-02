@@ -6,7 +6,7 @@ import ts from 'typescript';
 import * as reducer from './reducer.ts';
 
 const source = ts.transpileModule(
-  `${readFileSync(new URL('./Transcript.tsx', import.meta.url), 'utf8')}\nexport { ActivityItem, TurnActivity };`,
+  `${readFileSync(new URL('./Transcript.tsx', import.meta.url), 'utf8')}\nexport { ActivityItem, TurnActivity, Attachments, Message };`,
   { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX } },
 ).outputText;
 
@@ -39,7 +39,7 @@ function disclosure(component, initialProps) {
     'react/jsx-runtime': { jsx: element, jsxs: element, Fragment: 'fragment' },
     'lucide-react': new Proxy({}, { get: (_, name) => name }),
     'react-markdown': {}, 'remark-gfm': {}, 'remark-math': {}, 'rehype-highlight': {}, 'rehype-katex': {},
-    '../../components/Avatar': {}, '../../lib/events': {},
+    '../../components/Avatar': {}, '../../lib/events': { botMessagePresentation: () => null },
     './reducer': reducer, './transcript.css': {},
   };
   const exports = {};
@@ -73,9 +73,21 @@ function disclosure(component, initialProps) {
     }
     return visit(render());
   }
+  function findAll(match) {
+    const matches = [];
+    function visit(node) {
+      if (!node || typeof node !== 'object') return;
+      if (match(node)) matches.push(node);
+      const children = Array.isArray(node.props?.children) ? node.props.children : [node.props?.children];
+      children.flat(Infinity).forEach(visit);
+    }
+    visit(render());
+    return matches;
+  }
   return {
     update: next => { props = { ...props, ...next }; render(); },
     find,
+    findAll,
     toggle: () => find(node => node.type === 'button' && node.props['aria-controls']).props.onClick(),
     finishExit: () => {
       const callbacks = [...timers.values()]; timers.clear();
@@ -109,6 +121,47 @@ test('tool disclosure becomes inaccessible while its exit animation retains the 
 
   view.toggle();
   assert.ok(view.find(node => node.props?.className === 'transcript-activity-content'), 'the complete payload can be reopened');
+});
+
+test('image and file attachments share compact card sections and retain accessible open/download actions', () => {
+  const attachments = [
+    { id: 'image/id', name: 'figure.png', mimeType: 'image/png' },
+    { id: 'document/id', name: 'report.pdf', mimeType: 'application/pdf' },
+  ];
+  for (const role of ['user', 'assistant']) {
+    const message = {
+      id: `message-${role}`, role, content: 'Files', attachments,
+      artifact: role === 'assistant', time: '2026-10-02T12:00:00Z',
+    };
+    const messageView = disclosure('Message', { botId: 'bot/id', message });
+    const attachedContent = messageView.find(node => typeof node.type === 'function' && node.type.name === 'Attachments');
+    assert.ok(attachedContent, `${role} messages use the same attachment presentation`);
+    assert.equal(attachedContent.props.attachments, attachments);
+    const view = disclosure('Attachments', attachedContent.props);
+    const cards = view.findAll(node => node.props?.className?.split(' ').includes('transcript-attachment'));
+    assert.equal(cards.length, 2);
+
+    for (let index = 0; index < attachments.length; index++) {
+      const file = attachments[index];
+      const classNames = cards[index].props.className.split(' ');
+      assert.ok(classNames.includes(index === 0 ? 'is-image' : 'is-file'));
+      const cardChildren = [cards[index].props.children].flat(Infinity).filter(Boolean);
+      for (const className of ['transcript-attachment-preview', 'transcript-attachment-copy', 'transcript-attachment-download']) {
+        assert.equal(cardChildren.filter(node => node.props?.className?.split(' ').includes(className)).length, 1,
+          `${file.name} has one shared ${className} section`);
+      }
+      const download = cardChildren.find(node => node.props?.className?.split(' ').includes('transcript-attachment-download'));
+      assert.equal(download.type, 'a');
+      assert.equal(download.props.download, file.name);
+      assert.equal(download.props['aria-label'], `Download ${file.name}`);
+      assert.equal(download.props.href, `/api/studio/bots/bot%2Fid/files/${encodeURIComponent(file.id)}`);
+    }
+    const preview = view.find(node => node.type === 'a' && node.props['aria-label'] === 'Open figure.png');
+    assert.ok(preview, 'the image preview keeps an accessible open action');
+    assert.equal(preview.props.target, '_blank');
+    assert.equal(preview.props.href, '/api/studio/bots/bot%2Fid/files/image%2Fid');
+    assert.equal(view.find(node => node.type === 'img').props.alt, 'figure.png');
+  }
 });
 
 test('a completed turn collapses its expanded history and can reopen the same actions', () => {

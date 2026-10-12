@@ -131,7 +131,7 @@ func TestManagedAppServerLiveResume(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	s, err := newAppServerSession(ctx, "managed://", ".", "", "", "yolo", threadID, "", "", nil, os.Getenv("CODEX_HOME"), "", "")
+	s, err := newAppServerSession(ctx, "codex", nil, "managed://", ".", "", "", "yolo", threadID, "", "", nil, os.Getenv("CODEX_HOME"), "", "")
 	if err != nil {
 		t.Fatalf("resume thread through managed app-server: %v", err)
 	}

@@ -435,6 +435,12 @@ func (p *Platform) handleMessage(ctx context.Context, msg *models.Message) {
 		return
 	}
 
+	if msg.RichMessage != nil {
+		richMsg := *msg
+		// Mention and command checks below read Text.
+		richMsg.Text, _ = incomingRichContent(richMsg.RichMessage)
+		msg = &richMsg
+	}
 	chatName := ""
 	if isGroup {
 		chatName = msg.Chat.Title
@@ -452,6 +458,28 @@ func (p *Platform) handleMessage(ctx context.Context, msg *models.Message) {
 		go p.reactToMessage(ctx, msg.Chat.ID, msg.ID, "⚡")
 	}
 	botName := p.botUsername()
+
+	if msg.RichMessage != nil {
+		text, photos := incomingRichContent(msg.RichMessage)
+		richMsg := &core.Message{
+			SessionKey: sessionKey, Platform: "telegram", UserID: userID, UserName: userName, ChatName: chatName,
+			Content:   stripBotMention(text, botName),
+			MessageID: strconv.Itoa(msg.ID), ChannelKey: channelKey, ReplyCtx: rctx,
+		}
+		for _, photo := range photos {
+			imgData, err := p.downloadFile(photo.FileID)
+			if err != nil {
+				slog.Error("telegram: download rich photo failed", "error", err)
+				return
+			}
+
+			richMsg.Images = append(richMsg.Images, core.ImageAttachment{MimeType: "image/jpeg", Data: imgData})
+		}
+		if richMsg.Content != "" || len(richMsg.Images) > 0 {
+			p.dispatchMessage(richMsg, msg)
+		}
+		return
+	}
 
 	if len(msg.Photo) > 0 {
 		best := msg.Photo[len(msg.Photo)-1]

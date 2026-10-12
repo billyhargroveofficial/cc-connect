@@ -378,6 +378,11 @@ func (s *appServerSession) threadRequestParams() map[string]any {
 	if model := s.GetModel(); model != "" {
 		params["model"] = model
 	}
+	// thread/start has no reasoning-effort field; the app-server reads it from
+	// the per-thread config override.
+	if effort := s.GetReasoningEffort(); effort != "" {
+		params["config"] = map[string]any{"model_reasoning_effort": effort}
+	}
 	if approval, sandbox := appServerModeSettings(s.mode); approval != "" {
 		params["approvalPolicy"] = approval
 		if sandbox != "" {

@@ -423,6 +423,12 @@ type Engine struct {
 	// 同时保留已保存的 session ID，便于下次继续恢复。
 	agentSessionIdleTimeoutNanos atomic.Int64
 	agentSessionIdleSeq          atomic.Uint64
+
+	// idle compaction: compact a live session shortly before the prompt cache
+	// expires. See scheduleIdleCompact.
+	idleCompactNanos     atomic.Int64
+	idleCompactMinTokens atomic.Int64
+	idleCompactSeq       atomic.Uint64
 	maxQueuedMessages            int
 	dirHistory                   *DirHistory
 	baseWorkDir                  string
@@ -594,6 +600,10 @@ type interactiveState struct {
 	// agentSessionIdleCancel 取消当前会话的 idle 关闭计时器。
 	agentSessionIdleCancel context.CancelFunc
 	agentSessionIdleToken  uint64
+
+	// idleCompactCancel cancels the pending idle-compaction timer.
+	idleCompactCancel context.CancelFunc
+	idleCompactToken  uint64
 
 	// eventsNeedResync is true when buffered events should be drained before
 	// the next turn (e.g. after an abnormal exit). Defaults to true (safe);
@@ -979,6 +989,122 @@ func (e *Engine) SetAutoCompressConfigWithSource(enabled bool, maxTokens int, mi
 		minGap = 30 * time.Minute
 	}
 	e.autoCompressMinGap = minGap
+}
+
+// SetIdleCompact configures compaction of a live agent session after d of
+// inactivity following a clean turn, when the agent-reported context is at
+// least minTokens. d <= 0 disables it.
+func (e *Engine) SetIdleCompact(d time.Duration, minTokens int) {
+	if d < 0 {
+		d = 0
+	}
+	e.idleCompactNanos.Store(int64(d))
+	e.idleCompactMinTokens.Store(int64(minTokens))
+	if d > 0 {
+		slog.Info("idle-compact: enabled", "project", e.name, "after", d, "min_tokens", minTokens)
+	}
+}
+
+func (e *Engine) cancelIdleCompact(state *interactiveState) {
+	if state == nil {
+		return
+	}
+	state.mu.Lock()
+	cancel := state.idleCompactCancel
+	state.idleCompactCancel = nil
+	state.idleCompactToken = 0
+	state.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+}
+
+// scheduleIdleCompact arms a one-shot timer. A new turn cancels it
+// (cancelIdleCompact); on expiry fireIdleCompact re-checks everything.
+func (e *Engine) scheduleIdleCompact(sessionKey string, state *interactiveState, session *Session, sessions *SessionManager) {
+	if state == nil || session == nil || sessions == nil {
+		return
+	}
+	delay := time.Duration(e.idleCompactNanos.Load())
+	if delay <= 0 {
+		return
+	}
+	e.cancelIdleCompact(state)
+	ctx, cancel := context.WithCancel(e.ctx)
+	token := e.idleCompactSeq.Add(1)
+	state.mu.Lock()
+	if state.stopped || state.agentSession == nil || !state.agentSession.Alive() {
+		state.mu.Unlock()
+		cancel()
+		return
+	}
+	state.idleCompactCancel = cancel
+	state.idleCompactToken = token
+	state.mu.Unlock()
+	slog.Debug("idle-compact: armed", "session", sessionKey, "after", delay)
+
+	go func() {
+		timer := time.NewTimer(delay)
+		defer timer.Stop()
+		select {
+		case <-ctx.Done():
+			return
+		case <-timer.C:
+		}
+		e.fireIdleCompact(sessionKey, state, session, sessions, token)
+	}()
+}
+
+func (e *Engine) fireIdleCompact(sessionKey string, state *interactiveState, session *Session, sessions *SessionManager, token uint64) {
+	state.mu.Lock()
+	if state.idleCompactToken != token {
+		state.mu.Unlock()
+		return
+	}
+	state.idleCompactCancel = nil
+	state.idleCompactToken = 0
+	as := state.agentSession
+	p := state.platform
+	replyCtx := state.replyCtx
+	busy := state.stopped || as == nil || !as.Alive() || state.eventsNeedResync || state.pending != nil || len(state.pendingMessages) > 0
+	state.mu.Unlock()
+	if busy {
+		slog.Info("idle-compact: skipped", "session", sessionKey, "reason", "session not idle or not alive")
+		return
+	}
+	minTokens := int(e.idleCompactMinTokens.Load())
+	usage, _ := replyFooterContextUsage(as)
+	if usage == nil || usage.UsedTokens <= 0 {
+		slog.Info("idle-compact: skipped", "session", sessionKey, "reason", "no context usage reported")
+		return
+	}
+	if usage.UsedTokens < minTokens {
+		slog.Info("idle-compact: skipped", "session", sessionKey, "reason", "context below threshold",
+			"context_tokens", usage.UsedTokens, "min_tokens", minTokens)
+		return
+	}
+	compressor, ok := e.agent.(ContextCompressor)
+	if !ok || compressor.CompressCommand() == "" {
+		slog.Info("idle-compact: skipped", "session", sessionKey, "reason", "agent has no compress command")
+		return
+	}
+	lockGen, locked := session.TryLock()
+	if !locked {
+		slog.Info("idle-compact: skipped", "session", sessionKey, "reason", "session busy")
+		return
+	}
+	state.mu.Lock()
+	state.lastAutoCompressAt = time.Now()
+	state.mu.Unlock()
+	slog.Info("idle-compact: triggering", "session", sessionKey, "context_tokens", usage.UsedTokens, "min_tokens", minTokens)
+	start := time.Now()
+	e.runCompress(state, session, sessions, sessionKey, p, replyCtx, true, lockGen)
+	after := 0
+	if u, _ := replyFooterContextUsage(as); u != nil {
+		after = u.UsedTokens
+	}
+	slog.Info("idle-compact: finished", "session", sessionKey, "duration", time.Since(start).Round(time.Millisecond),
+		"context_before", usage.UsedTokens, "context_reported_after", after, "alive", as.Alive())
 }
 
 // SetResetOnIdle configures automatic session rotation after prolonged inactivity.
@@ -3994,6 +4120,7 @@ func (e *Engine) processInteractiveMessageWith(p Platform, msg *Message, session
 		return
 	}
 	e.cancelAgentSessionIdleClose(state)
+	e.cancelIdleCompact(state)
 
 	if workspaceDir != "" && e.workspacePool != nil {
 		ws := e.workspacePool.GetOrCreate(workspaceDir)
@@ -4088,6 +4215,7 @@ func (e *Engine) processInteractiveMessageWith(p Platform, msg *Message, session
 	if alive {
 		e.startUnsolicitedReader(state, session, sessions, interactiveKey, workspaceDir)
 		e.scheduleAgentSessionIdleClose(interactiveKey, state)
+		e.scheduleIdleCompact(interactiveKey, state, session, sessions)
 	}
 
 	// Guard against a narrow race: a message may have been queued between
@@ -4510,6 +4638,11 @@ func (e *Engine) cleanupInteractiveState(sessionKey string, expected ...*interac
 		if state.agentSessionIdleCancel != nil {
 			state.agentSessionIdleCancel()
 			state.agentSessionIdleCancel = nil
+		}
+		if state.idleCompactCancel != nil {
+			state.idleCompactCancel()
+			state.idleCompactCancel = nil
+			state.idleCompactToken = 0
 		}
 		state.mu.Unlock()
 	}
@@ -5111,6 +5244,7 @@ func (e *Engine) runUnsolicitedReader(ctx context.Context, cancel context.Cancel
 				// that reports progress every minute) can be killed mid-flight
 				// when the original idle timer fires. See #1686 P1-C P1-1.
 				e.scheduleAgentSessionIdleClose(sessionKey, state)
+				e.scheduleIdleCompact(sessionKey, state, session, sessions)
 
 				slog.Info("unsolicited turn complete",
 					"session", sessionKey,

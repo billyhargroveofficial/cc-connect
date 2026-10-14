@@ -52,6 +52,17 @@ const defaultResetOnIdleMins = 0
 // project, applying defaultResetOnIdleMins when the field is unset. The second
 // return value indicates whether the default was applied, so the caller can
 // emit a one-time nudge log directing users to the docs.
+// resolveIdleCompact returns the idle-compaction delay; secs wins over mins.
+func resolveIdleCompact(mins, secs *int) time.Duration {
+	if secs != nil && *secs > 0 {
+		return time.Duration(*secs) * time.Second
+	}
+	if mins != nil && *mins > 0 {
+		return time.Duration(*mins) * time.Minute
+	}
+	return 0
+}
+
 func resolveResetOnIdle(configured *int) (time.Duration, bool) {
 	if configured != nil {
 		return time.Duration(*configured) * time.Minute, false
@@ -720,6 +731,7 @@ func main() {
 		}
 		resetIdle, defaulted := resolveResetOnIdle(proj.ResetOnIdleMins)
 		engine.SetResetOnIdle(resetIdle)
+		engine.SetIdleCompact(resolveIdleCompact(proj.IdleCompactMins, proj.IdleCompactSecs), derefInt(proj.IdleCompactMinTokens))
 		if defaulted {
 			slog.Info("project: reset_on_idle_mins not set, applying default — set reset_on_idle_mins = 0 to opt out, see docs/usage.md",
 				"project", proj.Name, "default_minutes", defaultResetOnIdleMins)
@@ -1808,6 +1820,7 @@ func reloadConfig(configPath, projName string, engine *core.Engine) (*core.Confi
 	}
 	resetIdle, defaulted := resolveResetOnIdle(proj.ResetOnIdleMins)
 	engine.SetResetOnIdle(resetIdle)
+	engine.SetIdleCompact(resolveIdleCompact(proj.IdleCompactMins, proj.IdleCompactSecs), derefInt(proj.IdleCompactMinTokens))
 	if defaulted {
 		slog.Info("project: reset_on_idle_mins not set, applying default — set reset_on_idle_mins = 0 to opt out, see docs/usage.md",
 			"project", proj.Name, "default_minutes", defaultResetOnIdleMins)

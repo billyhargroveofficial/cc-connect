@@ -65,3 +65,17 @@ func TestMergeQueuedBatch(t *testing.T) {
 		}
 	}
 }
+
+func TestBusyNoticeOverride(t *testing.T) {
+	e := &Engine{i18n: NewI18n(LangEnglish)}
+	if got := e.busyNotice("", MsgMessageQueued); got != e.i18n.T(MsgMessageQueued) {
+		t.Fatalf("default queued notice = %q", got)
+	}
+	e.SetBusyNotices("в очереди", "в текущий шаг")
+	if got := e.busyNotice(e.queuedNotice, MsgMessageQueued); got != "в очереди" {
+		t.Fatalf("queued override = %q", got)
+	}
+	if got := e.busyNotice(e.steeredNotice, MsgMessageSteered); got != "в текущий шаг" {
+		t.Fatalf("steered override = %q", got)
+	}
+}

@@ -370,8 +370,10 @@ type Engine struct {
 	tts                   *TTSCfg
 	display               DisplayCfg
 	injectSender          bool
-	steerMidTurn          bool // steer_mid_turn: busy-session messages go straight to a MidTurnSteerer agent
-	batchQueued           bool // batch_queued: drain all queued messages as one prompt
+	steerMidTurn          bool   // steer_mid_turn: busy-session messages go straight to a MidTurnSteerer agent
+	batchQueued           bool   // batch_queued: drain all queued messages as one prompt
+	queuedNotice          string // queued_notice: overrides MsgMessageQueued when set
+	steeredNotice         string // steered_notice: overrides MsgMessageSteered when set
 	attachmentSendEnabled bool
 	startedAt             time.Time
 
@@ -1202,6 +1204,20 @@ func (e *Engine) SetSteerMidTurn(v bool) {
 // of running one turn per message.
 func (e *Engine) SetBatchQueued(v bool) {
 	e.batchQueued = v
+}
+
+// SetBusyNotices overrides the replies sent when a message is queued for a
+// busy session or steered into its running turn. Empty keeps the i18n text.
+func (e *Engine) SetBusyNotices(queued, steered string) {
+	e.queuedNotice = queued
+	e.steeredNotice = steered
+}
+
+func (e *Engine) busyNotice(custom string, key MsgKey) string {
+	if custom != "" {
+		return custom
+	}
+	return e.i18n.T(key)
 }
 
 // SetAttachmentSendEnabled controls whether side-channel image/file delivery is allowed.
@@ -3609,7 +3625,7 @@ func (e *Engine) queueMessageForBusySession(p Platform, msg *Message, interactiv
 		"user", msg.UserName,
 		"queue_depth", queueDepth,
 	)
-	e.reply(p, msg.ReplyCtx, e.i18n.T(MsgMessageQueued))
+	e.reply(p, msg.ReplyCtx, e.busyNotice(e.queuedNotice, MsgMessageQueued))
 	return true
 }
 
@@ -18366,7 +18382,7 @@ func (e *Engine) trySteerMidTurnLocked(state *interactiveState, p Platform, msg 
 	state.busySession.TouchUserActivity()
 	runMessageAccepted(msg)
 	slog.Info("steer: message delivered to running turn", "session", msg.SessionKey, "user", msg.UserName, "msg_id", msg.MessageID)
-	e.reply(p, msg.ReplyCtx, e.i18n.T(MsgMessageSteered))
+	e.reply(p, msg.ReplyCtx, e.busyNotice(e.steeredNotice, MsgMessageSteered))
 	return true
 }
 

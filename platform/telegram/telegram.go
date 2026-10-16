@@ -113,6 +113,7 @@ type Platform struct {
 	progressStyle         string // "legacy" | "compact" — telegram has no rich card, so "card" is mapped to "compact"
 	chatLog               *chatLog
 	noCommandMenu         bool // command_menu = false
+	mentionOnly           bool // mention_only = true: only @botname wakes the bot in groups
 	httpClient            *http.Client
 
 	mu                  sync.RWMutex
@@ -194,7 +195,10 @@ func New(opts map[string]any) (core.Platform, error) {
 		noCommandMenu = !v
 	}
 
+	mentionOnly, _ := opts["mention_only"].(bool)
+
 	return &Platform{
+		mentionOnly:           mentionOnly,
 		chatLog:               chatLog,
 		noCommandMenu:         noCommandMenu,
 		token:                 token,
@@ -1039,6 +1043,9 @@ func (p *Platform) isDirectedAtBot(msg *models.Message) bool {
 			slog.Debug("telegram: command with @suffix", "bot", botName, "target", target, "match", strings.EqualFold(target, botName))
 			return strings.EqualFold(target, botName)
 		}
+		if p.mentionOnly {
+			return false // mention_only: a bare /cmd may be meant for another bot
+		}
 		slog.Debug("telegram: command without @suffix, accepting", "bot", botName, "text", msg.Text)
 		return true // /cmd without @suffix — accept
 	}
@@ -1057,7 +1064,7 @@ func (p *Platform) isDirectedAtBot(msg *models.Message) bool {
 	}
 
 	// Check if replying to a message from this bot
-	if msg.ReplyToMessage != nil && msg.ReplyToMessage.From != nil {
+	if !p.mentionOnly && msg.ReplyToMessage != nil && msg.ReplyToMessage.From != nil {
 		slog.Debug("telegram: checking reply", "bot_id", self.ID, "reply_from_id", msg.ReplyToMessage.From.ID)
 		if msg.ReplyToMessage.From.ID == self.ID {
 			return true

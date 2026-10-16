@@ -112,6 +112,7 @@ type Platform struct {
 	enableReactions       bool
 	progressStyle         string // "legacy" | "compact" — telegram has no rich card, so "card" is mapped to "compact"
 	chatLog               *chatLog
+	noCommandMenu         bool // command_menu = false
 	httpClient            *http.Client
 
 	mu                  sync.RWMutex
@@ -188,8 +189,14 @@ func New(opts map[string]any) (core.Platform, error) {
 		return nil, err
 	}
 
+	noCommandMenu := false
+	if v, ok := opts["command_menu"].(bool); ok {
+		noCommandMenu = !v
+	}
+
 	return &Platform{
 		chatLog:               chatLog,
+		noCommandMenu:         noCommandMenu,
 		token:                 token,
 		allowFrom:             allowFrom,
 		groupReplyAll:         groupReplyAll,
@@ -1729,6 +1736,9 @@ func (p *Platform) RegisterCommands(commands []core.BotCommandInfo) error {
 	if err != nil {
 		return err
 	}
+	if p.noCommandMenu {
+		return p.deleteCommandMenu()
+	}
 
 	// Telegram limits: max 100 commands; keep descriptions conservatively short
 	// to avoid menu registration failures with larger command sets.
@@ -1763,6 +1773,28 @@ func (p *Platform) RegisterCommands(commands []core.BotCommandInfo) error {
 	}
 
 	slog.Info("telegram: registered bot commands", "count", len(tgCommands))
+	return nil
+}
+
+// deleteCommandMenu clears the bot's default-scope command menu
+// (command_menu = false). Commands typed by hand are still parsed.
+func (p *Platform) deleteCommandMenu() error {
+	client := p.httpClient
+	if client == nil {
+		client = http.DefaultClient
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://api.telegram.org/bot"+p.token+"/deleteMyCommands", nil)
+	if err != nil {
+		return err
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("telegram: deleteMyCommands failed: %s", core.RedactToken(err.Error(), p.token))
+	}
+	resp.Body.Close()
+	slog.Info("telegram: command menu disabled, commands deleted", "status", resp.StatusCode)
 	return nil
 }
 

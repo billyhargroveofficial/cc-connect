@@ -471,6 +471,10 @@ func (p *Platform) handleMessage(ctx context.Context, msg *models.Message) {
 		slog.Debug("telegram: group message not directed at bot", "chat", msg.Chat.ID)
 		return
 	}
+	if p.chatLog.ignored(msg.From.ID) {
+		slog.Info("telegram: message from ignored user dropped", "chat", msg.Chat.ID, "user", msg.From.ID)
+		return
+	}
 
 	rctx := replyContext{chatID: msg.Chat.ID, threadID: threadID, messageID: msg.ID}
 	if p.enableReactions {

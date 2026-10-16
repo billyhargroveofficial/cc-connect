@@ -704,3 +704,21 @@ const (
 type PreviewStatusUpdater interface {
 	SetPreviewStatus(previewHandle any, status CardStatus)
 }
+
+// MessageLengthLimiter is optionally implemented by platforms whose messages
+// can be longer than the default split limit (e.g. Telegram Rich Messages hold
+// up to 32768 characters). Replies longer than the limit are split into
+// several messages.
+type MessageLengthLimiter interface {
+	MaxMessageLength() int
+}
+
+// platformMessageLimit returns the split limit for p.
+func platformMessageLimit(p Platform) int {
+	if l, ok := p.(MessageLengthLimiter); ok {
+		if n := l.MaxMessageLength(); n > 0 {
+			return n
+		}
+	}
+	return maxPlatformMessageLen
+}

@@ -24,10 +24,16 @@ import (
 //   - chat_log_dir       directory for <chat_id>.jsonl message logs.
 //   - context_inject_max max number of pending group messages prepended to a
 //     directed message (0 disables injection).
+//   - ignore_file        JSON {"<user_id>": {"until": RFC3339, "reason": "…"}}
+//     maintained by the agent itself; messages addressed to the bot by a user
+//     whose "until" is in the future are logged but not dispatched.
+//   - ignore_exempt      comma-separated user IDs that can never be ignored.
 type chatLog struct {
-	allowChats map[int64]bool
-	dir        string
-	injectMax  int
+	allowChats   map[int64]bool
+	dir          string
+	injectMax    int
+	ignoreFile   string
+	ignoreExempt map[int64]bool
 
 	mu      sync.Mutex
 	pending map[int64][]string
@@ -55,6 +61,18 @@ func newChatLog(opts map[string]any) (*chatLog, error) {
 		cl.dir = strings.TrimSpace(dir)
 		if err := os.MkdirAll(cl.dir, 0o755); err != nil {
 			return nil, fmt.Errorf("telegram: chat_log_dir: %w", err)
+		}
+	}
+	cl.ignoreFile = strings.TrimSpace(fmt.Sprint(opts["ignore_file"]))
+	if cl.ignoreFile == "<nil>" {
+		cl.ignoreFile = ""
+	}
+	if raw, _ := opts["ignore_exempt"].(string); strings.TrimSpace(raw) != "" {
+		cl.ignoreExempt = map[int64]bool{}
+		for _, part := range strings.Split(raw, ",") {
+			if id, err := strconv.ParseInt(strings.TrimSpace(part), 10, 64); err == nil {
+				cl.ignoreExempt[id] = true
+			}
 		}
 	}
 	switch v := opts["context_inject_max"].(type) {
@@ -202,4 +220,34 @@ func (cl *chatLog) takePending(chatID int64) string {
 		return ""
 	}
 	return "[Сообщения в чате с прошлого обращения к боту]\n" + strings.Join(q, "\n") + "\n[Конец; ниже — обращение к боту]"
+}
+
+// ignored reports whether userID is on the agent-maintained ignore list.
+// A missing or malformed file ignores nobody.
+func (cl *chatLog) ignored(userID int64) bool {
+	if cl == nil || cl.ignoreFile == "" || cl.ignoreExempt[userID] {
+		return false
+	}
+	data, err := os.ReadFile(cl.ignoreFile)
+	if err != nil {
+		return false
+	}
+	var list map[string]struct {
+		Until string `json:"until"`
+	}
+	if json.Unmarshal(data, &list) != nil {
+		slog.Warn("telegram: ignore_file is not valid JSON", "path", cl.ignoreFile)
+		return false
+	}
+	entry, ok := list[strconv.FormatInt(userID, 10)]
+	if !ok {
+		return false
+	}
+	raw := strings.TrimSpace(entry.Until)
+	for _, layout := range []string{time.RFC3339, "2006-01-02T15:04:05-0700", "2006-01-02 15:04:05-0700"} {
+		if until, err := time.Parse(layout, raw); err == nil {
+			return time.Now().Before(until)
+		}
+	}
+	return false
 }

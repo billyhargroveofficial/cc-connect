@@ -625,7 +625,14 @@ func (a *Agent) SkillDirs() []string {
 // CompressCommand returns "" because Codex native slash commands (/compact, /clear)
 // are not reliably executed in exec/resume mode — they may be treated as plain text.
 // See: https://github.com/chenhg5/cc-connect/issues/378
-func (a *Agent) CompressCommand() string { return "" }
+// CompressCommand: the exec backend compacts through a short-lived app-server
+// (see exec_compact.go); the app-server backend has no command wired yet.
+func (a *Agent) CompressCommand() string {
+	if a.backend == "exec" {
+		return execCompactCommand
+	}
+	return ""
+}
 
 func codexSkillDirs(workDir, explicitCodexHome string) []string {
 	homeDir, _ := os.UserHomeDir()

@@ -57,6 +57,19 @@ type codexSession struct {
 	contextMu    sync.RWMutex
 	contextUsage *core.ContextUsage
 	sessionFile  string
+
+	subWatchMu sync.Mutex
+	subWatch   *subagentWatcher // rollout tail for subagent progress, per turn
+}
+
+// stopSubagentWatcher flushes and stops the current turn's subagent watcher.
+// Called before the turn result is emitted so no progress lands after it.
+func (cs *codexSession) stopSubagentWatcher() {
+	cs.subWatchMu.Lock()
+	w := cs.subWatch
+	cs.subWatch = nil
+	cs.subWatchMu.Unlock()
+	w.Stop()
 }
 
 var codexSessionCloseTimeout = 8 * time.Second
@@ -136,6 +149,12 @@ func (cs *codexSession) Send(prompt string, messageID string, images []core.Imag
 		}
 	}()
 
+	if isExecCompactPrompt(prompt) && cs.CurrentSessionID() != "" && len(images) == 0 && len(files) == 0 {
+		started = true
+		go cs.runExecCompact()
+		return nil
+	}
+
 	if len(files) > 0 {
 		filePaths := core.SaveFilesToDisk(cs.workDir, messageID, files)
 		prompt = core.AppendFileRefs(prompt, filePaths)
@@ -183,8 +202,18 @@ func (cs *codexSession) Send(prompt string, messageID string, images []core.Imag
 	}
 	cs.addCmd(cmd)
 
+	watcher := newSubagentWatcher(cs, isResume)
+	if watcher != nil {
+		go watcher.run()
+	}
+	cs.subWatchMu.Lock()
+	cs.subWatch = watcher
+	cs.subWatchMu.Unlock()
 	cs.wg.Add(1)
-	go cs.readLoop(cmd, stdout, &stderrBuf)
+	go func() {
+		cs.readLoop(cmd, stdout, &stderrBuf)
+		cs.stopSubagentWatcher()
+	}()
 	started = true
 
 	return nil
@@ -431,6 +460,7 @@ func (cs *codexSession) handleEvent(raw map[string]any) {
 		cs.handleItemCompleted(raw)
 
 	case "turn.completed":
+		cs.stopSubagentWatcher()
 		cs.refreshContextUsageFromRollout()
 		cs.flushPendingAsText()
 		evt := core.Event{Type: core.EventResult, SessionID: cs.CurrentSessionID(), Done: true}
@@ -441,6 +471,7 @@ func (cs *codexSession) handleEvent(raw map[string]any) {
 		}
 
 	case "turn.failed":
+		cs.stopSubagentWatcher()
 		errMsg := ""
 		if errObj, ok := raw["error"].(map[string]any); ok {
 			errMsg, _ = errObj["message"].(string)

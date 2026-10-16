@@ -217,3 +217,11 @@ func (r *richPlatform) UpdateMessage(ctx context.Context, previewHandle any, con
 		"error", err, "content_len", len(content))
 	return r.Platform.UpdateMessage(ctx, previewHandle, content)
 }
+
+// richMaxMessageLength keeps a reply in one Rich Message (limit 32768) with
+// headroom for the reply footer, instead of the engine's default 4000-char
+// split that breaks long answers into several messages.
+const richMaxMessageLength = 30000
+
+// MaxMessageLength implements core.MessageLengthLimiter.
+func (r *richPlatform) MaxMessageLength() int { return richMaxMessageLength }

@@ -8630,10 +8630,16 @@ func appendReplyFooter(content, footer string) string {
 		last30 = last30[len(last30)-30:]
 	}
 	slog.Debug("appendReplyFooter", "content_len", len(content), "footer", footer, "content_last30", last30)
-	if content == "" {
-		return "*" + footer + "*"
+	// A footer that is already a `code span` (statusline renderer chose
+	// monospace) is kept as is; wrapping it in *…* would fight the code entity.
+	wrapped := "*" + footer + "*"
+	if len(footer) > 1 && strings.HasPrefix(footer, "`") && strings.HasSuffix(footer, "`") {
+		wrapped = footer
 	}
-	return content + "\n\n*" + footer + "*"
+	if content == "" {
+		return wrapped
+	}
+	return content + "\n\n" + wrapped
 }
 
 func appendFinalMetadataToSegment(segment, fullResponse string) string {

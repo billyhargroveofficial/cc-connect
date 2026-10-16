@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"time"
 
 	"github.com/chenhg5/cc-connect/core"
 
@@ -225,3 +226,8 @@ const richMaxMessageLength = 30000
 
 // MaxMessageLength implements core.MessageLengthLimiter.
 func (r *richPlatform) MaxMessageLength() int { return richMaxMessageLength }
+
+// ProgressUpdateInterval implements core.ProgressUpdateThrottler: Telegram
+// limits a group to ~20 messages (edits included) per minute, and subagent
+// activity can produce many progress events quickly.
+func (r *richPlatform) ProgressUpdateInterval() time.Duration { return 3 * time.Second }

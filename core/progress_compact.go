@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -234,6 +235,7 @@ type compactProgressWriter struct {
 
 	// Throttle message edits to avoid platform rate limits (e.g. Discord ~5 edits/5s).
 	minUpdateInterval time.Duration
+	rateLimitedUntil  time.Time
 	lastUpdateAt      time.Time
 }
 
@@ -490,11 +492,22 @@ func (w *compactProgressWriter) AppendStructured(item ProgressCardEntry, fallbac
 	if w.minUpdateInterval > 0 && time.Since(w.lastUpdateAt) < w.minUpdateInterval {
 		return true
 	}
+	if time.Now().Before(w.rateLimitedUntil) {
+		return true
+	}
 
 	callCtx, cancel := w.withAPITimeout()
 	err := w.updater.UpdateMessage(callCtx, w.handle, w.content)
 	cancel()
 	if err != nil {
+		// A rate limit is transient: keep accumulating and retry after the
+		// server's back-off instead of falling back to one message per event,
+		// which would leave stray messages that cleanup never deletes.
+		if wait, ok := progressRateLimitWait(err); ok {
+			w.rateLimitedUntil = time.Now().Add(wait)
+			slog.Warn("progress writer: rate limited, deferring update", "platform", w.platform.Name(), "retry_after", wait)
+			return true
+		}
 		slog.Warn("progress writer: UpdateMessage failed", "platform", w.platform.Name(), "style", w.style, "error", err)
 		w.failed = true
 		return false
@@ -593,4 +606,22 @@ func trimCompactProgressText(s string, maxRunes int) string {
 	rs := []rune(s)
 	tail := strings.TrimLeft(string(rs[len(rs)-maxRunes:]), "\n")
 	return "…\n" + tail
+}
+
+var progressRetryAfterRe = regexp.MustCompile(`(?i)retry[ _]after:? *(\d+)`)
+
+// progressRateLimitWait reports whether err is a platform rate limit (HTTP 429
+// "Too Many Requests") and how long to back off.
+func progressRateLimitWait(err error) (time.Duration, bool) {
+	msg := err.Error()
+	if !strings.Contains(strings.ToLower(msg), "too many requests") && !strings.Contains(msg, "429") {
+		return 0, false
+	}
+	wait := 5 * time.Second
+	if m := progressRetryAfterRe.FindStringSubmatch(msg); m != nil {
+		if n, convErr := strconv.Atoi(m[1]); convErr == nil && n > 0 {
+			wait = time.Duration(n)*time.Second + 500*time.Millisecond
+		}
+	}
+	return wait, true
 }

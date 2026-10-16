@@ -170,6 +170,8 @@ func (w *subagentWatcher) handleLine(f *subagentWatchFile, line []byte) {
 			w.emit("▶ " + name)
 		case "completed":
 			w.emit("✓ " + name)
+		case "interacted":
+			// parent ↔ subagent messaging: noise in the progress card
 		default:
 			w.emit(p.Item.Kind + " " + name)
 		}

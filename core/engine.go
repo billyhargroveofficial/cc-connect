@@ -6575,6 +6575,12 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 			if len(state.pendingMessages) > 0 {
 				queued := state.pendingMessages[0]
 				state.pendingMessages = state.pendingMessages[1:]
+				var batch []queuedMessage
+				if e.batchQueued && len(state.pendingMessages) > 0 {
+					batch = append([]queuedMessage{queued}, state.pendingMessages...)
+					state.pendingMessages = nil
+					queued = mergeQueuedBatch(batch, e.buildSenderPrompt)
+				}
 				remainingQueue := len(state.pendingMessages)
 				state.platform = queued.platform
 				state.replyCtx = queued.replyCtx
@@ -6607,6 +6613,10 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 				}
 
 				queuedPrompt := e.buildSenderPrompt(queued.content, queued.userID, queued.userName, queued.msgPlatform, queued.msgSessionKey, queued.channelKey)
+				if batch != nil {
+					queuedPrompt = queued.content // already carries each message's own sender line
+					slog.Info("processing queued messages as one batch", "session", sessionKey, "count", len(batch))
+				}
 
 				state.mu.Lock()
 				as := state.agentSession // capture under lock to avoid race with cleanup
@@ -6618,7 +6628,7 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 						nextSend <- fmt.Errorf("agent session became nil")
 						return
 					}
-					nextSend <- as.Send(queuedPrompt, queued.messageID, queued.images, queued.files)
+					nextSend <- sendWhenTurnFree(as, queuedPrompt, queued.messageID, queued.images, queued.files)
 				}()
 				pendingSend = nextSend
 
@@ -6680,7 +6690,13 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 					e.send(queued.platform, queued.replyCtx, replyContent)
 				}
 
-				session.AddHistory("user", queued.content)
+				if batch != nil {
+					for _, b := range batch {
+						session.AddHistory("user", b.content)
+					}
+				} else {
+					session.AddHistory("user", queued.content)
+				}
 				// Persist queued user message immediately (mirror of the
 				// initial AddHistory("user",...) save above).
 				sessions.Save()
@@ -6972,7 +6988,7 @@ func (e *Engine) drainPendingMessages(state *interactiveState, session *Session,
 				sendDone <- fmt.Errorf("agent session became nil")
 				return
 			}
-			sendDone <- as.Send(prompt, queued.messageID, queued.images, queued.files)
+			sendDone <- sendWhenTurnFree(as, prompt, queued.messageID, queued.images, queued.files)
 		}()
 
 		var stopTyping func()
@@ -18372,4 +18388,19 @@ func mergeQueuedBatch(batch []queuedMessage, senderPrompt func(content, userID, 
 	merged.images = images
 	merged.files = files
 	return merged
+}
+
+// sendWhenTurnFree sends a queued prompt, waiting briefly when the agent still
+// reports the previous turn in flight. Codex emits its result event before the
+// exec process exits, so an immediate Send right after EventResult can race the
+// turn guard and fail with "turn already in progress".
+func sendWhenTurnFree(as AgentSession, prompt, messageID string, images []ImageAttachment, files []FileAttachment) error {
+	deadline := time.Now().Add(60 * time.Second)
+	for {
+		err := as.Send(prompt, messageID, images, files)
+		if err == nil || !strings.Contains(err.Error(), "turn already in progress") || time.Now().After(deadline) {
+			return err
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
 }

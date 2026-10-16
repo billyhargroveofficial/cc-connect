@@ -548,6 +548,8 @@ type ProjectConfig struct {
 	// entirely (the per-line indicator flags above become no-ops).
 	ReplyFooter      *bool        `toml:"reply_footer,omitempty"`
 	InjectSender     *bool        `toml:"inject_sender,omitempty"`     // prepend sender identity (platform + user ID) to each message sent to the agent
+	BatchQueued      *bool        `toml:"batch_queued,omitempty"`      // after a turn, send all queued messages to the agent as one prompt (one combined reply)
+	SteerMidTurn     *bool        `toml:"steer_mid_turn,omitempty"`    // deliver messages that arrive during a turn straight to the agent (it sees them at its next step) instead of queueing them
 	DisabledCommands []string     `toml:"disabled_commands,omitempty"` // commands to disable for this project (e.g. ["restart", "upgrade"])
 	AdminFrom        string       `toml:"admin_from,omitempty"`        // comma-separated user IDs allowed to run privileged commands; "*" = all allowed users
 	Users            *UsersConfig `toml:"users,omitempty"`             // per-user role config; nil = legacy behavior

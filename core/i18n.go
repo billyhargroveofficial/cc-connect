@@ -210,6 +210,7 @@ const (
 	MsgPreviousProcessing        MsgKey = "previous_processing"
 	MsgQueueFull                 MsgKey = "queue_full"
 	MsgMessageQueued             MsgKey = "message_queued"
+	MsgMessageSteered            MsgKey = "message_steered"
 	MsgNoToolsAllowed            MsgKey = "no_tools_allowed"
 	MsgCurrentTools              MsgKey = "current_tools"
 	MsgCurrentSession            MsgKey = "current_session"
@@ -808,6 +809,13 @@ var messages = map[MsgKey]map[Language]string{
 		LangTraditionalChinese: "⏳ 上一個請求仍在處理中。使用 `/ps <訊息>` 可向正在執行的任務追加補充資訊。",
 		LangJapanese:           "⏳ 前のリクエストを処理中です。`/ps <メッセージ>` で実行中のタスクに補足情報を送れます。",
 		LangSpanish:            "⏳ La solicitud anterior aún se está procesando. Use `/ps <mensaje>` para enviar un P.S. a la tarea en curso.",
+	},
+	MsgMessageSteered: {
+		LangEnglish:            "↪️ Added to the current task — the agent will see it at its next step.",
+		LangChinese:            "↪️ 已加入当前任务，代理会在下一步看到。",
+		LangTraditionalChinese: "↪️ 已加入目前任務，代理會在下一步看到。",
+		LangJapanese:           "↪️ 実行中のタスクに追加しました。次のステップで反映されます。",
+		LangSpanish:            "↪️ Añadido a la tarea actual: el agente lo verá en su siguiente paso.",
 	},
 	MsgMessageQueued: {
 		LangEnglish:            "📬 Message received — will process after the current task finishes.",

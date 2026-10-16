@@ -1845,3 +1845,7 @@ func filterEnv(env []string, key string) []string {
 	}
 	return out
 }
+
+// SupportsMidTurnSteer implements core.MidTurnSteerer: in stream-json input
+// mode Claude Code folds a user message written mid-turn into the running turn.
+func (cs *claudeSession) SupportsMidTurnSteer() bool { return true }

@@ -746,6 +746,12 @@ func main() {
 		}
 
 		// Wire sender injection
+		if proj.SteerMidTurn != nil {
+			engine.SetSteerMidTurn(*proj.SteerMidTurn)
+		}
+		if proj.BatchQueued != nil {
+			engine.SetBatchQueued(*proj.BatchQueued)
+		}
 		if proj.InjectSender != nil {
 			engine.SetInjectSender(*proj.InjectSender)
 		}
@@ -1869,6 +1875,8 @@ func reloadConfig(configPath, projName string, engine *core.Engine) (*core.Confi
 
 	// Reload sender injection
 	engine.SetInjectSender(proj.InjectSender != nil && *proj.InjectSender)
+	engine.SetSteerMidTurn(proj.SteerMidTurn != nil && *proj.SteerMidTurn)
+	engine.SetBatchQueued(proj.BatchQueued != nil && *proj.BatchQueued)
 
 	// Reload attachment send-back switch
 	engine.SetAttachmentSendEnabled(cfg.AttachmentSend != "off")

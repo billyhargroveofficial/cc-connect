@@ -370,6 +370,8 @@ type Engine struct {
 	tts                   *TTSCfg
 	display               DisplayCfg
 	injectSender          bool
+	steerMidTurn          bool // steer_mid_turn: busy-session messages go straight to a MidTurnSteerer agent
+	batchQueued           bool // batch_queued: drain all queued messages as one prompt
 	attachmentSendEnabled bool
 	startedAt             time.Time
 
@@ -429,10 +431,10 @@ type Engine struct {
 	idleCompactNanos     atomic.Int64
 	idleCompactMinTokens atomic.Int64
 	idleCompactSeq       atomic.Uint64
-	maxQueuedMessages            int
-	dirHistory                   *DirHistory
-	baseWorkDir                  string
-	projectState                 *ProjectStateStore
+	maxQueuedMessages    int
+	dirHistory           *DirHistory
+	baseWorkDir          string
+	projectState         *ProjectStateStore
 
 	// Auto-compress settings
 	autoCompressEnabled   bool
@@ -1186,6 +1188,20 @@ func (e *Engine) SetSkipGit(skipGit bool) {
 // accordingly (e.g. personal task views, role-based access control).
 func (e *Engine) SetInjectSender(v bool) {
 	e.injectSender = v
+}
+
+// SetSteerMidTurn enables mid-turn steering: a message that arrives while the
+// agent is busy is written to the live agent session at once instead of
+// waiting in the queue. Only agents implementing MidTurnSteerer take part.
+func (e *Engine) SetSteerMidTurn(v bool) {
+	e.steerMidTurn = v
+}
+
+// SetBatchQueued makes the queue drain hand every message that piled up during
+// a turn to the agent at once, so it answers all of them in one reply instead
+// of running one turn per message.
+func (e *Engine) SetBatchQueued(v bool) {
+	e.batchQueued = v
 }
 
 // SetAttachmentSendEnabled controls whether side-channel image/file delivery is allowed.
@@ -3541,6 +3557,9 @@ func (e *Engine) queueMessageForBusySession(p Platform, msg *Message, interactiv
 	if e.isStaleUserMessageLocked(state, msg.UserMessageTimeMs) {
 		snap := userMessageWatermarkSnapshotLocked(state)
 		e.logStaleUserMessageDropped("reject_before_queue", msg, interactiveKey, snap)
+		return true
+	}
+	if e.trySteerMidTurnLocked(state, p, msg) {
 		return true
 	}
 	if len(state.pendingMessages) >= e.maxQueuedMessages {
@@ -6908,6 +6927,12 @@ func (e *Engine) drainPendingMessages(state *interactiveState, session *Session,
 		}
 		queued := state.pendingMessages[0]
 		state.pendingMessages = state.pendingMessages[1:]
+		var batch []queuedMessage
+		if e.batchQueued && len(state.pendingMessages) > 0 {
+			batch = append([]queuedMessage{queued}, state.pendingMessages...)
+			state.pendingMessages = nil
+			queued = mergeQueuedBatch(batch, e.buildSenderPrompt)
+		}
 		state.platform = queued.platform
 		state.replyCtx = queued.replyCtx
 		state.currentMessageID = queued.messageID
@@ -6917,6 +6942,10 @@ func (e *Engine) drainPendingMessages(state *interactiveState, session *Session,
 
 		e.i18n.DetectAndSet(queued.content)
 		prompt := e.buildSenderPrompt(queued.content, queued.userID, queued.userName, queued.msgPlatform, queued.msgSessionKey, queued.channelKey)
+		if batch != nil {
+			prompt = queued.content // already carries each message's own sender line
+			slog.Info("processing queued messages as one batch", "session", sessionKey, "count", len(batch))
+		}
 
 		state.mu.Lock()
 		as := state.agentSession // capture under lock to avoid race with cleanup (mirrors #1436)
@@ -6929,7 +6958,13 @@ func (e *Engine) drainPendingMessages(state *interactiveState, session *Session,
 
 		drainEvents(as.Events())
 
-		session.AddHistory("user", queued.content)
+		if batch != nil {
+			for _, b := range batch {
+				session.AddHistory("user", b.content)
+			}
+		} else {
+			session.AddHistory("user", queued.content)
+		}
 
 		sendDone := make(chan error, 1)
 		go func() {
@@ -18281,4 +18316,60 @@ func restoreActiveProviderFromSession(agent Agent, session *Session) {
 	}
 	slog.Info("restored active provider from session",
 		"session_id", session.ID, "provider", want)
+}
+
+// MidTurnSteerer is implemented by agent sessions that can take a new user
+// message while a turn is running and fold it into that turn: Claude Code in
+// stream-json mode delivers it to the model at its next step, or — when the
+// model is already writing its final answer — runs it as a follow-up turn,
+// whose output the unsolicited reader relays.
+type MidTurnSteerer interface {
+	SupportsMidTurnSteer() bool
+}
+
+// trySteerMidTurnLocked delivers msg to the running turn instead of queueing
+// it. Caller holds state.mu. Commands are never steered (/stop and friends
+// must keep their meaning), nor is anything sent while the agent is still
+// starting (busySession nil) or has pending queue entries (order matters).
+func (e *Engine) trySteerMidTurnLocked(state *interactiveState, p Platform, msg *Message) bool {
+	if !e.steerMidTurn || state.agentSession == nil || !state.agentSession.Alive() || state.busySession == nil || len(state.pendingMessages) > 0 {
+		return false
+	}
+	if st, ok := state.agentSession.(MidTurnSteerer); !ok || !st.SupportsMidTurnSteer() {
+		return false
+	}
+	if strings.HasPrefix(strings.TrimSpace(msg.Content), "/") {
+		return false
+	}
+	prompt := e.buildSenderPrompt(msg.Content, msg.UserID, msg.UserName, msg.Platform, msg.SessionKey, msg.ChannelKey)
+	if err := state.agentSession.Send(prompt, msg.MessageID, msg.Images, msg.Files); err != nil {
+		slog.Warn("steer: mid-turn send failed, queueing instead", "session", msg.SessionKey, "error", err)
+		return false
+	}
+	state.busySession.AddHistory("user", msg.Content)
+	state.busySession.TouchUserActivity()
+	runMessageAccepted(msg)
+	slog.Info("steer: message delivered to running turn", "session", msg.SessionKey, "user", msg.UserName, "msg_id", msg.MessageID)
+	e.reply(p, msg.ReplyCtx, e.i18n.T(MsgMessageSteered))
+	return true
+}
+
+// mergeQueuedBatch folds several queued messages into one: each keeps its own
+// sender line, attachments are concatenated, and the reply goes to the latest
+// message.
+func mergeQueuedBatch(batch []queuedMessage, senderPrompt func(content, userID, userName, platform, sessionKey, channelKey string) string) queuedMessage {
+	last := batch[len(batch)-1]
+	parts := []string{fmt.Sprintf("[Пока ты был занят, пришло %d сообщений. Ответь на все одним сообщением, обращаясь к авторам там, где это нужно.]", len(batch))}
+	var images []ImageAttachment
+	var files []FileAttachment
+	for i, b := range batch {
+		parts = append(parts, fmt.Sprintf("--- сообщение %d ---\n%s", i+1, senderPrompt(b.content, b.userID, b.userName, b.msgPlatform, b.msgSessionKey, b.channelKey)))
+		images = append(images, b.images...)
+		files = append(files, b.files...)
+	}
+	merged := last
+	merged.content = strings.Join(parts, "\n\n")
+	merged.images = images
+	merged.files = files
+	return merged
 }

@@ -112,8 +112,8 @@ type Platform struct {
 	enableReactions       bool
 	progressStyle         string // "legacy" | "compact" — telegram has no rich card, so "card" is mapped to "compact"
 	chatLog               *chatLog
-	noCommandMenu         bool // command_menu = false
-	mentionOnly           bool // mention_only = true: only @botname wakes the bot in groups
+	noCommandMenu         bool   // command_menu = false
+	mentionOnly           bool   // mention_only = true: only @botname wakes the bot in groups
 	commandsFrom          string // commands_from: only these user IDs may run /commands; others are dropped silently
 	httpClient            *http.Client
 

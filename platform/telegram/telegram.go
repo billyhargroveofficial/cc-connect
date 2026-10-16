@@ -111,6 +111,7 @@ type Platform struct {
 	shareSessionInChannel bool
 	enableReactions       bool
 	progressStyle         string // "legacy" | "compact" — telegram has no rich card, so "card" is mapped to "compact"
+	chatLog               *chatLog
 	httpClient            *http.Client
 
 	mu                  sync.RWMutex
@@ -182,7 +183,13 @@ func New(opts map[string]any) (core.Platform, error) {
 		}
 	}
 
+	chatLog, err := newChatLog(opts)
+	if err != nil {
+		return nil, err
+	}
+
 	return &Platform{
+		chatLog:               chatLog,
 		token:                 token,
 		allowFrom:             allowFrom,
 		groupReplyAll:         groupReplyAll,
@@ -429,6 +436,11 @@ func (p *Platform) handleMessage(ctx context.Context, msg *models.Message) {
 	sessionKey := p.buildSessionKey(msg.Chat.ID, threadID, msg.From.ID)
 	channelKey := buildChannelKey(msg.Chat.ID, threadID)
 
+	if !p.chatLog.chatAllowed(msg.Chat.ID) {
+		slog.Debug("telegram: message from chat outside allow_chats", "chat", msg.Chat.ID)
+		return
+	}
+
 	userID := strconv.FormatInt(msg.From.ID, 10)
 	if !core.AllowList(p.allowFrom, userID) {
 		slog.Debug("telegram: message from unauthorized user", "user", userID)
@@ -446,11 +458,11 @@ func (p *Platform) handleMessage(ctx context.Context, msg *models.Message) {
 		chatName = msg.Chat.Title
 	}
 
-	if isGroup && !p.groupReplyAll {
-		slog.Debug("telegram: checking group message", "text", msg.Text, "is_command", isCommand(msg))
-		if !p.isDirectedAtBot(msg) {
-			return
-		}
+	directed := !isGroup || p.groupReplyAll || p.isDirectedAtBot(msg)
+	p.chatLog.record(msg, userName, directed)
+	if !directed {
+		slog.Debug("telegram: group message not directed at bot", "chat", msg.Chat.ID)
+		return
 	}
 
 	rctx := replyContext{chatID: msg.Chat.ID, threadID: threadID, messageID: msg.ID}
@@ -623,6 +635,9 @@ func (p *Platform) dispatchMessage(msg *core.Message, tgMsg *models.Message) {
 	msg.Content = enrichTextLinks(msg.Content, tgMsg.Entities)
 	if tgMsg.Caption != "" {
 		msg.Content = enrichTextLinks(msg.Content, tgMsg.CaptionEntities)
+	}
+	if pending := p.chatLog.takePending(tgMsg.Chat.ID); pending != "" {
+		extras = append([]string{pending}, extras...)
 	}
 	if len(extras) > 0 {
 		msg.ExtraContent = strings.Join(extras, "\n")

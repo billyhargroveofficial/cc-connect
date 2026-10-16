@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"regexp"
 	"strings"
 	"time"
 
@@ -57,6 +58,7 @@ var _ richSender = (*tgbot.Bot)(nil)
 
 type richPlatform struct {
 	*Platform
+	localMediaDirs []string // rich_local_media_dirs: local images allowed inline (rich_media.go)
 }
 
 // NewRich builds the rich-rendering Telegram platform. It accepts exactly the
@@ -70,7 +72,7 @@ func NewRich(opts map[string]any) (core.Platform, error) {
 	if !ok {
 		return nil, fmt.Errorf("telegram-rich: unexpected base platform type %T", base)
 	}
-	return &richPlatform{Platform: p}, nil
+	return &richPlatform{Platform: p, localMediaDirs: parseRichLocalMediaDirs(opts)}, nil
 }
 
 // Name reports "telegram" so that session keys, routing and stored history stay
@@ -116,6 +118,15 @@ func (r *richPlatform) sendRich(ctx context.Context, rc replyContext, content st
 		return nil
 	}
 	content = prepareRichMarkdown(content)
+	content, media := r.extractRichLocalMedia(content, true)
+	if len(media) > 0 {
+		sent, err := r.sendRichWithMedia(ctx, rc, content, media, replyToMessageID)
+		if err == nil {
+			return sent
+		}
+		slog.Warn("telegram-rich: send with local media failed, sending without images", "error", err, "images", len(media))
+		content, _ = r.extractRichLocalMedia(richMediaRefsToAlt(content), false)
+	}
 	bot, err := r.connectedBot("rich send")
 	if err != nil {
 		slog.Warn("telegram-rich: no connected bot, falling back to HTML", "error", err)
@@ -205,7 +216,7 @@ func (r *richPlatform) UpdateMessage(ctx context.Context, previewHandle any, con
 	_, err = bot.EditMessageText(ctx, &tgbot.EditMessageTextParams{
 		ChatID:      h.chatID,
 		MessageID:   h.messageID,
-		RichMessage: &models.InputRichMessage{Markdown: prepareRichMarkdown(content)},
+		RichMessage: &models.InputRichMessage{Markdown: r.richEditMarkdown(content)},
 	})
 	if err == nil {
 		return nil
@@ -231,3 +242,15 @@ func (r *richPlatform) MaxMessageLength() int { return richMaxMessageLength }
 // limits a group to ~20 messages (edits included) per minute, and subagent
 // activity can produce many progress events quickly.
 func (r *richPlatform) ProgressUpdateInterval() time.Duration { return 3 * time.Second }
+
+// richEditMarkdown prepares an edit body: edits cannot carry uploads, so local
+// images degrade to their alt text.
+func (r *richPlatform) richEditMarkdown(content string) string {
+	md, _ := r.extractRichLocalMedia(prepareRichMarkdown(content), false)
+	return md
+}
+
+var richMediaRefRe = regexp.MustCompile(`!\[([^\]]*)\]\(tg://photo\?id=m\d+\)`)
+
+// richMediaRefsToAlt turns already-rewritten tg://photo refs back into alt text.
+func richMediaRefsToAlt(md string) string { return richMediaRefRe.ReplaceAllString(md, "_${1}_") }

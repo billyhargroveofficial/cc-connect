@@ -180,6 +180,9 @@ func (w *subagentWatcher) handleLine(f *subagentWatchFile, line []byte) {
 	if f.label == "" || rl.Type != "response_item" {
 		return
 	}
+	// Only the parent ↔ subagent interaction is shown (spawn, report back,
+	// completion); a subagent's own searches and page opens would flood the
+	// progress card. Set CC_CODEX_SUBAGENT_TOOLS=1 to show them too.
 	var what string
 	switch p.Type {
 	case "custom_tool_call", "function_call":
@@ -193,10 +196,13 @@ func (w *subagentWatcher) handleLine(f *subagentWatchFile, line []byte) {
 		case "spawn_agent", "wait_agent", "close_agent":
 			return // its own SubAgentActivity lines cover this
 		default:
+			if !subagentToolDetail() {
+				return
+			}
 			what = summarizeSubagentToolInput(p.Name, input)
 		}
 	case "web_search_call":
-		if p.Action != nil {
+		if p.Action != nil && subagentToolDetail() {
 			what = "🌐 " + firstNonEmpty(p.Action.Query, p.Action.URL)
 		}
 	}
@@ -263,3 +269,5 @@ func (w *subagentWatcher) emit(text string) {
 	case <-w.cs.ctx.Done():
 	}
 }
+
+func subagentToolDetail() bool { return os.Getenv("CC_CODEX_SUBAGENT_TOOLS") == "1" }

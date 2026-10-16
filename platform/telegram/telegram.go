@@ -114,6 +114,7 @@ type Platform struct {
 	chatLog               *chatLog
 	noCommandMenu         bool // command_menu = false
 	mentionOnly           bool // mention_only = true: only @botname wakes the bot in groups
+	commandsFrom          string // commands_from: only these user IDs may run /commands; others are dropped silently
 	httpClient            *http.Client
 
 	mu                  sync.RWMutex
@@ -196,9 +197,11 @@ func New(opts map[string]any) (core.Platform, error) {
 	}
 
 	mentionOnly, _ := opts["mention_only"].(bool)
+	commandsFrom, _ := opts["commands_from"].(string)
 
 	return &Platform{
 		mentionOnly:           mentionOnly,
+		commandsFrom:          strings.TrimSpace(commandsFrom),
 		chatLog:               chatLog,
 		noCommandMenu:         noCommandMenu,
 		token:                 token,
@@ -473,6 +476,10 @@ func (p *Platform) handleMessage(ctx context.Context, msg *models.Message) {
 	p.chatLog.record(msg, userName, directed)
 	if !directed {
 		slog.Debug("telegram: group message not directed at bot", "chat", msg.Chat.ID)
+		return
+	}
+	if p.commandsFrom != "" && isCommand(msg) && !core.AllowList(p.commandsFrom, userID) {
+		slog.Info("telegram: command from non-admin dropped", "chat", msg.Chat.ID, "user", msg.From.ID)
 		return
 	}
 	if p.chatLog.ignored(msg.From.ID) {

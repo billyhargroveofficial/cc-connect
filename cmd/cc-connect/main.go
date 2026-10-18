@@ -757,16 +757,21 @@ func main() {
 			engine.SetInjectSender(*proj.InjectSender)
 		}
 
-		// Wire speech-to-text if enabled
-		if cfg.Speech.Enabled {
+		// Wire speech-to-text if enabled; a project-level [projects.speech]
+		// replaces the global [speech] for that project only.
+		sp := cfg.Speech
+		if proj.Speech != nil {
+			sp = *proj.Speech
+		}
+		if sp.Enabled {
 			speechCfg := core.SpeechCfg{
 				Enabled:  true,
-				Language: cfg.Speech.Language,
+				Language: sp.Language,
 			}
-			switch cfg.Speech.Provider {
+			switch sp.Provider {
 			case "groq":
-				apiKey := cfg.Speech.Groq.APIKey
-				model := cfg.Speech.Groq.Model
+				apiKey := sp.Groq.APIKey
+				model := sp.Groq.Model
 				if model == "" {
 					model = "whisper-large-v3-turbo"
 				}
@@ -776,26 +781,26 @@ func main() {
 					slog.Warn("speech: groq provider enabled but api_key is empty")
 				}
 			case "qwen":
-				apiKey := cfg.Speech.Qwen.APIKey
-				baseURL := cfg.Speech.Qwen.BaseURL
-				model := cfg.Speech.Qwen.Model
+				apiKey := sp.Qwen.APIKey
+				baseURL := sp.Qwen.BaseURL
+				model := sp.Qwen.Model
 				if apiKey != "" {
 					speechCfg.STT = core.NewQwenASR(apiKey, baseURL, model)
 				} else {
 					slog.Warn("speech: qwen provider enabled but api_key is empty")
 				}
 			case "gemini":
-				apiKey := cfg.Speech.Gemini.APIKey
-				model := cfg.Speech.Gemini.Model
+				apiKey := sp.Gemini.APIKey
+				model := sp.Gemini.Model
 				if apiKey != "" {
 					speechCfg.STT = core.NewGeminiSTT(apiKey, model)
 				} else {
 					slog.Warn("speech: gemini provider enabled but api_key is empty")
 				}
 			default: // "openai" or unspecified
-				apiKey := cfg.Speech.OpenAI.APIKey
-				baseURL := cfg.Speech.OpenAI.BaseURL
-				model := cfg.Speech.OpenAI.Model
+				apiKey := sp.OpenAI.APIKey
+				baseURL := sp.OpenAI.BaseURL
+				model := sp.OpenAI.Model
 				if apiKey != "" {
 					speechCfg.STT = core.NewOpenAIWhisper(apiKey, baseURL, model)
 				} else {
@@ -804,7 +809,7 @@ func main() {
 			}
 			if speechCfg.STT != nil {
 				engine.SetSpeechConfig(speechCfg)
-				slog.Info("speech: enabled", "provider", cfg.Speech.Provider)
+				slog.Info("speech: enabled", "project", proj.Name, "provider", sp.Provider, "project_override", proj.Speech != nil)
 			}
 		}
 

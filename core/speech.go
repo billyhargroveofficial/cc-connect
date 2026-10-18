@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -425,8 +426,8 @@ func ConvertAudioToAMR(ctx context.Context, audio []byte, srcFormat string) ([]b
 	args := []string{
 		"-i", "pipe:0",
 		"-c:a", "amr_nb",
-		"-ar", "8000",   // 8kHz sample rate (AMR-NB standard)
-		"-ac", "1",      // mono
+		"-ar", "8000", // 8kHz sample rate (AMR-NB standard)
+		"-ac", "1", // mono
 		"-b:a", "12.2k", // 12.2 kbps bitrate (AMR-NB max)
 		"-f", "amr",
 		"-y",
@@ -458,9 +459,9 @@ func ConvertMP3ToOGG(ctx context.Context, mp3Data []byte) ([]byte, error) {
 	args := []string{
 		"-i", "pipe:0",
 		"-c:a", "libopus",
-		"-ar", "16000",       // 16kHz sample rate for voice
-		"-ac", "1",           // mono
-		"-b:a", "32k",        // 32 kbps bitrate (voice quality)
+		"-ar", "16000", // 16kHz sample rate for voice
+		"-ac", "1", // mono
+		"-b:a", "32k", // 32 kbps bitrate (voice quality)
 		"-application", "voip", // optimize for voice
 		"-f", "ogg",
 		"-y",
@@ -489,9 +490,9 @@ func ConvertMP3ToAMR(ctx context.Context, mp3Data []byte) ([]byte, error) {
 	args := []string{
 		"-i", "pipe:0",
 		"-c:a", "amr_nb",
-		"-ar", "8000",     // 8kHz sample rate (AMR-NB standard)
-		"-ac", "1",        // mono
-		"-b:a", "12.2k",   // 12.2 kbps bitrate (AMR-NB max)
+		"-ar", "8000", // 8kHz sample rate (AMR-NB standard)
+		"-ac", "1", // mono
+		"-b:a", "12.2k", // 12.2 kbps bitrate (AMR-NB max)
 		"-f", "amr",
 		"-y",
 		"pipe:1",
@@ -580,4 +581,132 @@ func TranscribeAudio(ctx context.Context, stt SpeechToText, audio *AudioAttachme
 
 	slog.Debug("speech: transcribing", "format", format, "size", len(data))
 	return stt.Transcribe(ctx, data, format, lang)
+}
+
+// LanguagePickWhisper transcribes with an OpenAI-compatible Whisper endpoint
+// once per candidate language and keeps the most confident result. Whisper
+// forced into the wrong language translates (Russian speech with language=en
+// comes back as English), and its average token log-probability drops sharply,
+// so the highest-scoring pass is the one in the language actually spoken.
+type LanguagePickWhisper struct {
+	Base      *OpenAIWhisper
+	Languages []string
+}
+
+func NewLanguagePickWhisper(base *OpenAIWhisper, languages []string) *LanguagePickWhisper {
+	return &LanguagePickWhisper{Base: base, Languages: languages}
+}
+
+func (p *LanguagePickWhisper) Transcribe(ctx context.Context, audio []byte, format string, _ string) (string, error) {
+	type result struct {
+		lang  string
+		text  string
+		score float64
+		err   error
+	}
+	results := make([]result, len(p.Languages))
+	var wg sync.WaitGroup
+	for i, lang := range p.Languages {
+		wg.Add(1)
+		go func(i int, lang string) {
+			defer wg.Done()
+			text, score, err := p.Base.transcribeScored(ctx, audio, format, lang)
+			results[i] = result{lang: lang, text: text, score: score, err: err}
+		}(i, lang)
+	}
+	wg.Wait()
+	best := -1
+	var firstErr error
+	for i, r := range results {
+		if r.err != nil {
+			if firstErr == nil {
+				firstErr = r.err
+			}
+			continue
+		}
+		if best < 0 || r.score > results[best].score {
+			best = i
+		}
+	}
+	if best < 0 {
+		return "", firstErr
+	}
+	scores := make([]string, 0, len(results))
+	for _, r := range results {
+		if r.err == nil {
+			scores = append(scores, fmt.Sprintf("%s=%.3f", r.lang, r.score))
+		}
+	}
+	slog.Info("speech: language picked", "lang", results[best].lang, "scores", strings.Join(scores, " "))
+	return results[best].text, nil
+}
+
+// transcribeScored requests verbose_json and returns the text with its
+// duration-weighted average log-probability.
+func (w *OpenAIWhisper) transcribeScored(ctx context.Context, audio []byte, format string, lang string) (string, float64, error) {
+	var buf bytes.Buffer
+	writer := multipart.NewWriter(&buf)
+	part, err := writer.CreateFormFile("file", "audio."+formatToExt(format))
+	if err != nil {
+		return "", 0, fmt.Errorf("create form file: %w", err)
+	}
+	if _, err := part.Write(audio); err != nil {
+		return "", 0, fmt.Errorf("write audio: %w", err)
+	}
+	_ = writer.WriteField("model", w.Model)
+	_ = writer.WriteField("response_format", "verbose_json")
+	if lang != "" {
+		_ = writer.WriteField("language", lang)
+	}
+	writer.Close()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, w.BaseURL+"/audio/transcriptions", &buf)
+	if err != nil {
+		return "", 0, fmt.Errorf("create request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+w.APIKey)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	resp, err := w.Client.Do(req)
+	if err != nil {
+		return "", 0, fmt.Errorf("whisper request: %w", err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", 0, fmt.Errorf("read response: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return "", 0, fmt.Errorf("whisper API %d: %s", resp.StatusCode, string(body))
+	}
+	var vr struct {
+		Text     string           `json:"text"`
+		Segments []whisperSegment `json:"segments"`
+	}
+	if err := json.Unmarshal(body, &vr); err != nil {
+		return "", 0, fmt.Errorf("parse verbose_json: %w", err)
+	}
+	return strings.TrimSpace(vr.Text), weightedLogprob(vr.Segments), nil
+}
+
+// whisperSegment is one segment of an OpenAI-compatible verbose_json response.
+type whisperSegment struct {
+	Start      float64 `json:"start"`
+	End        float64 `json:"end"`
+	AvgLogprob float64 `json:"avg_logprob"`
+}
+
+func weightedLogprob(segs []whisperSegment) float64 {
+	var sum, total float64
+	for _, s := range segs {
+		d := s.End - s.Start
+		if d <= 0 {
+			d = 0.01
+		}
+		sum += s.AvgLogprob * d
+		total += d
+	}
+	if total == 0 {
+		return -100 // no speech segments: least confident
+	}
+	return sum / total
 }

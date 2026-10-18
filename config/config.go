@@ -270,7 +270,12 @@ type SpeechConfig struct {
 	Enabled  bool   `toml:"enabled"`
 	Provider string `toml:"provider"` // "openai" | "groq" | "qwen" | "gemini"
 	Language string `toml:"language"` // e.g. "zh", "en"; empty = auto-detect
-	OpenAI   struct {
+	// Languages lists candidate languages (e.g. ["ru", "en"]). With two or more,
+	// openai/groq transcribe in each in parallel and keep the most confident
+	// result, so accented speech is not detected as the wrong language and
+	// translated. Overrides Language.
+	Languages []string `toml:"languages,omitempty"`
+	OpenAI    struct {
 		APIKey  string `toml:"api_key"`
 		BaseURL string `toml:"base_url"`
 		Model   string `toml:"model"`

@@ -807,6 +807,10 @@ func main() {
 					slog.Warn("speech: openai provider enabled but api_key is empty")
 				}
 			}
+			if w, ok := speechCfg.STT.(*core.OpenAIWhisper); ok && len(sp.Languages) > 1 {
+				speechCfg.STT = core.NewLanguagePickWhisper(w, sp.Languages)
+				speechCfg.Language = ""
+			}
 			if speechCfg.STT != nil {
 				engine.SetSpeechConfig(speechCfg)
 				slog.Info("speech: enabled", "project", proj.Name, "provider", sp.Provider, "project_override", proj.Speech != nil)

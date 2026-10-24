@@ -79,3 +79,11 @@ func TestBusyNoticeOverride(t *testing.T) {
 		t.Fatalf("steered override = %q", got)
 	}
 }
+
+func TestPromptSuffixAppended(t *testing.T) {
+	e := &Engine{}
+	e.SetPromptSuffix("[коротко]")
+	if got := e.buildSenderPrompt("вопрос", "", "", "telegram", "", ""); got != "вопрос\n\n[коротко]" {
+		t.Fatalf("got %q", got)
+	}
+}

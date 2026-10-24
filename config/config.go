@@ -556,6 +556,7 @@ type ProjectConfig struct {
 	BatchQueued      *bool         `toml:"batch_queued,omitempty"`      // after a turn, send all queued messages to the agent as one prompt (one combined reply)
 	SteerMidTurn     *bool         `toml:"steer_mid_turn,omitempty"`    // deliver messages that arrive during a turn straight to the agent (it sees them at its next step) instead of queueing them
 	Speech           *SpeechConfig `toml:"speech,omitempty"`            // per-project speech-to-text; replaces the global [speech] for this project when set
+	PromptSuffix     string        `toml:"prompt_suffix,omitempty"`     // appended to every user prompt (per-turn reminder the model sees next to the request)
 	QueuedNotice     string        `toml:"queued_notice,omitempty"`     // custom reply when a message is queued for a busy session (default: i18n message_queued)
 	SteeredNotice    string        `toml:"steered_notice,omitempty"`    // custom reply when a message is steered into the running turn (default: i18n message_steered)
 	DisabledCommands []string      `toml:"disabled_commands,omitempty"` // commands to disable for this project (e.g. ["restart", "upgrade"])

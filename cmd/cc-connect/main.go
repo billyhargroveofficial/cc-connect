@@ -753,6 +753,7 @@ func main() {
 			engine.SetBatchQueued(*proj.BatchQueued)
 		}
 		engine.SetBusyNotices(proj.QueuedNotice, proj.SteeredNotice)
+		engine.SetPromptSuffix(proj.PromptSuffix)
 		if proj.InjectSender != nil {
 			engine.SetInjectSender(*proj.InjectSender)
 		}
@@ -1888,6 +1889,7 @@ func reloadConfig(configPath, projName string, engine *core.Engine) (*core.Confi
 	engine.SetSteerMidTurn(proj.SteerMidTurn != nil && *proj.SteerMidTurn)
 	engine.SetBatchQueued(proj.BatchQueued != nil && *proj.BatchQueued)
 	engine.SetBusyNotices(proj.QueuedNotice, proj.SteeredNotice)
+	engine.SetPromptSuffix(proj.PromptSuffix)
 
 	// Reload attachment send-back switch
 	engine.SetAttachmentSendEnabled(cfg.AttachmentSend != "off")

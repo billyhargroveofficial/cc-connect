@@ -370,6 +370,7 @@ type Engine struct {
 	tts                   *TTSCfg
 	display               DisplayCfg
 	injectSender          bool
+	promptSuffix          string // prompt_suffix: appended to every user prompt (e.g. a per-turn length reminder)
 	steerMidTurn          bool   // steer_mid_turn: busy-session messages go straight to a MidTurnSteerer agent
 	batchQueued           bool   // batch_queued: drain all queued messages as one prompt
 	queuedNotice          string // queued_notice: overrides MsgMessageQueued when set
@@ -1188,6 +1189,9 @@ func (e *Engine) SetSkipGit(skipGit bool) {
 //
 // This allows the agent to identify who sent the message and adjust behavior
 // accordingly (e.g. personal task views, role-based access control).
+// SetPromptSuffix sets text appended to every user prompt sent to the agent.
+func (e *Engine) SetPromptSuffix(s string) { e.promptSuffix = s }
+
 func (e *Engine) SetInjectSender(v bool) {
 	e.injectSender = v
 }
@@ -17437,6 +17441,9 @@ func (e *Engine) cmdBindSetup(p Platform, msg *Message) {
 // it is included as sender_name so the agent can identify who sent the message
 // by display name (useful in shared channel sessions with multiple users).
 func (e *Engine) buildSenderPrompt(content, userID, userName, platform, sessionKey, channelKey string) string {
+	if e.promptSuffix != "" {
+		content += "\n\n" + e.promptSuffix
+	}
 	if !e.injectSender || userID == "" {
 		return content
 	}

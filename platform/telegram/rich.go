@@ -59,6 +59,8 @@ var _ richSender = (*tgbot.Bot)(nil)
 type richPlatform struct {
 	*Platform
 	localMediaDirs []string // rich_local_media_dirs: local images allowed inline (rich_media.go)
+	noDetails      bool     // rich_no_details: render <details> blocks as a bold heading plus text
+	maxLength      int      // rich_max_length: cut longer replies at a paragraph boundary (runes, footer kept)
 }
 
 // NewRich builds the rich-rendering Telegram platform. It accepts exactly the
@@ -72,7 +74,17 @@ func NewRich(opts map[string]any) (core.Platform, error) {
 	if !ok {
 		return nil, fmt.Errorf("telegram-rich: unexpected base platform type %T", base)
 	}
-	return &richPlatform{Platform: p, localMediaDirs: parseRichLocalMediaDirs(opts)}, nil
+	rp := &richPlatform{Platform: p, localMediaDirs: parseRichLocalMediaDirs(opts)}
+	rp.noDetails, _ = opts["rich_no_details"].(bool)
+	switch v := opts["rich_max_length"].(type) {
+	case int64:
+		rp.maxLength = int(v)
+	case int:
+		rp.maxLength = v
+	case float64:
+		rp.maxLength = int(v)
+	}
+	return rp, nil
 }
 
 // Name reports "telegram" so that session keys, routing and stored history stay
@@ -117,7 +129,7 @@ func (r *richPlatform) sendRich(ctx context.Context, rc replyContext, content st
 	if strings.TrimSpace(content) == "" {
 		return nil
 	}
-	content = prepareRichMarkdown(content)
+	content = prepareRichMarkdown(r.shapeRich(content))
 	content, media := r.extractRichLocalMedia(content, true)
 	if len(media) > 0 {
 		sent, err := r.sendRichWithMedia(ctx, rc, content, media, replyToMessageID)
@@ -246,7 +258,7 @@ func (r *richPlatform) ProgressUpdateInterval() time.Duration { return 3 * time.
 // richEditMarkdown prepares an edit body: edits cannot carry uploads, so local
 // images degrade to their alt text.
 func (r *richPlatform) richEditMarkdown(content string) string {
-	md, _ := r.extractRichLocalMedia(prepareRichMarkdown(content), false)
+	md, _ := r.extractRichLocalMedia(prepareRichMarkdown(r.shapeRich(content)), false)
 	return md
 }
 
@@ -254,3 +266,65 @@ var richMediaRefRe = regexp.MustCompile(`!\[([^\]]*)\]\(tg://photo\?id=m\d+\)`)
 
 // richMediaRefsToAlt turns already-rewritten tg://photo refs back into alt text.
 func richMediaRefsToAlt(md string) string { return richMediaRefRe.ReplaceAllString(md, "_${1}_") }
+
+var (
+	richDetailsOpenRe = regexp.MustCompile(`(?is)<details[^>]*>\s*<summary[^>]*>(.*?)</summary>`)
+	richDetailsTagRe  = regexp.MustCompile(`(?i)</?(details|summary)[^>]*>`)
+)
+
+// shapeRich applies the per-chat output policy (rich_no_details, rich_max_length).
+func (r *richPlatform) shapeRich(content string) string {
+	if r.noDetails {
+		content = flattenRichDetails(content)
+	}
+	if r.maxLength > 0 {
+		content = capRichLength(content, r.maxLength)
+	}
+	return content
+}
+
+// flattenRichDetails turns collapsible <details><summary>T</summary>…</details>
+// blocks into a bold "T" heading followed by the block text.
+func flattenRichDetails(s string) string {
+	s = richDetailsOpenRe.ReplaceAllStringFunc(s, func(m string) string {
+		sub := richDetailsOpenRe.FindStringSubmatch(m)
+		title := strings.TrimSpace(sub[1])
+		if title == "" {
+			return ""
+		}
+		return "**" + title + "**\n"
+	})
+	return richDetailsTagRe.ReplaceAllString(s, "")
+}
+
+// capRichLength cuts s to at most max runes at a paragraph (or line, or word)
+// boundary and appends an ellipsis. A trailing footer paragraph wrapped in
+// backticks (the reply statusline) is kept intact.
+func capRichLength(s string, max int) string {
+	if len([]rune(s)) <= max {
+		return s
+	}
+	body, footer := s, ""
+	if i := strings.LastIndex(s, "\n\n"); i >= 0 {
+		tail := strings.TrimSpace(s[i:])
+		if len([]rune(tail)) < 200 && strings.HasPrefix(tail, "`") && strings.HasSuffix(tail, "`") {
+			body, footer = s[:i], "\n\n"+tail
+		}
+	}
+	limit := max - len([]rune(footer)) - 3
+	if limit < 1 {
+		limit = 1
+	}
+	rs := []rune(body)
+	if len(rs) <= limit {
+		return body + footer
+	}
+	cut := string(rs[:limit])
+	for _, sep := range []string{"\n\n", "\n", " "} {
+		if i := strings.LastIndex(cut, sep); i > len(cut)*6/10 {
+			cut = cut[:i]
+			break
+		}
+	}
+	return strings.TrimRight(cut, " \n") + "\n\n…" + footer
+}

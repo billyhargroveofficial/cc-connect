@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"mime/multipart"
 	"net/http"
 	"os"
@@ -13,6 +14,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/go-telegram/bot/models"
 )
@@ -32,6 +34,7 @@ var richLocalImageRe = regexp.MustCompile(`!\[([^\]]*)\]\((?:file://)?(/[^)\s]+)
 const (
 	richLocalMediaMax     = 10
 	richLocalMediaMaxSize = 10 << 20
+	richLocalMediaRetries = 3
 )
 
 type richLocalMedia struct {
@@ -140,18 +143,32 @@ func (r *richPlatform) sendRichWithMedia(ctx context.Context, rc replyContext, m
 	if err := w.Close(); err != nil {
 		return nil, err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://api.telegram.org/bot"+r.token+"/sendRichMessage", &buf)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Content-Type", w.FormDataContentType())
 	client := r.httpClient
 	if client == nil {
 		client = http.DefaultClient
 	}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("sendRichMessage with media: %s", strings.ReplaceAll(err.Error(), r.token, "***"))
+	// Uploads of several MB break on short network blips; retry transport
+	// errors so the images are not dropped from the reply.
+	var resp *http.Response
+	for attempt := 0; ; attempt++ {
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://api.telegram.org/bot"+r.token+"/sendRichMessage", bytes.NewReader(buf.Bytes()))
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Content-Type", w.FormDataContentType())
+		resp, err = client.Do(req)
+		if err == nil {
+			break
+		}
+		if attempt >= richLocalMediaRetries || ctx.Err() != nil {
+			return nil, fmt.Errorf("sendRichMessage with media: %s", strings.ReplaceAll(err.Error(), r.token, "***"))
+		}
+		slog.Warn("telegram-rich: media upload failed, retrying", "attempt", attempt+1, "error", strings.ReplaceAll(err.Error(), r.token, "***"))
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(time.Duration(attempt+1) * 15 * time.Second):
+		}
 	}
 	defer resp.Body.Close()
 	var res struct {

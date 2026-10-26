@@ -252,6 +252,8 @@ func (cs *codexSession) stageImages(prompt string, images []core.ImageAttachment
 	if strings.TrimSpace(prompt) == "" {
 		prompt = "Please analyze the attached image(s)."
 	}
+	// Name the staged files so tools (e.g. a browser upload) can reuse the originals.
+	prompt += "\n\n[attached image files: " + strings.Join(imagePaths, ", ") + "]"
 
 	return prompt, imagePaths, nil
 }

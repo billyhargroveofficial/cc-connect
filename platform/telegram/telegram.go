@@ -644,6 +644,7 @@ func (p *Platform) handleMessage(ctx context.Context, msg *models.Message) {
 }
 
 func (p *Platform) dispatchMessage(msg *core.Message, tgMsg *models.Message) {
+	p.attachImages(msg, tgMsg)
 	// Enrich with platform-specific context (reply quotes, location text, etc.)
 	var extras []string
 	if replyText := enrichReplyContent(tgMsg); replyText != "" {
@@ -1910,3 +1911,49 @@ func sanitizeTelegramCommand(cmd string) string {
 }
 
 var _ core.AudioSender = (*Platform)(nil)
+
+// isImageMime reports image types agents can view (png, jpeg, webp, gif).
+func isImageMime(m string) bool {
+	switch strings.ToLower(strings.TrimSpace(m)) {
+	case "image/png", "image/jpeg", "image/jpg", "image/webp", "image/gif":
+		return true
+	}
+	return false
+}
+
+// attachImages makes pictures visible to the agent however they arrived:
+// image files sent as documents become images, and when the bot is addressed in
+// a reply to a photo (or image document), that photo is attached as well.
+func (p *Platform) attachImages(msg *core.Message, tgMsg *models.Message) {
+	if len(msg.Files) > 0 {
+		kept := msg.Files[:0]
+		for _, f := range msg.Files {
+			if isImageMime(f.MimeType) {
+				msg.Images = append(msg.Images, core.ImageAttachment{MimeType: f.MimeType, Data: f.Data})
+				continue
+			}
+			kept = append(kept, f)
+		}
+		msg.Files = kept
+	}
+	r := tgMsg.ReplyToMessage
+	if r == nil {
+		return
+	}
+	var fileID, mime string
+	switch {
+	case len(r.Photo) > 0:
+		fileID, mime = r.Photo[len(r.Photo)-1].FileID, "image/jpeg"
+	case r.Document != nil && isImageMime(r.Document.MimeType):
+		fileID, mime = r.Document.FileID, r.Document.MimeType
+	default:
+		return
+	}
+	data, err := p.downloadFile(fileID)
+	if err != nil {
+		slog.Warn("telegram: download replied image failed", "error", err)
+		return
+	}
+	msg.Images = append(msg.Images, core.ImageAttachment{MimeType: mime, Data: data})
+	slog.Info("telegram: attached image from replied message", "reply_to", r.ID, "mime", mime, "bytes", len(data))
+}

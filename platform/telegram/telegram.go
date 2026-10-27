@@ -650,6 +650,9 @@ func (p *Platform) dispatchMessage(msg *core.Message, tgMsg *models.Message) {
 	if replyText := enrichReplyContent(tgMsg); replyText != "" {
 		extras = append(extras, replyText)
 	}
+	if t := p.chatLog.replyTranscript(tgMsg); t != "" {
+		extras = append(extras, t)
+	}
 	if locText := enrichLocation(msg); locText != "" {
 		extras = append(extras, locText)
 	}

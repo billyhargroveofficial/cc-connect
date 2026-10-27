@@ -28,6 +28,10 @@ import (
 //     maintained by the agent itself; messages addressed to the bot by a user
 //     whose "until" is in the future are logged but not dispatched.
 //   - ignore_exempt      comma-separated user IDs that can never be ignored.
+//
+// Telegram never delivers other bots' messages, so a transcriber bot writes
+// each voice/video-note transcript to <chat_log_dir>/transcripts/<chat_id>/<msg_id>.txt;
+// injected context and replies to such messages pick it up from there.
 type chatLog struct {
 	allowChats   map[int64]bool
 	dir          string
@@ -36,13 +40,27 @@ type chatLog struct {
 	ignoreExempt map[int64]bool
 
 	mu      sync.Mutex
-	pending map[int64][]string
+	pending map[int64][]pendingMsg
+}
+
+type pendingMsg struct {
+	line  string
+	id    int
+	date  int64
+	audio bool
 }
 
 const chatLogMaxTextLen = 4000
 
+// transcriptWait bounds how long a prompt waits for a fresh voice message's
+// transcript; transcriptFresh is the age after which it is not awaited.
+var (
+	transcriptWait  = 20 * time.Second
+	transcriptFresh = 2 * time.Minute
+)
+
 func newChatLog(opts map[string]any) (*chatLog, error) {
-	cl := &chatLog{pending: map[int64][]string{}}
+	cl := &chatLog{pending: map[int64][]pendingMsg{}}
 	if raw, _ := opts["allow_chats"].(string); strings.TrimSpace(raw) != "" {
 		cl.allowChats = map[int64]bool{}
 		for _, part := range strings.Split(raw, ",") {
@@ -184,7 +202,8 @@ func (cl *chatLog) record(msg *models.Message, from string, directed bool) {
 	}
 	line += ": " + strings.ReplaceAll(truncateRunes(text, 1500), "\n", " ⏎ ")
 	cl.mu.Lock()
-	q := append(cl.pending[msg.Chat.ID], line)
+	q := append(cl.pending[msg.Chat.ID], pendingMsg{line: line, id: msg.ID, date: int64(msg.Date),
+		audio: msg.Voice != nil || msg.VideoNote != nil})
 	if len(q) > cl.injectMax {
 		q = q[len(q)-cl.injectMax:]
 	}
@@ -219,7 +238,54 @@ func (cl *chatLog) takePending(chatID int64) string {
 	if len(q) == 0 {
 		return ""
 	}
-	return "[Сообщения в чате с прошлого обращения к боту]\n" + strings.Join(q, "\n") + "\n[Конец; ниже — обращение к боту]"
+	deadline := time.Now().Add(transcriptWait)
+	lines := make([]string, len(q))
+	for i, m := range q {
+		lines[i] = m.line
+		if m.audio {
+			if t := cl.awaitTranscript(chatID, m.id, m.date, deadline); t != "" {
+				lines[i] = strings.TrimRight(lines[i], " ") + " 🎙️ " + strings.ReplaceAll(truncateRunes(t, 1500), "\n", " ⏎ ")
+			}
+		}
+	}
+	return "[Сообщения в чате с прошлого обращения к боту]\n" + strings.Join(lines, "\n") + "\n[Конец; ниже — обращение к боту]"
+}
+
+// replyTranscript returns the transcript of the voice message or video note
+// msg replies to, waiting briefly if it was sent moments ago.
+func (cl *chatLog) replyTranscript(msg *models.Message) string {
+	r := msg.ReplyToMessage
+	if cl == nil || r == nil || (r.Voice == nil && r.VideoNote == nil) {
+		return ""
+	}
+	t := cl.awaitTranscript(msg.Chat.ID, r.ID, int64(r.Date), time.Now().Add(transcriptWait))
+	if t == "" {
+		return ""
+	}
+	return fmt.Sprintf("[Расшифровка голосового #%d, на которое ответили]: %s", r.ID, t)
+}
+
+func (cl *chatLog) transcript(chatID int64, msgID int) string {
+	if cl.dir == "" {
+		return ""
+	}
+	b, err := os.ReadFile(filepath.Join(cl.dir, "transcripts", strconv.FormatInt(chatID, 10), strconv.Itoa(msgID)+".txt"))
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(b))
+}
+
+func (cl *chatLog) awaitTranscript(chatID int64, msgID int, date int64, deadline time.Time) string {
+	for {
+		if t := cl.transcript(chatID, msgID); t != "" || cl.dir == "" {
+			return t
+		}
+		if time.Since(time.Unix(date, 0)) > transcriptFresh || time.Now().After(deadline) {
+			return ""
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
 }
 
 // ignored reports whether userID is on the agent-maintained ignore list.

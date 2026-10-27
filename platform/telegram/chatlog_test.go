@@ -6,6 +6,7 @@ import (
 	"github.com/go-telegram/bot/models"
 
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -53,5 +54,32 @@ func TestIsDirectedAtBotMentionOnly(t *testing.T) {
 	cmd := &models.Message{Text: "/new@mybot", Chat: group, Entities: []models.MessageEntity{{Type: models.MessageEntityTypeBotCommand, Offset: 0, Length: 10}}}
 	if !p.isDirectedAtBot(cmd) {
 		t.Error("/cmd@mybot must wake the bot")
+	}
+}
+
+func TestChatLogTranscripts(t *testing.T) {
+	dir := t.TempDir()
+	cl, err := newChatLog(map[string]any{"chat_log_dir": dir, "context_inject_max": int64(10)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	transcriptWait = 50 * time.Millisecond
+	group := models.Chat{ID: -100, Type: models.ChatTypeSupergroup}
+	from := &models.User{ID: 7, FirstName: "Вася"}
+	now := int(time.Now().Unix())
+	cl.record(&models.Message{ID: 5, Date: now, Chat: group, From: from, Voice: &models.Voice{}}, "Вася", false)
+	cl.record(&models.Message{ID: 6, Date: now, Chat: group, From: from, Voice: &models.Voice{}}, "Вася", false)
+	os.MkdirAll(filepath.Join(dir, "transcripts", "-100"), 0o755)
+	os.WriteFile(filepath.Join(dir, "transcripts", "-100", "5.txt"), []byte("привет\nвсем\n"), 0o644)
+	got := cl.takePending(-100)
+	if !strings.Contains(got, "[voice]: 🎙️ привет ⏎ всем") {
+		t.Errorf("transcript not injected: %q", got)
+	}
+	if strings.Count(got, "🎙️") != 1 {
+		t.Errorf("missing transcript must stay empty: %q", got)
+	}
+	reply := &models.Message{Chat: group, From: from, ReplyToMessage: &models.Message{ID: 5, Date: now, Voice: &models.Voice{}}}
+	if r := cl.replyTranscript(reply); !strings.Contains(r, "#5") || !strings.Contains(r, "привет") {
+		t.Errorf("reply transcript: %q", r)
 	}
 }

@@ -34,6 +34,10 @@ type Agent struct {
 	// session/new. Empty means "use whatever the agent selects by default".
 	mode string
 
+	// model is the pending model id to apply to new sessions via
+	// session/set_model or session/set_config_option.
+	model string
+
 	// listUnsupported caches a negative result after we probe the agent
 	// for sessionCapabilities.list once. Eliminates spawn cost on
 	// subsequent `/ls` invocations against agents that don't implement
@@ -45,9 +49,15 @@ type Agent struct {
 	// handshake so that future PermissionModes() calls can reflect the
 	// actual modes this specific ACP agent offers (rather than a
 	// hard-coded fallback that may not match).
-	modesMu       sync.RWMutex
-	modesCache    []core.PermissionModeInfo
-	modesCurrent  string
+	modesMu      sync.RWMutex
+	modesCache   []core.PermissionModeInfo
+	modesCurrent string
+
+	// modelsCache holds the latest `models` block observed via
+	// session/new or session/load.
+	modelsMu      sync.RWMutex
+	modelsCache   []core.ModelOption
+	modelsCurrent string
 
 	mu sync.RWMutex
 }
@@ -58,11 +68,15 @@ type Agent struct {
 // would never see availableModes / capability advertisements.
 type sessionCallbacks interface {
 	reportModes(block acpModesBlock)
+	reportModels(block acpModelsBlock)
 	reportListSupported(supported bool)
 }
 
-// Ensure *Agent satisfies sessionCallbacks at compile time.
-var _ sessionCallbacks = (*Agent)(nil)
+// Ensure *Agent satisfies sessionCallbacks and core.ModelSwitcher at compile time.
+var (
+	_ sessionCallbacks   = (*Agent)(nil)
+	_ core.ModelSwitcher = (*Agent)(nil)
+)
 
 // New builds an acp agent from project options.
 // Required: options["command"] — executable name or path for the ACP agent.
@@ -93,17 +107,20 @@ func New(opts map[string]any) (core.Agent, error) {
 	}
 	mode, _ := opts["mode"].(string)
 	mode = strings.TrimSpace(mode)
+	model, _ := opts["model"].(string)
+	model = strings.TrimSpace(model)
 
 	return &Agent{
-		workDir:     workDir,
+		workDir:      workDir,
 		cmd:          cmdStr,
 		cliExtraArgs: cliExtraArgs,
-		args:        args,
-		staticEnv:   staticEnv,
-		extraEnv:    extra,
-		authMethod:  authMethod,
-		displayName: displayName,
-		mode:        mode,
+		args:         args,
+		staticEnv:    staticEnv,
+		extraEnv:     extra,
+		authMethod:   authMethod,
+		displayName:  displayName,
+		mode:         mode,
+		model:        model,
 	}, nil
 }
 
@@ -213,6 +230,9 @@ func (a *Agent) WorkspaceAgentOptions() map[string]any {
 	if a.displayName != "" {
 		opts["display_name"] = a.displayName
 	}
+	if a.model != "" {
+		opts["model"] = a.model
+	}
 	return opts
 }
 
@@ -229,6 +249,7 @@ func (a *Agent) StartSession(ctx context.Context, sessionID string) (core.AgentS
 	workDir := a.workDir
 	authMethod := a.authMethod
 	pendingMode := a.mode
+	pendingModel := a.model
 	extra := append([]string(nil), a.extraEnv...)
 	extra = append(extra, a.sessionEnv...)
 	a.mu.RUnlock()
@@ -241,6 +262,7 @@ func (a *Agent) StartSession(ctx context.Context, sessionID string) (core.AgentS
 		resumeSessionID: sessionID,
 		authMethod:      authMethod,
 		initialMode:     pendingMode,
+		initialModel:    pendingModel,
 		callbacks:       a,
 	})
 }
@@ -369,4 +391,71 @@ func (a *Agent) reportListSupported(supported bool) {
 	} else {
 		a.listUnsupported.Store(false)
 	}
+}
+
+// -- ModelSwitcher --
+
+func (a *Agent) SetModel(model string) {
+	normalised := strings.TrimSpace(model)
+	if m := a.matchModelID(normalised); m != "" {
+		normalised = m
+	}
+	a.mu.Lock()
+	a.model = normalised
+	a.mu.Unlock()
+	slog.Info("acp: model changed for future sessions", "model", normalised)
+}
+
+func (a *Agent) GetModel() string {
+	a.mu.RLock()
+	pending := a.model
+	a.mu.RUnlock()
+	if pending != "" {
+		return pending
+	}
+	a.modelsMu.RLock()
+	defer a.modelsMu.RUnlock()
+	return a.modelsCurrent
+}
+
+func (a *Agent) AvailableModels(ctx context.Context) []core.ModelOption {
+	a.modelsMu.RLock()
+	defer a.modelsMu.RUnlock()
+	out := make([]core.ModelOption, len(a.modelsCache))
+	copy(out, a.modelsCache)
+	return out
+}
+
+func (a *Agent) matchModelID(input string) string {
+	input = strings.TrimSpace(input)
+	if input == "" {
+		return ""
+	}
+	lower := strings.ToLower(input)
+	a.modelsMu.RLock()
+	defer a.modelsMu.RUnlock()
+	for _, m := range a.modelsCache {
+		if strings.ToLower(m.Name) == lower || (m.Desc != "" && strings.ToLower(m.Desc) == lower) {
+			return m.Name
+		}
+	}
+	return ""
+}
+
+func (a *Agent) reportModels(block acpModelsBlock) {
+	opts := make([]core.ModelOption, 0, len(block.AvailableModels))
+	for _, m := range block.AvailableModels {
+		desc := m.Name
+		if m.Description != "" && m.Description != m.Name {
+			desc = m.Name + " — " + m.Description
+		}
+		opts = append(opts, core.ModelOption{
+			Name: m.ModelID,
+			Desc: desc,
+		})
+	}
+	a.modelsMu.Lock()
+	a.modelsCache = opts
+	a.modelsCurrent = block.CurrentModelID
+	a.modelsMu.Unlock()
 }

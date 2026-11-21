@@ -282,7 +282,8 @@ type fakeCallbacks struct {
 	listCalls  []bool
 }
 
-func (f *fakeCallbacks) reportModes(b acpModesBlock)       { f.mu.Lock(); f.modes = append(f.modes, b); f.mu.Unlock() }
+func (f *fakeCallbacks) reportModes(b acpModesBlock)        { f.mu.Lock(); f.modes = append(f.modes, b); f.mu.Unlock() }
+func (f *fakeCallbacks) reportModels(b acpModelsBlock)      {}
 func (f *fakeCallbacks) reportListSupported(supported bool) { f.mu.Lock(); f.listCalls = append(f.listCalls, supported); f.mu.Unlock() }
 func (f *fakeCallbacks) lastModes() (acpModesBlock, bool) {
 	f.mu.Lock()

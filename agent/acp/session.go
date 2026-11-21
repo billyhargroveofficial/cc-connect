@@ -52,6 +52,15 @@ type acpSession struct {
 	availableModes []acpModeInfo
 	currentMode    string
 
+	// modelsMu guards availableModels and currentModel.
+	modelsMu        sync.RWMutex
+	availableModels []acpModelInfo
+	currentModel    string
+
+	// replaying is true while session/load is in flight so replayed
+	// historical session/update notifications are not forwarded into IM.
+	replaying atomic.Bool
+
 	callbacks sessionCallbacks // may be nil (tests, integration harness)
 }
 
@@ -72,6 +81,7 @@ type acpSessionConfig struct {
 	resumeSessionID string
 	authMethod      string
 	initialMode     string           // if non-empty, applied via session/set_mode after session/new
+	initialModel    string           // if non-empty, applied via session/set_model or session/set_config_option
 	callbacks       sessionCallbacks // may be nil
 }
 
@@ -155,6 +165,15 @@ func newACPSession(ctx context.Context, cfg acpSessionConfig) (*acpSession, erro
 		}
 	}
 
+	if strings.TrimSpace(cfg.initialModel) != "" {
+		if ok := s.applyModel(cfg.initialModel); !ok {
+			slog.Warn("acp: initial model could not be applied",
+				"model", cfg.initialModel,
+				"session_id", s.currentACPSessionID(),
+			)
+		}
+	}
+
 	return s, nil
 }
 
@@ -211,17 +230,21 @@ func (s *acpSession) handshake(resumeSessionID string, authMethod string) error 
 			"cwd":        s.workDir,
 			"mcpServers": []any{},
 		}
+		s.replaying.Store(true)
 		loadRes, err := s.tr.call(s.ctx, "session/load", loadParams)
+		s.replaying.Store(false)
 		if err != nil {
 			slog.Warn("acp: session/load failed, starting new session", "error", err)
 		} else {
 			var lr struct {
-				SessionID string         `json:"sessionId"`
-				Modes     *acpModesBlock `json:"modes"`
+				SessionID string          `json:"sessionId"`
+				Modes     *acpModesBlock  `json:"modes"`
+				Models    *acpModelsBlock `json:"models"`
 			}
 			if json.Unmarshal(loadRes, &lr) == nil && lr.SessionID != "" {
 				s.setACPSessionID(lr.SessionID)
 				s.absorbModes(lr.Modes)
+				s.absorbModels(lr.Models)
 				return nil
 			}
 		}
@@ -236,8 +259,9 @@ func (s *acpSession) handshake(resumeSessionID string, authMethod string) error 
 		return fmt.Errorf("acp: session/new: %w", err)
 	}
 	var sn struct {
-		SessionID string         `json:"sessionId"`
-		Modes     *acpModesBlock `json:"modes"`
+		SessionID string          `json:"sessionId"`
+		Modes     *acpModesBlock  `json:"modes"`
+		Models    *acpModelsBlock `json:"models"`
 	}
 	if err := json.Unmarshal(newRes, &sn); err != nil {
 		return fmt.Errorf("acp: parse session/new: %w", err)
@@ -247,7 +271,116 @@ func (s *acpSession) handshake(resumeSessionID string, authMethod string) error 
 	}
 	s.setACPSessionID(sn.SessionID)
 	s.absorbModes(sn.Modes)
+	s.absorbModels(sn.Models)
 	return nil
+}
+
+func (s *acpSession) absorbModels(block *acpModelsBlock) {
+	if block == nil || len(block.AvailableModels) == 0 {
+		return
+	}
+	s.modelsMu.Lock()
+	s.availableModels = append(s.availableModels[:0], block.AvailableModels...)
+	if block.CurrentModelID != "" {
+		s.currentModel = block.CurrentModelID
+	}
+	s.modelsMu.Unlock()
+	if s.callbacks != nil {
+		s.callbacks.reportModels(*block)
+	}
+}
+
+func (s *acpSession) matchAvailableModel(input string) string {
+	input = strings.TrimSpace(input)
+	if input == "" {
+		return ""
+	}
+	lower := strings.ToLower(input)
+	s.modelsMu.RLock()
+	defer s.modelsMu.RUnlock()
+	for _, m := range s.availableModels {
+		if strings.ToLower(m.ModelID) == lower || strings.ToLower(m.Name) == lower {
+			return m.ModelID
+		}
+	}
+	return input
+}
+
+func (s *acpSession) applyModel(model string) bool {
+	if !s.alive.Load() {
+		return false
+	}
+	sid := s.currentACPSessionID()
+	if sid == "" {
+		return false
+	}
+	modelID := s.matchAvailableModel(model)
+	if modelID == "" {
+		return false
+	}
+	s.modelsMu.RLock()
+	cur := s.currentModel
+	s.modelsMu.RUnlock()
+	if strings.EqualFold(cur, modelID) {
+		return true
+	}
+
+	// Prefer session/set_model (ACP unstable models API, supported by agy acp).
+	if _, err := s.tr.call(s.ctx, "session/set_model", map[string]any{
+		"sessionId": sid,
+		"modelId":   modelID,
+	}); err == nil {
+		s.recordAppliedModel(modelID)
+		slog.Info("acp: model applied via session/set_model", "model", modelID, "session_id", sid)
+		return true
+	} else {
+		slog.Debug("acp: session/set_model failed, trying session/set_config_option", "model", modelID, "error", err)
+	}
+
+	// Fallback: session/set_config_option (split optional -low/-medium/-high/-xhigh thought_level suffix).
+	baseModel, thoughtLevel := splitModelThoughtLevel(modelID)
+	if _, err := s.tr.call(s.ctx, "session/set_config_option", map[string]any{
+		"sessionId": sid,
+		"configId":  "model",
+		"value":     baseModel,
+	}); err != nil {
+		slog.Warn("acp: session/set_config_option(model) failed", "model", baseModel, "session_id", sid, "error", err)
+		return false
+	}
+	if thoughtLevel != "" {
+		if _, err := s.tr.call(s.ctx, "session/set_config_option", map[string]any{
+			"sessionId": sid,
+			"configId":  "thought_level",
+			"value":     thoughtLevel,
+		}); err != nil {
+			slog.Warn("acp: session/set_config_option(thought_level) failed", "level", thoughtLevel, "session_id", sid, "error", err)
+		}
+	}
+	s.recordAppliedModel(modelID)
+	slog.Info("acp: model applied via session/set_config_option", "model", baseModel, "thought_level", thoughtLevel, "session_id", sid)
+	return true
+}
+
+func (s *acpSession) recordAppliedModel(modelID string) {
+	s.modelsMu.Lock()
+	s.currentModel = modelID
+	available := append([]acpModelInfo(nil), s.availableModels...)
+	s.modelsMu.Unlock()
+	if s.callbacks != nil {
+		s.callbacks.reportModels(acpModelsBlock{
+			CurrentModelID:  modelID,
+			AvailableModels: available,
+		})
+	}
+}
+
+func splitModelThoughtLevel(modelID string) (string, string) {
+	for _, suffix := range []string{"-xhigh", "-high", "-medium", "-low"} {
+		if strings.HasSuffix(strings.ToLower(modelID), suffix) && len(modelID) > len(suffix) {
+			return modelID[:len(modelID)-len(suffix)], strings.TrimPrefix(suffix, "-")
+		}
+	}
+	return modelID, ""
 }
 
 // absorbModes copies a modes block into the session's cache and fans
@@ -370,8 +503,12 @@ func (s *acpSession) onNotification(method string, params json.RawMessage) {
 		slog.Debug("acp: notification", "method", method)
 		return
 	}
-	s.cacheToolCallInput(params)
 	s.maybeAbsorbCurrentModeUpdate(params)
+	if s.replaying.Load() {
+		slog.Debug("acp: suppressing replayed session/update during session/load")
+		return
+	}
+	s.cacheToolCallInput(params)
 	sid := s.currentACPSessionID()
 	// Debug log to capture raw session/update JSON for troubleshooting vendor compatibility
 	slog.Debug("acp: session/update", "session_id", sid, "params", string(params))

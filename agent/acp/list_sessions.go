@@ -37,6 +37,21 @@ type acpModesBlock struct {
 	AvailableModes []acpModeInfo `json:"availableModes"`
 }
 
+// acpModelInfo mirrors the ACP `models.availableModels[]` shape sent by
+// servers like `agy acp`.
+type acpModelInfo struct {
+	ModelID     string `json:"modelId"`
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+}
+
+// acpModelsBlock mirrors the `models` object returned inside `session/new`
+// and `session/load` responses.
+type acpModelsBlock struct {
+	CurrentModelID  string         `json:"currentModelId"`
+	AvailableModels []acpModelInfo `json:"availableModels"`
+}
+
 // acpInitializeResult is the subset of `initialize` fields this package
 // cares about. Additional vendor metadata is ignored.
 type acpInitializeResult struct {

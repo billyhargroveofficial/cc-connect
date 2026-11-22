@@ -66,9 +66,8 @@ func (cs *codexSession) compactViaAppServer() error {
 	cmd := exec.CommandContext(ctx, bin, args...)
 	cmd.Dir = cs.workDir
 	prepareCmdForKill(cmd)
-	if len(cs.extraEnv) > 0 {
-		cmd.Env = core.MergeEnv(os.Environ(), cs.extraEnv)
-	}
+	compactEnv := append(append([]string{}, cs.extraEnv...), "CC_CODEX_COMPACT_THREAD_ID="+threadID)
+	cmd.Env = core.MergeEnv(os.Environ(), compactEnv)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return err

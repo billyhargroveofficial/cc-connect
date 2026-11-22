@@ -4241,7 +4241,7 @@ func (e *Engine) processInteractiveMessageWith(p Platform, msg *Message, session
 			sendDone <- fmt.Errorf("agent session became nil")
 			return
 		}
-		sendDone <- as.Send(promptContent, msg.MessageID, msg.Images, msg.Files)
+		sendDone <- sendWhenTurnFree(as, promptContent, msg.MessageID, msg.Images, msg.Files)
 	}()
 
 	e.processInteractiveEvents(state, session, sessions, interactiveKey, msg.MessageID, turnStart, stopTyping, sendDone, msg.ReplyCtx, lockGen)
@@ -6552,12 +6552,14 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 
 			// Auto-compress after finishing a turn, before sending any queued messages.
 			if triggerAutoCompress {
+				triggerAutoCompress = false
 				compressor, ok := e.agent.(ContextCompressor)
 				if ok && compressor.CompressCommand() != "" {
 					if pendingSend != nil {
 						if err := <-pendingSend; err != nil {
 							slog.Debug("async send error before compress", "error", err)
 						}
+						pendingSend = nil
 					}
 					state.mu.Lock()
 					state.lastAutoCompressAt = time.Now()
@@ -6572,9 +6574,12 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 					}
 					e.send(state.platform, state.replyCtx, compressNotice)
 
-					// Run compress inline while the session is still locked.
-					e.runCompress(state, session, sessions, sessionKey, state.platform, state.replyCtx, true, lockGen)
-					return
+					// Run compress inline while keeping the caller's session lock intact.
+					// If the session died during compress, return early; otherwise fall
+					// through to process queued messages or let the caller unlock cleanly.
+					if !e.runCompressLocked(state, session, sessions, sessionKey, state.platform, state.replyCtx, true) {
+						return
+					}
 				}
 			}
 
@@ -6657,6 +6662,7 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 				e.i18n.DetectAndSet(queued.content)
 
 				// Reset per-turn state for the next turn
+				triggerAutoCompress = false
 				msgID = queued.messageID
 				textParts = nil
 				segmentStart = 0
@@ -11371,8 +11377,10 @@ func (e *Engine) cmdCompress(p Platform, msg *Message) {
 	go e.runCompress(state, session, sessions, iKey, p, msg.ReplyCtx, false, lockGen)
 }
 
-// runCompress sends the agent's compress command and handles results.
-// If autoTriggered is true, suppress user-visible "compressing" and completion messages.
+// runCompress sends the agent's compress command, drains any queued messages,
+// and releases lockGen when finished. Use runCompressLocked when the caller
+// owns session lock release and queue draining (e.g. inline auto-compress).
+// If auto is true, suppress user-visible "compressing" and completion messages.
 func (e *Engine) runCompress(state *interactiveState, session *Session, sessions *SessionManager, iKey string, p Platform, replyCtx any, auto bool, lockGen uint64) {
 	// session.Unlock() is called inside drainQueuedMessagesAfterCompress
 	// while holding state.mu to close the race window. Deferred fallback
@@ -11384,42 +11392,64 @@ func (e *Engine) runCompress(state *interactiveState, session *Session, sessions
 		}
 	}()
 
+	if e.runCompressLocked(state, session, sessions, iKey, p, replyCtx, auto) {
+		e.drainQueuedMessagesAfterCompress(state, session, sessions, iKey, &compressUnlocked, lockGen)
+	}
+}
+
+// runCompressLocked runs a single compress command under an already-held session
+// lock without unlocking the session or draining queued messages. It returns
+// true if the agent session is still alive after compression finishes (or fails
+// softly), or false if the session died/stopped and queued messages were dropped.
+func (e *Engine) runCompressLocked(state *interactiveState, session *Session, sessions *SessionManager, iKey string, p Platform, replyCtx any, auto bool) bool {
 	// Stop unsolicited reader before taking event channel ownership.
 	e.stopUnsolicitedReader(state)
 
 	state.mu.Lock()
 	state.platform = p
 	state.replyCtx = replyCtx
+	as := state.agentSession
 	state.mu.Unlock()
 
-	drainEvents(state.agentSession.Events())
+	if as == nil || !as.Alive() {
+		if !auto {
+			e.reply(p, replyCtx, e.i18n.T(MsgCompressNoSession))
+		}
+		return false
+	}
+
+	drainEvents(as.Events())
 
 	compressor, ok := e.agent.(ContextCompressor)
 	if !ok || compressor.CompressCommand() == "" {
 		if !auto {
 			e.reply(p, replyCtx, e.i18n.T(MsgCompressNotSupported))
 		}
-		return
+		return as.Alive()
 	}
 
 	cmd := compressor.CompressCommand()
-	if err := state.agentSession.Send(cmd, "", nil, nil); err != nil {
+	if err := sendWhenTurnFree(as, cmd, "", nil, nil); err != nil {
+		slog.Warn("compress: send failed", "session", iKey, "auto", auto, "error", err)
 		if !auto {
 			e.reply(p, replyCtx, fmt.Sprintf(e.i18n.T(MsgError), err))
 		}
-		if !state.agentSession.Alive() {
-			e.cleanupInteractiveState(iKey)
+		if !as.Alive() {
+			e.cleanupInteractiveState(iKey, state)
+			e.notifyDroppedQueuedMessages(state, err)
+			return false
 		}
-		return
+		return true
 	}
 
-	e.processCompressEvents(state, session, sessions, iKey, p, replyCtx, &compressUnlocked, auto, lockGen)
+	return e.processCompressEventsLocked(state, session, sessions, iKey, p, replyCtx, auto)
 }
 
-// processCompressEvents drains agent events after a compress command.
+// processCompressEventsLocked drains agent events after a compress command.
 // Unlike processInteractiveEvents it does NOT record history and treats
 // an empty result as success rather than "(empty response)".
-func (e *Engine) processCompressEvents(state *interactiveState, session *Session, sessions *SessionManager, sessionKey string, p Platform, replyCtx any, unlocked *bool, auto bool, lockGen uint64) {
+// Returns true if the agent session survived and callers may continue draining.
+func (e *Engine) processCompressEventsLocked(state *interactiveState, session *Session, sessions *SessionManager, sessionKey string, p Platform, replyCtx any, auto bool) bool {
 
 	var textParts []string
 	events := state.agentSession.Events()
@@ -11439,7 +11469,7 @@ func (e *Engine) processCompressEvents(state *interactiveState, session *Session
 
 		select {
 		case <-stopCh:
-			return
+			return false
 		case event, ok = <-events:
 			if !ok {
 				e.cleanupInteractiveState(sessionKey, state)
@@ -11451,21 +11481,22 @@ func (e *Engine) processCompressEvents(state *interactiveState, session *Session
 					}
 				}
 				e.notifyDroppedQueuedMessages(state, fmt.Errorf("agent process exited during compress"))
-				return
+				return false
 			}
 		case <-idleCh:
+			slog.Warn("compress: timed out", "session", sessionKey, "auto", auto)
 			if !auto {
 				e.send(p, replyCtx, fmt.Sprintf(e.i18n.T(MsgError), "compress timed out"))
 			}
 			e.cleanupInteractiveState(sessionKey, state)
 			e.notifyDroppedQueuedMessages(state, fmt.Errorf("compress timed out"))
-			return
+			return false
 		case <-e.ctx.Done():
-			return
+			return false
 		}
 
 		if state.isStopped() {
-			return
+			return false
 		}
 
 		if idleTimer != nil {
@@ -11499,6 +11530,7 @@ func (e *Engine) processCompressEvents(state *interactiveState, session *Session
 				textParts = append(textParts, fmt.Sprintf(e.i18n.T(MsgToolResult), tn, out)+"\n")
 			}
 		case EventResult:
+			slog.Info("compress: completed", "session", sessionKey, "auto", auto)
 			result := event.Content
 			if result == "" && len(textParts) > 0 {
 				result = strings.Join(textParts, "")
@@ -11510,23 +11542,19 @@ func (e *Engine) processCompressEvents(state *interactiveState, session *Session
 					e.reply(p, replyCtx, e.i18n.T(MsgCompressDone))
 				}
 			}
-
-			// After compress succeeds, process any queued messages instead of dropping them.
-			e.drainQueuedMessagesAfterCompress(state, session, sessions, sessionKey, unlocked, lockGen)
-			return
+			return state.agentSession != nil && state.agentSession.Alive()
 		case EventError:
+			slog.Warn("compress: agent error", "session", sessionKey, "auto", auto, "error", event.Error)
 			if !auto && event.Error != nil {
 				e.reply(p, replyCtx, fmt.Sprintf(e.i18n.T(MsgError), event.Error))
 			}
 			// Only drop queued messages if the agent is dead; some agents
 			// emit per-turn EventError while staying alive.
-			if !state.agentSession.Alive() {
+			if state.agentSession == nil || !state.agentSession.Alive() {
 				e.notifyDroppedQueuedMessages(state, event.Error)
-			} else {
-				// Agent survived — try to process queued messages.
-				e.drainQueuedMessagesAfterCompress(state, session, sessions, sessionKey, unlocked, lockGen)
+				return false
 			}
-			return
+			return true
 		case EventPermissionRequest:
 			_ = state.agentSession.RespondPermission(event.RequestID, PermissionResult{
 				Behavior:     "allow",
@@ -18413,10 +18441,11 @@ func mergeQueuedBatch(batch []queuedMessage, senderPrompt func(content, userID, 
 	return merged
 }
 
-// sendWhenTurnFree sends a queued prompt, waiting briefly when the agent still
+// sendWhenTurnFree sends a prompt, waiting briefly when the agent still
 // reports the previous turn in flight. Codex emits its result event before the
-// exec process exits, so an immediate Send right after EventResult can race the
-// turn guard and fail with "turn already in progress".
+// exec process exits, so an immediate Send right after EventResult (including
+// auto-compress or the next user message) can race the turn guard and fail
+// with "turn already in progress".
 func sendWhenTurnFree(as AgentSession, prompt, messageID string, images []ImageAttachment, files []FileAttachment) error {
 	deadline := time.Now().Add(60 * time.Second)
 	for {
@@ -18424,6 +18453,6 @@ func sendWhenTurnFree(as AgentSession, prompt, messageID string, images []ImageA
 		if err == nil || !strings.Contains(err.Error(), "turn already in progress") || time.Now().After(deadline) {
 			return err
 		}
-		time.Sleep(200 * time.Millisecond)
+		time.Sleep(100 * time.Millisecond)
 	}
 }

@@ -353,18 +353,23 @@ func codexImageExt(mime string) string {
 
 func (cs *codexSession) readLoop(cmd *exec.Cmd, stdout io.ReadCloser, stderrBuf *bytes.Buffer) {
 	defer cs.wg.Done()
+	terminalEventSeen := false
 	defer func() {
 		defer cs.turnInFlight.Store(false)
 		defer cs.removeCmd(cmd)
 		if err := cmd.Wait(); err != nil {
 			stderrMsg := strings.TrimSpace(stderrBuf.String())
 			if stderrMsg != "" {
-				slog.Error("codexSession: process failed", "error", err, "stderr", stderrMsg)
-				evt := core.Event{Type: core.EventError, Error: fmt.Errorf("%s", stderrMsg)}
-				select {
-				case cs.events <- evt:
-				case <-cs.ctx.Done():
-					return
+				if terminalEventSeen {
+					slog.Warn("codexSession: process exited non-zero after terminal event", "error", err, "stderr", stderrMsg)
+				} else {
+					slog.Error("codexSession: process failed", "error", err, "stderr", stderrMsg)
+					evt := core.Event{Type: core.EventError, Error: fmt.Errorf("%s", stderrMsg)}
+					select {
+					case cs.events <- evt:
+					case <-cs.ctx.Done():
+						return
+					}
 				}
 			}
 		}
@@ -387,6 +392,9 @@ func (cs *codexSession) readLoop(cmd *exec.Cmd, stdout io.ReadCloser, stderrBuf 
 			return nil
 		}
 
+		if eventType, _ := raw["type"].(string); eventType == "turn.completed" || eventType == "turn.failed" {
+			terminalEventSeen = true
+		}
 		cs.handleEvent(raw)
 		return nil
 	}); err != nil {

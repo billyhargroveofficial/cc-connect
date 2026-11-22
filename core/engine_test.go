@@ -16572,3 +16572,115 @@ func TestProcessInteractiveEvents_StreamingCard_BareNoReply_Suppressed(t *testin
 		t.Fatalf("silent reply leaked NO_REPLY into the streaming card: %q", card.finalContent())
 	}
 }
+
+type busyThenReadySession struct {
+	queuingAgentSession
+	busyRemaining int
+}
+
+func (s *busyThenReadySession) Send(prompt string, msgID string, imgs []ImageAttachment, files []FileAttachment) error {
+	s.sendMu.Lock()
+	if s.busyRemaining > 0 {
+		s.busyRemaining--
+		s.sendMu.Unlock()
+		return fmt.Errorf("codex session turn already in progress")
+	}
+	s.sendMu.Unlock()
+	return s.queuingAgentSession.Send(prompt, msgID, imgs, files)
+}
+
+func TestAutoCompress_WaitsForTurnFreeAndPreservesCallerLock(t *testing.T) {
+	p := &stubPlatformEngine{n: "test"}
+	sess := &busyThenReadySession{
+		queuingAgentSession: *newQueuingSession("auto-compress-busy"),
+		busyRemaining:       2,
+	}
+	sess.contextUsage = &ContextUsage{UsedTokens: 250_000, ContextWindow: 400_000}
+	agent := &stubCompressorAgent{cmd: "/compact"}
+	e := NewEngine("test", agent, []Platform{p}, "", LangEnglish)
+	e.SetAutoCompressConfig(true, 195_000, 0)
+
+	key := "test:wife-auto-compress"
+	session := e.sessions.GetOrCreateActive(key)
+	lockGen, ok := session.TryLock()
+	if !ok {
+		t.Fatal("failed to lock session")
+	}
+	defer session.Unlock(lockGen)
+
+	state := &interactiveState{
+		agentSession: sess,
+		platform:     p,
+		replyCtx:     "ctx-turn1",
+		pendingMessages: []queuedMessage{
+			{platform: p, replyCtx: "ctx-q1", content: "queued-after-auto-compress"},
+		},
+	}
+	e.interactiveMu.Lock()
+	e.interactiveStates[key] = state
+	e.interactiveMu.Unlock()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		e.processInteractiveEvents(state, session, e.sessions, key, "msg1", time.Now(), func() {}, nil, "ctx-turn1", lockGen)
+	}()
+
+	// Finish turn 1 -> triggers auto-compress which must retry past "turn already in progress".
+	sess.events <- Event{Type: EventResult, Content: "turn1-answer", Done: true}
+
+	waitForCalls := func(want int) []string {
+		t.Helper()
+		deadline := time.After(3 * time.Second)
+		for {
+			sess.sendMu.Lock()
+			n := len(sess.sendCalls)
+			calls := append([]string(nil), sess.sendCalls...)
+			sess.sendMu.Unlock()
+			if n >= want {
+				return calls
+			}
+			select {
+			case <-deadline:
+				t.Fatalf("timed out waiting for %d send calls; got %v", want, calls)
+			default:
+				time.Sleep(15 * time.Millisecond)
+			}
+		}
+	}
+
+	calls := waitForCalls(1)
+	if calls[0] != "/compact" {
+		t.Fatalf("first send = %q, want /compact", calls[0])
+	}
+	// Caller's session lock must stay held during auto-compress!
+	if !session.Busy() {
+		t.Fatal("session lock was released prematurely during auto-compress")
+	}
+
+	// Finish compress; lower context usage so queued turn does not re-trigger compress.
+	sess.contextUsage = &ContextUsage{UsedTokens: 80_000, ContextWindow: 400_000}
+	sess.events <- Event{Type: EventResult, Content: "", Done: true}
+
+	calls = waitForCalls(2)
+	if !strings.Contains(calls[1], "queued-after-auto-compress") {
+		t.Fatalf("second send = %q, want queued message", calls[1])
+	}
+	if !session.Busy() {
+		t.Fatal("session lock was released prematurely before queued message finished")
+	}
+
+	// Finish queued turn.
+	sess.events <- Event{Type: EventResult, Content: "queued-answer", Done: true}
+
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("processInteractiveEvents did not return")
+	}
+
+	// Caller still owns lockGen after processInteractiveEvents returns.
+	if !session.Busy() {
+		t.Fatal("processInteractiveEvents unlocked caller's session lock on auto-compress")
+	}
+}

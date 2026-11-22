@@ -1145,6 +1145,67 @@ func waitForDoneResult(t *testing.T, events <-chan core.Event) {
 	}
 }
 
+func TestReadLoop_SuppressesStderrErrorAfterTurnFailed(t *testing.T) {
+	workDir := t.TempDir()
+	binDir := filepath.Join(workDir, "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatalf("mkdir bin: %v", err)
+	}
+
+	script := "#!/bin/sh\n" +
+		"cat >/dev/null\n" +
+		"printf '%s\\n' '{\"type\":\"turn.failed\",\"error\":{\"message\":\"stream disconnected before completion\"}}'\n" +
+		"printf '%s\\n' 'ERROR codex_models_manager: failed to refresh available models: request timed out' >&2\n" +
+		"exit 1\n"
+	powershellScript := `
+[Console]::Out.WriteLine('{"type":"turn.failed","error":{"message":"stream disconnected before completion"}}')
+[Console]::Error.WriteLine('ERROR codex_models_manager: failed to refresh available models: request timed out')
+exit 1
+`
+	writeFakeCodexScript(t, binDir, script, powershellScript)
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	cs, err := newCodexSession(context.Background(), "codex", nil, workDir, "", "", "", "", "", nil, "", "", "")
+	if err != nil {
+		t.Fatalf("newCodexSession: %v", err)
+	}
+	defer func() { _ = cs.Close() }()
+
+	if err := cs.Send("hello", "", nil, nil); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+
+	var errs []error
+	select {
+	case evt := <-cs.Events():
+		if evt.Type != core.EventError {
+			t.Fatalf("first event type = %v, want EventError", evt.Type)
+		}
+		errs = append(errs, evt.Error)
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for turn.failed EventError")
+	}
+
+	// Wait for process exit and confirm no second EventError is emitted from stderr.
+	deadline := time.Now().Add(5 * time.Second)
+	for cs.turnInFlight.Load() && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if cs.turnInFlight.Load() {
+		t.Fatal("turnInFlight did not clear after process exit")
+	}
+
+	select {
+	case evt := <-cs.Events():
+		t.Fatalf("unexpected duplicate event after turn.failed: %+v", evt)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	if len(errs) != 1 || !strings.Contains(errs[0].Error(), "stream disconnected") {
+		t.Fatalf("got errors %v, want single stream disconnected error", errs)
+	}
+}
+
 func waitForFileLines(t *testing.T, path string, want int) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)

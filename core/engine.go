@@ -16836,11 +16836,12 @@ func (e *Engine) formatToolResultEventFallback(toolName, result, status string, 
 // compactToolEmojis maps lowercase tool names to their progress-line emoji.
 // Unknown tools fall back to 🔧; MCP tools get 🔌 in compactToolLine.
 var compactToolEmojis = map[string]string{
-	"bash": "💻", "shell": "💻", "run_shell_command": "💻",
-	"read": "📖", "notebookedit": "📓",
-	"write": "📝", "edit": "✏️", "multiedit": "✏️", "apply_patch": "✏️",
-	"grep": "🔍", "glob": "🔍", "search_files": "🔍",
-	"websearch": "🌐", "webfetch": "🌐", "web_search": "🌐", "web_extract": "🌐",
+	"bash": "💻", "shell": "💻", "run_shell_command": "💻", "run_terminal_command": "💻",
+	"read": "📖", "read_file": "📖", "notebookedit": "📓",
+	"write": "📝", "edit": "✏️", "search_replace": "✏️", "multiedit": "✏️", "apply_patch": "✏️",
+	"grep": "🔍", "glob": "🔍", "list_dir": "🔍", "search_files": "🔍",
+	"x_search": "🔍", "x_user_search": "🔍", "x_thread_fetch": "🔍",
+	"websearch": "🌐", "webfetch": "🌐", "web_search": "🌐", "web_extract": "🌐", "open_page": "🌐",
 	"toolsearch": "🧰",
 	"subagent":   "🤖",
 	"skill":      "🎯", "todowrite": "✅", "askuserquestion": "❓",

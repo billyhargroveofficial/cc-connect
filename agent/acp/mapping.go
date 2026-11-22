@@ -128,7 +128,7 @@ func mapToolCall(sessionID string, update json.RawMessage) []core.Event {
 	if err := json.Unmarshal(update, &u); err != nil {
 		return nil
 	}
-	toolName := u.Title
+	toolName := strings.TrimSuffix(strings.TrimSpace(u.Title), ":")
 	if toolName == "" {
 		toolName = u.Kind
 	}
@@ -136,9 +136,6 @@ func mapToolCall(sessionID string, update json.RawMessage) []core.Event {
 		toolName = "tool"
 	}
 	toolInput := summarizeACPToolInput(u.Kind, u.RawInput)
-	if toolInput == "" {
-		toolInput = u.Title
-	}
 	return []core.Event{{
 		Type:      core.EventToolUse,
 		ToolName:  toolName,

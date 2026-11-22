@@ -102,12 +102,16 @@ func TestSummarizeACPToolInput_SearchAndBackend(t *testing.T) {
 		t.Fatalf("backend fallback = %q, want empty", got)
 	}
 
+	if got := summarizeACPToolInput("", json.RawMessage(`{"pattern":"5090|4090","path":"/Users/billy/parilka/chat-log"}`)); got != "5090|4090 in /Users/billy/parilka/chat-log" {
+		t.Fatalf("grep summary = %q", got)
+	}
+
 	params := json.RawMessage(`{
 		"sessionId": "s1",
 		"update": {
 			"sessionUpdate": "tool_call",
 			"toolCallId": "call-x1",
-			"title": "X Search",
+			"title": "X search:",
 			"kind": "search",
 			"rawInput": {"variant": "XSearch", "backend": true}
 		}
@@ -116,8 +120,128 @@ func TestSummarizeACPToolInput_SearchAndBackend(t *testing.T) {
 	if len(evs) != 1 || evs[0].Type != core.EventToolUse {
 		t.Fatalf("got %+v", evs)
 	}
-	if evs[0].ToolName != "X Search" || evs[0].ToolInput != "X Search" {
-		t.Fatalf("got tool=%q input=%q, want X Search / X Search", evs[0].ToolName, evs[0].ToolInput)
+	if evs[0].ToolName != "X search" || evs[0].ToolInput != "" {
+		t.Fatalf("got tool=%q input=%q, want X search / empty", evs[0].ToolName, evs[0].ToolInput)
+	}
+}
+
+func TestSession_CoalescesThoughtChunksAndResolvesBackendSearchArgs(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	s := &acpSession{
+		workDir:             t.TempDir(),
+		events:              make(chan core.Event, 32),
+		ctx:                 ctx,
+		cancel:              cancel,
+		permByID:            make(map[string]permState),
+		toolInputByID:       make(map[string]string),
+		pendingBackendTools: make(map[string]pendingBackendTool),
+		acpSessID:           "s1",
+	}
+
+	// Streamed thought deltas should coalesce into one EventThinking per paragraph
+	// and flush before the next non-thinking event.
+	for _, chunk := range []string{"Проверяю", " цены на", " водянку 5090.\n\nВторой", " абзац", " мыслей."} {
+		payload, _ := json.Marshal(map[string]any{
+			"sessionId": "s1",
+			"update": map[string]any{
+				"sessionUpdate": "agent_thought_chunk",
+				"content":       map[string]any{"type": "text", "text": chunk},
+			},
+		})
+		s.onNotification("session/update", payload)
+	}
+
+	// Deferred backend WebSearch: initial tool_call emits nothing, tool_call_update emits real query.
+	s.onNotification("session/update", json.RawMessage(`{
+		"sessionId": "s1",
+		"update": {
+			"sessionUpdate": "tool_call",
+			"toolCallId": "ws_1",
+			"title": "Web search:",
+			"kind": "search",
+			"status": "in_progress",
+			"rawInput": {"variant": "WebSearch", "backend": true}
+		}
+	}`))
+	s.onNotification("session/update", json.RawMessage(`{
+		"sessionId": "s1",
+		"update": {
+			"sessionUpdate": "tool_call_update",
+			"toolCallId": "ws_1",
+			"status": "completed",
+			"title": "Web search:",
+			"rawOutput": {"action": {"type": "search", "query": "RTX 5090 water block price USD"}}
+		}
+	}`))
+
+	// Deferred backend open_page
+	s.onNotification("session/update", json.RawMessage(`{
+		"sessionId": "s1",
+		"update": {
+			"sessionUpdate": "tool_call",
+			"toolCallId": "ws_2",
+			"title": "Web search:",
+			"kind": "search",
+			"status": "in_progress",
+			"rawInput": {"variant": "WebSearch", "backend": true}
+		}
+	}`))
+	s.onNotification("session/update", json.RawMessage(`{
+		"sessionId": "s1",
+		"update": {
+			"sessionUpdate": "tool_call_update",
+			"toolCallId": "ws_2",
+			"status": "completed",
+			"title": "Web search:",
+			"rawOutput": {"action": {"type": "open_page", "url": "https://example.com/post"}}
+		}
+	}`))
+
+	// Deferred backend XSearch
+	s.onNotification("session/update", json.RawMessage(`{
+		"sessionId": "s1",
+		"update": {
+			"sessionUpdate": "tool_call",
+			"toolCallId": "ctc_1",
+			"title": "X search:",
+			"kind": "search",
+			"status": "in_progress",
+			"rawInput": {"variant": "XSearch", "backend": true}
+		}
+	}`))
+	s.onNotification("session/update", json.RawMessage(`{
+		"sessionId": "s1",
+		"update": {
+			"sessionUpdate": "tool_call_update",
+			"toolCallId": "ctc_1",
+			"status": "completed",
+			"title": "X search:",
+			"rawOutput": {"name": "x_keyword_search", "input": "{\"query\":\"Claude FBI Anthropic\",\"limit\":10}"}
+		}
+	}`))
+
+	var got []core.Event
+	for len(s.events) > 0 {
+		got = append(got, <-s.events)
+	}
+	if len(got) != 5 {
+		t.Fatalf("expected 5 events (2 thinking + 3 tool_use), got %d: %+v", len(got), got)
+	}
+	if got[0].Type != core.EventThinking || got[0].Content != "Проверяю цены на водянку 5090." {
+		t.Fatalf("ev[0] = %+v", got[0])
+	}
+	if got[1].Type != core.EventThinking || got[1].Content != "Второй абзац мыслей." {
+		t.Fatalf("ev[1] = %+v", got[1])
+	}
+	if got[2].Type != core.EventToolUse || got[2].ToolName != "web_search" || got[2].ToolInput != "RTX 5090 water block price USD" {
+		t.Fatalf("ev[2] = %+v", got[2])
+	}
+	if got[3].Type != core.EventToolUse || got[3].ToolName != "open_page" || got[3].ToolInput != "https://example.com/post" {
+		t.Fatalf("ev[3] = %+v", got[3])
+	}
+	if got[4].Type != core.EventToolUse || got[4].ToolName != "x_search" || got[4].ToolInput != "Claude FBI Anthropic" {
+		t.Fatalf("ev[4] = %+v", got[4])
 	}
 }
 

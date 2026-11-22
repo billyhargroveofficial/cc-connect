@@ -45,6 +45,17 @@ type acpSession struct {
 	toolInputMu   sync.Mutex
 	toolInputByID map[string]string // toolCallId -> summarized tool input
 
+	// pendingBackendTools tracks server-side tool calls (e.g. Grok WebSearch/XSearch)
+	// whose initial tool_call carries only {"backend":true} and whose real query/url
+	// arrives in the subsequent tool_call_update rawOutput.
+	pendingBackendMu    sync.Mutex
+	pendingBackendTools map[string]pendingBackendTool
+
+	// thinkingMu buffers streamed agent_thought_chunk deltas so compact progress
+	// cards receive complete thoughts/paragraphs instead of one line per few words.
+	thinkingMu  sync.Mutex
+	thinkingBuf strings.Builder
+
 	// modesMu guards availableModes and currentMode. Both fields are
 	// populated on handshake (session/new or session/load response) and
 	// updated whenever SetLiveMode succeeds or the server announces a
@@ -79,6 +90,11 @@ type permState struct {
 	Options []permissionOption
 }
 
+type pendingBackendTool struct {
+	Title string
+	Kind  string
+}
+
 // acpSessionConfig bundles the inputs newACPSession needs. It's a
 // struct rather than a long positional argument list because we keep
 // adding optional knobs (initialMode, callbacks) and would otherwise
@@ -108,9 +124,10 @@ func newACPSession(ctx context.Context, cfg acpSessionConfig) (*acpSession, erro
 		events:        make(chan core.Event, 512),
 		ctx:           sessionCtx,
 		cancel:        cancel,
-		permByID:      make(map[string]permState),
-		toolInputByID: make(map[string]string),
-		acpSessID:     cfg.resumeSessionID,
+		permByID:            make(map[string]permState),
+		toolInputByID:       make(map[string]string),
+		pendingBackendTools: make(map[string]pendingBackendTool),
+		acpSessID:           cfg.resumeSessionID,
 		callbacks:     cfg.callbacks,
 	}
 	s.alive.Store(true)
@@ -559,9 +576,234 @@ func (s *acpSession) onNotification(method string, params json.RawMessage) {
 	sid := s.currentACPSessionID()
 	// Debug log to capture raw session/update JSON for troubleshooting vendor compatibility
 	slog.Debug("acp: session/update", "session_id", sid, "params", string(params))
+	if handled, evs := s.handleDeferredBackendToolUpdate(sid, params); handled {
+		if len(evs) > 0 {
+			s.flushThinking(sid)
+			for _, ev := range evs {
+				s.emit(ev)
+			}
+		}
+		return
+	}
 	for _, ev := range mapSessionUpdate(sid, params) {
+		if ev.Type == core.EventThinking {
+			s.appendThinkingChunk(sid, ev.Content)
+			continue
+		}
+		s.flushThinking(sid)
 		s.emit(ev)
 	}
+}
+
+func (s *acpSession) appendThinkingChunk(sessionID string, chunk string) {
+	if chunk == "" {
+		return
+	}
+	var toEmit []string
+	s.thinkingMu.Lock()
+	s.thinkingBuf.WriteString(chunk)
+	full := s.thinkingBuf.String()
+	if idx := strings.LastIndex(full, "\n\n"); idx >= 0 {
+		head := full[:idx]
+		tail := full[idx+2:]
+		s.thinkingBuf.Reset()
+		s.thinkingBuf.WriteString(tail)
+		for _, para := range strings.Split(head, "\n\n") {
+			if p := strings.TrimSpace(para); p != "" {
+				toEmit = append(toEmit, p)
+			}
+		}
+	}
+	s.thinkingMu.Unlock()
+	for _, p := range toEmit {
+		s.emit(core.Event{
+			Type:      core.EventThinking,
+			Content:   p,
+			SessionID: sessionID,
+		})
+	}
+}
+
+func (s *acpSession) flushThinking(sessionID string) {
+	s.thinkingMu.Lock()
+	if s.thinkingBuf.Len() == 0 {
+		s.thinkingMu.Unlock()
+		return
+	}
+	text := strings.TrimSpace(s.thinkingBuf.String())
+	s.thinkingBuf.Reset()
+	s.thinkingMu.Unlock()
+	if text == "" {
+		return
+	}
+	s.emit(core.Event{
+		Type:      core.EventThinking,
+		Content:   text,
+		SessionID: sessionID,
+	})
+}
+
+func isDeferredBackendToolInput(raw json.RawMessage) bool {
+	if len(raw) == 0 {
+		return false
+	}
+	var m map[string]any
+	if json.Unmarshal(raw, &m) != nil {
+		return false
+	}
+	backend, ok := m["backend"].(bool)
+	if !ok || !backend {
+		return false
+	}
+	return summarizeACPToolInput("", raw) == ""
+}
+
+func normalizeBackendToolName(rawName, title string) string {
+	n := strings.ToLower(strings.TrimSpace(rawName))
+	switch n {
+	case "x_keyword_search", "x_semantic_search":
+		return "x_search"
+	case "x_user_search", "x_thread_fetch", "open_page", "web_search":
+		return n
+	case "open_page_with_find":
+		return "open_page"
+	case "search":
+		return "web_search"
+	}
+	t := strings.ToLower(strings.TrimSuffix(strings.TrimSpace(title), ":"))
+	switch {
+	case strings.Contains(t, "x search"):
+		return "x_search"
+	case strings.Contains(t, "web search"):
+		return "web_search"
+	case t != "":
+		return t
+	default:
+		return "search"
+	}
+}
+
+func extractBackendToolDetails(fallbackTitle string, rawOutput json.RawMessage) (string, string) {
+	if len(rawOutput) == 0 {
+		return normalizeBackendToolName("", fallbackTitle), ""
+	}
+	var ro struct {
+		Name   string          `json:"name"`
+		Input  json.RawMessage `json:"input"`
+		Action *struct {
+			Type    string `json:"type"`
+			Query   string `json:"query"`
+			URL     string `json:"url"`
+			Pattern string `json:"pattern"`
+		} `json:"action"`
+	}
+	if json.Unmarshal(rawOutput, &ro) != nil {
+		return normalizeBackendToolName("", fallbackTitle), ""
+	}
+	if ro.Action != nil {
+		name := normalizeBackendToolName(ro.Action.Type, fallbackTitle)
+		switch {
+		case ro.Action.Query != "":
+			if ro.Action.URL != "" {
+				return name, ro.Action.URL + " (" + ro.Action.Query + ")"
+			}
+			return name, ro.Action.Query
+		case ro.Action.URL != "":
+			if ro.Action.Pattern != "" {
+				return name, ro.Action.URL + " (" + ro.Action.Pattern + ")"
+			}
+			return name, ro.Action.URL
+		}
+		return name, ""
+	}
+	name := normalizeBackendToolName(ro.Name, fallbackTitle)
+	if len(ro.Input) > 0 {
+		var inMap map[string]any
+		var inStr string
+		if json.Unmarshal(ro.Input, &inStr) == nil && strings.TrimSpace(inStr) != "" {
+			_ = json.Unmarshal([]byte(inStr), &inMap)
+		} else {
+			_ = json.Unmarshal(ro.Input, &inMap)
+		}
+		if len(inMap) > 0 {
+			for _, k := range []string{"query", "q", "url", "username", "handle", "screen_name", "tweet_id", "post_id", "thread_id", "id"} {
+				if v, ok := inMap[k].(string); ok && strings.TrimSpace(v) != "" {
+					return name, strings.TrimSpace(v)
+				}
+			}
+		}
+	}
+	return name, ""
+}
+
+// handleDeferredBackendToolUpdate defers Grok server-side tool_call notifications
+// (WebSearch/XSearch) that arrive without arguments until the matching
+// tool_call_update provides the real query/url in rawOutput.
+func (s *acpSession) handleDeferredBackendToolUpdate(sessionID string, params json.RawMessage) (bool, []core.Event) {
+	var wrap struct {
+		SessionID string          `json:"sessionId"`
+		Update    json.RawMessage `json:"update"`
+	}
+	if json.Unmarshal(params, &wrap) != nil || len(wrap.Update) == 0 {
+		return false, nil
+	}
+	sid := wrap.SessionID
+	if sid == "" {
+		sid = sessionID
+	}
+	var head struct {
+		SessionUpdate string          `json:"sessionUpdate"`
+		ToolCallID    string          `json:"toolCallId"`
+		Title         string          `json:"title"`
+		Kind          string          `json:"kind"`
+		Status        string          `json:"status"`
+		RawInput      json.RawMessage `json:"rawInput"`
+		RawOutput     json.RawMessage `json:"rawOutput"`
+	}
+	if json.Unmarshal(wrap.Update, &head) != nil || head.ToolCallID == "" {
+		return false, nil
+	}
+	switch head.SessionUpdate {
+	case "tool_call":
+		if !isDeferredBackendToolInput(head.RawInput) {
+			return false, nil
+		}
+		s.pendingBackendMu.Lock()
+		if s.pendingBackendTools == nil {
+			s.pendingBackendTools = make(map[string]pendingBackendTool)
+		}
+		s.pendingBackendTools[head.ToolCallID] = pendingBackendTool{
+			Title: head.Title,
+			Kind:  head.Kind,
+		}
+		s.pendingBackendMu.Unlock()
+		return true, nil
+	case "tool_call_update":
+		s.pendingBackendMu.Lock()
+		pending, ok := s.pendingBackendTools[head.ToolCallID]
+		if ok && (len(head.RawOutput) > 0 || strings.EqualFold(head.Status, "completed") || strings.EqualFold(head.Status, "failed")) {
+			delete(s.pendingBackendTools, head.ToolCallID)
+		}
+		s.pendingBackendMu.Unlock()
+		if !ok {
+			return false, nil
+		}
+		if len(head.RawOutput) == 0 && !strings.EqualFold(head.Status, "completed") && !strings.EqualFold(head.Status, "failed") {
+			return true, nil
+		}
+		title := head.Title
+		if title == "" {
+			title = pending.Title
+		}
+		toolName, toolInput := extractBackendToolDetails(title, head.RawOutput)
+		return true, []core.Event{{
+			Type:      core.EventToolUse,
+			ToolName:  toolName,
+			ToolInput: toolInput,
+			SessionID: sid,
+		}}
+	}
+	return false, nil
 }
 
 // maybeAbsorbCurrentModeUpdate watches session/update notifications
@@ -816,6 +1058,10 @@ func (s *acpSession) Send(prompt string, messageID string, images []core.ImageAt
 
 	slog.Debug("acp: sending session/prompt", "session_id", sid, "prompt_len", len(prompt), "image_blocks", len(promptBlocks)-1)
 	res, err := s.tr.call(s.ctx, "session/prompt", params)
+	s.flushThinking(sid)
+	s.pendingBackendMu.Lock()
+	clear(s.pendingBackendTools)
+	s.pendingBackendMu.Unlock()
 	if err != nil {
 		s.emit(core.Event{Type: core.EventError, Error: err})
 		return fmt.Errorf("acp: session/prompt: %w", err)
@@ -1070,6 +1316,12 @@ func summarizeACPToolInput(kind string, raw json.RawMessage) string {
 	}
 	if q, ok := m["query"].(string); ok && q != "" {
 		return q
+	}
+	if pat, ok := m["pattern"].(string); ok && pat != "" {
+		if p, ok := m["path"].(string); ok && p != "" {
+			return pat + " in " + p
+		}
+		return pat
 	}
 	if backend, ok := m["backend"].(bool); ok && backend {
 		return ""

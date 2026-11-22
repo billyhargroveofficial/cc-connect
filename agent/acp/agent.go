@@ -38,6 +38,14 @@ type Agent struct {
 	// session/set_model or session/set_config_option.
 	model string
 
+	// reasoningEffort is an optional configured reasoning effort label (e.g.
+	// "high") exposed via ReasoningEffortSwitcher for statusline footers.
+	reasoningEffort string
+
+	// compressCommand is an optional slash command (e.g. "/compact") sent via
+	// session/prompt when the ACP server supports in-session compaction.
+	compressCommand string
+
 	// listUnsupported caches a negative result after we probe the agent
 	// for sessionCapabilities.list once. Eliminates spawn cost on
 	// subsequent `/ls` invocations against agents that don't implement
@@ -72,10 +80,13 @@ type sessionCallbacks interface {
 	reportListSupported(supported bool)
 }
 
-// Ensure *Agent satisfies sessionCallbacks and core.ModelSwitcher at compile time.
+// Ensure *Agent satisfies sessionCallbacks, ModelSwitcher, ReasoningEffortSwitcher,
+// and ContextCompressor at compile time.
 var (
-	_ sessionCallbacks   = (*Agent)(nil)
-	_ core.ModelSwitcher = (*Agent)(nil)
+	_ sessionCallbacks             = (*Agent)(nil)
+	_ core.ModelSwitcher           = (*Agent)(nil)
+	_ core.ReasoningEffortSwitcher = (*Agent)(nil)
+	_ core.ContextCompressor       = (*Agent)(nil)
 )
 
 // New builds an acp agent from project options.
@@ -109,18 +120,24 @@ func New(opts map[string]any) (core.Agent, error) {
 	mode = strings.TrimSpace(mode)
 	model, _ := opts["model"].(string)
 	model = strings.TrimSpace(model)
+	reasoningEffort, _ := opts["reasoning_effort"].(string)
+	reasoningEffort = strings.TrimSpace(reasoningEffort)
+	compressCommand, _ := opts["compress_command"].(string)
+	compressCommand = strings.TrimSpace(compressCommand)
 
 	return &Agent{
-		workDir:      workDir,
-		cmd:          cmdStr,
-		cliExtraArgs: cliExtraArgs,
-		args:         args,
-		staticEnv:    staticEnv,
-		extraEnv:     extra,
-		authMethod:   authMethod,
-		displayName:  displayName,
-		mode:         mode,
-		model:        model,
+		workDir:         workDir,
+		cmd:             cmdStr,
+		cliExtraArgs:    cliExtraArgs,
+		args:            args,
+		staticEnv:       staticEnv,
+		extraEnv:        extra,
+		authMethod:      authMethod,
+		displayName:     displayName,
+		mode:            mode,
+		model:           model,
+		reasoningEffort: reasoningEffort,
+		compressCommand: compressCommand,
 	}, nil
 }
 
@@ -232,6 +249,12 @@ func (a *Agent) WorkspaceAgentOptions() map[string]any {
 	}
 	if a.model != "" {
 		opts["model"] = a.model
+	}
+	if a.reasoningEffort != "" {
+		opts["reasoning_effort"] = a.reasoningEffort
+	}
+	if a.compressCommand != "" {
+		opts["compress_command"] = a.compressCommand
 	}
 	return opts
 }
@@ -458,4 +481,30 @@ func (a *Agent) reportModels(block acpModelsBlock) {
 	a.modelsCache = opts
 	a.modelsCurrent = block.CurrentModelID
 	a.modelsMu.Unlock()
+}
+
+// -- ReasoningEffortSwitcher --
+
+func (a *Agent) SetReasoningEffort(effort string) {
+	a.mu.Lock()
+	a.reasoningEffort = strings.TrimSpace(effort)
+	a.mu.Unlock()
+}
+
+func (a *Agent) GetReasoningEffort() string {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.reasoningEffort
+}
+
+func (a *Agent) AvailableReasoningEfforts() []string {
+	return []string{"low", "medium", "high", "xhigh"}
+}
+
+// -- ContextCompressor --
+
+func (a *Agent) CompressCommand() string {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.compressCommand
 }

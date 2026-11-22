@@ -37,12 +37,20 @@ type acpModesBlock struct {
 	AvailableModes []acpModeInfo `json:"availableModes"`
 }
 
+// acpModelMeta captures optional vendor metadata inside models.availableModels[]._meta
+// (for example Grok ACP reports totalContextTokens and reasoningEffort).
+type acpModelMeta struct {
+	TotalContextTokens int    `json:"totalContextTokens,omitempty"`
+	ReasoningEffort    string `json:"reasoningEffort,omitempty"`
+}
+
 // acpModelInfo mirrors the ACP `models.availableModels[]` shape sent by
-// servers like `agy acp`.
+// servers like `agy acp` and `grok agent stdio`.
 type acpModelInfo struct {
-	ModelID     string `json:"modelId"`
-	Name        string `json:"name"`
-	Description string `json:"description,omitempty"`
+	ModelID     string        `json:"modelId"`
+	Name        string        `json:"name"`
+	Description string        `json:"description,omitempty"`
+	Meta        *acpModelMeta `json:"_meta,omitempty"`
 }
 
 // acpModelsBlock mirrors the `models` object returned inside `session/new`
@@ -57,7 +65,10 @@ type acpModelsBlock struct {
 type acpInitializeResult struct {
 	ProtocolVersion   int `json:"protocolVersion"`
 	AgentCapabilities struct {
-		LoadSession         bool `json:"loadSession"`
+		LoadSession        bool `json:"loadSession"`
+		PromptCapabilities struct {
+			Image bool `json:"image"`
+		} `json:"promptCapabilities"`
 		SessionCapabilities struct {
 			// ACP advertises capabilities as objects (possibly empty);
 			// treat "field present" as "supported" regardless of contents.

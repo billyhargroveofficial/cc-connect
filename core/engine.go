@@ -11429,27 +11429,22 @@ func (e *Engine) runCompressLocked(state *interactiveState, session *Session, se
 	}
 
 	cmd := compressor.CompressCommand()
-	if err := sendWhenTurnFree(as, cmd, "", nil, nil); err != nil {
-		slog.Warn("compress: send failed", "session", iKey, "auto", auto, "error", err)
-		if !auto {
-			e.reply(p, replyCtx, fmt.Sprintf(e.i18n.T(MsgError), err))
-		}
-		if !as.Alive() {
-			e.cleanupInteractiveState(iKey, state)
-			e.notifyDroppedQueuedMessages(state, err)
-			return false
-		}
-		return true
-	}
+	// Run Send concurrently with processCompressEventsLocked so synchronous
+	// agents (e.g. ACP session/prompt) can stream events and permission
+	// requests without deadlocking on the events channel buffer.
+	sendDone := make(chan error, 1)
+	go func() {
+		sendDone <- sendWhenTurnFree(as, cmd, "", nil, nil)
+	}()
 
-	return e.processCompressEventsLocked(state, session, sessions, iKey, p, replyCtx, auto)
+	return e.processCompressEventsLocked(state, session, sessions, iKey, p, replyCtx, auto, sendDone)
 }
 
 // processCompressEventsLocked drains agent events after a compress command.
 // Unlike processInteractiveEvents it does NOT record history and treats
 // an empty result as success rather than "(empty response)".
 // Returns true if the agent session survived and callers may continue draining.
-func (e *Engine) processCompressEventsLocked(state *interactiveState, session *Session, sessions *SessionManager, sessionKey string, p Platform, replyCtx any, auto bool) bool {
+func (e *Engine) processCompressEventsLocked(state *interactiveState, session *Session, sessions *SessionManager, sessionKey string, p Platform, replyCtx any, auto bool, sendDone <-chan error) bool {
 
 	var textParts []string
 	events := state.agentSession.Events()
@@ -11470,6 +11465,21 @@ func (e *Engine) processCompressEventsLocked(state *interactiveState, session *S
 		select {
 		case <-stopCh:
 			return false
+		case err := <-sendDone:
+			sendDone = nil
+			if err != nil {
+				slog.Warn("compress: send failed", "session", sessionKey, "auto", auto, "error", err)
+				if !auto {
+					e.reply(p, replyCtx, fmt.Sprintf(e.i18n.T(MsgError), err))
+				}
+				if state.agentSession == nil || !state.agentSession.Alive() {
+					e.cleanupInteractiveState(sessionKey, state)
+					e.notifyDroppedQueuedMessages(state, err)
+					return false
+				}
+				return true
+			}
+			continue
 		case event, ok = <-events:
 			if !ok {
 				e.cleanupInteractiveState(sessionKey, state)

@@ -3,6 +3,7 @@ package acp
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -57,12 +58,21 @@ type acpSession struct {
 	availableModels []acpModelInfo
 	currentModel    string
 
+	// supportsImage records AgentCapabilities.PromptCapabilities.Image from initialize.
+	supportsImage atomic.Bool
+
+	// contextMu guards contextUsage reported by session/prompt _meta.
+	contextMu    sync.RWMutex
+	contextUsage *core.ContextUsage
+
 	// replaying is true while session/load is in flight so replayed
 	// historical session/update notifications are not forwarded into IM.
 	replaying atomic.Bool
 
 	callbacks sessionCallbacks // may be nil (tests, integration harness)
 }
+
+var _ core.ContextUsageReporter = (*acpSession)(nil)
 
 type permState struct {
 	RPCID   json.RawMessage
@@ -94,7 +104,7 @@ func newACPSession(ctx context.Context, cfg acpSessionConfig) (*acpSession, erro
 	sessionCtx, cancel := context.WithCancel(ctx)
 	s := &acpSession{
 		workDir:       absWorkDir,
-		events:        make(chan core.Event, 128),
+		events:        make(chan core.Event, 512),
 		ctx:           sessionCtx,
 		cancel:        cancel,
 		permByID:      make(map[string]permState),
@@ -205,10 +215,12 @@ func (s *acpSession) handshake(resumeSessionID string, authMethod string) error 
 		return fmt.Errorf("acp: parse initialize result: %w", err)
 	}
 	listSupported := len(initOut.AgentCapabilities.SessionCapabilities.List) > 0
+	s.supportsImage.Store(initOut.AgentCapabilities.PromptCapabilities.Image)
 	slog.Debug("acp: initialized",
 		"protocol", initOut.ProtocolVersion,
 		"load_session", initOut.AgentCapabilities.LoadSession,
 		"list_sessions", listSupported,
+		"prompt_image", initOut.AgentCapabilities.PromptCapabilities.Image,
 	)
 	if s.callbacks != nil {
 		s.callbacks.reportListSupported(listSupported)
@@ -746,32 +758,130 @@ func (s *acpSession) Send(prompt string, messageID string, images []core.ImageAt
 	promptBlocks := []any{
 		map[string]any{"type": "text", "text": prompt},
 	}
+	if s.supportsImage.Load() && len(images) > 0 {
+		for _, img := range images {
+			if len(img.Data) == 0 {
+				continue
+			}
+			mime := strings.TrimSpace(img.MimeType)
+			if mime == "" {
+				mime = "image/png"
+			}
+			promptBlocks = append(promptBlocks, map[string]any{
+				"type":     "image",
+				"data":     base64.StdEncoding.EncodeToString(img.Data),
+				"mimeType": mime,
+			})
+		}
+	}
 	params := map[string]any{
 		"sessionId": sid,
 		"prompt":    promptBlocks,
 	}
 
-	slog.Debug("acp: sending session/prompt", "session_id", sid, "prompt_len", len(prompt))
+	slog.Debug("acp: sending session/prompt", "session_id", sid, "prompt_len", len(prompt), "image_blocks", len(promptBlocks)-1)
 	res, err := s.tr.call(s.ctx, "session/prompt", params)
 	if err != nil {
 		s.emit(core.Event{Type: core.EventError, Error: err})
 		return fmt.Errorf("acp: session/prompt: %w", err)
 	}
 	slog.Debug("acp: session/prompt response", "session_id", sid, "response_len", len(res), "response", string(res))
+	inputTokens, outputTokens := s.absorbPromptUsage(prompt, res)
 
 	// Text was streamed via session/update; engine aggregates EventText.
 	s.emit(core.Event{
-		Type:      core.EventResult,
-		SessionID: sid,
-		Done:      true,
+		Type:         core.EventResult,
+		SessionID:    sid,
+		InputTokens:  inputTokens,
+		OutputTokens: outputTokens,
+		Done:         true,
 	})
 	return nil
 }
 
+func (s *acpSession) currentContextWindow() int {
+	s.modelsMu.RLock()
+	defer s.modelsMu.RUnlock()
+	for _, m := range s.availableModels {
+		if m.Meta != nil && m.Meta.TotalContextTokens > 0 && strings.EqualFold(m.ModelID, s.currentModel) {
+			return m.Meta.TotalContextTokens
+		}
+	}
+	for _, m := range s.availableModels {
+		if m.Meta != nil && m.Meta.TotalContextTokens > 0 {
+			return m.Meta.TotalContextTokens
+		}
+	}
+	return 0
+}
+
+func (s *acpSession) absorbPromptUsage(prompt string, res json.RawMessage) (int, int) {
+	if len(res) == 0 {
+		return 0, 0
+	}
+	var out struct {
+		Meta *struct {
+			ModelID             string `json:"modelId"`
+			InputTokens         int    `json:"inputTokens"`
+			OutputTokens        int    `json:"outputTokens"`
+			TotalTokens         int    `json:"totalTokens"`
+			CachedReadTokens    int    `json:"cachedReadTokens"`
+			CacheCreationTokens int    `json:"cacheCreationTokens"`
+		} `json:"_meta"`
+	}
+	if json.Unmarshal(res, &out) != nil || out.Meta == nil {
+		return 0, 0
+	}
+	if out.Meta.ModelID != "" {
+		s.modelsMu.Lock()
+		if s.currentModel == "" || !strings.EqualFold(s.currentModel, out.Meta.ModelID) {
+			s.currentModel = out.Meta.ModelID
+		}
+		s.modelsMu.Unlock()
+	}
+	// Grok ACP reports the current conversation context size in _meta.totalTokens
+	// while _meta.inputTokens sums across all server-side tool iterations in the turn
+	// (e.g. XSearch/WebSearch sub-calls). Prefer totalTokens when present.
+	used := out.Meta.TotalTokens
+	if used <= 0 {
+		used = out.Meta.InputTokens
+	}
+	if used <= 0 {
+		trimmed := strings.TrimSpace(prompt)
+		if strings.EqualFold(trimmed, "/compact") || strings.EqualFold(trimmed, "/compress") {
+			s.contextMu.Lock()
+			s.contextUsage = nil
+			s.contextMu.Unlock()
+		}
+		return 0, out.Meta.OutputTokens
+	}
+	usage := &core.ContextUsage{
+		UsedTokens:               used,
+		ContextWindow:            s.currentContextWindow(),
+		InputTokens:              out.Meta.InputTokens,
+		CachedInputTokens:        out.Meta.CachedReadTokens,
+		CacheCreationInputTokens: out.Meta.CacheCreationTokens,
+	}
+	s.contextMu.Lock()
+	s.contextUsage = usage
+	s.contextMu.Unlock()
+	return used, out.Meta.OutputTokens
+}
+
+func (s *acpSession) GetContextUsage() *core.ContextUsage {
+	s.contextMu.RLock()
+	defer s.contextMu.RUnlock()
+	if s.contextUsage == nil {
+		return nil
+	}
+	cp := *s.contextUsage
+	return &cp
+}
+
 func (s *acpSession) appendImageRefs(prompt string, images []core.ImageAttachment) string {
-	attachDir := filepath.Join(s.workDir, ".cc-connect", "attachments")
-	if err := os.MkdirAll(attachDir, 0o755); err != nil {
-		slog.Warn("acp: mkdir attachments failed", "error", err)
+	imgDir := filepath.Join(s.workDir, ".cc-connect", "images")
+	if err := os.MkdirAll(imgDir, 0o755); err != nil {
+		slog.Warn("acp: mkdir images failed", "error", err)
 		return prompt
 	}
 	var paths []string
@@ -788,7 +898,7 @@ func (s *acpSession) appendImageRefs(prompt string, images []core.ImageAttachmen
 			ext = ".png"
 		}
 		fname := fmt.Sprintf("img_%d_%d%s", time.Now().UnixMilli(), i, ext)
-		fpath := filepath.Join(attachDir, fname)
+		fpath := filepath.Join(imgDir, fname)
 		if err := os.WriteFile(fpath, img.Data, 0o644); err != nil {
 			slog.Error("acp: save image failed", "error", err)
 			continue
@@ -801,7 +911,7 @@ func (s *acpSession) appendImageRefs(prompt string, images []core.ImageAttachmen
 	if prompt == "" {
 		prompt = "User sent image(s)."
 	}
-	return prompt + "\n\n(Image files saved locally: " + strings.Join(paths, ", ") + ")"
+	return prompt + "\n\n[attached image files: " + strings.Join(paths, ", ") + "]"
 }
 
 func (s *acpSession) RespondPermission(requestID string, result core.PermissionResult) error {
@@ -908,13 +1018,26 @@ func summarizeACPToolInput(kind string, raw json.RawMessage) string {
 		if fp, ok := m["path"].(string); ok {
 			return fp
 		}
+	case "search":
+		if q, ok := m["query"].(string); ok && q != "" {
+			return q
+		}
+		if backend, ok := m["backend"].(bool); ok && backend {
+			return ""
+		}
 	}
-	// Fallback: try extracting command with description before formatting JSON.
+	// Fallback: try extracting command or query before formatting JSON.
 	if cmd, ok := m["command"].(string); ok {
 		if desc, ok := m["description"].(string); ok && desc != "" {
 			return "# " + desc + "\n" + cmd
 		}
 		return cmd
+	}
+	if q, ok := m["query"].(string); ok && q != "" {
+		return q
+	}
+	if backend, ok := m["backend"].(bool); ok && backend {
+		return ""
 	}
 	b, _ := json.MarshalIndent(m, "", "  ")
 	return string(b)

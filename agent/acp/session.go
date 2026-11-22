@@ -84,15 +84,16 @@ type permState struct {
 // adding optional knobs (initialMode, callbacks) and would otherwise
 // break every call site each time.
 type acpSessionConfig struct {
-	command         string
-	args            []string
-	extraEnv        []string
-	workDir         string
-	resumeSessionID string
-	authMethod      string
-	initialMode     string           // if non-empty, applied via session/set_mode after session/new
-	initialModel    string           // if non-empty, applied via session/set_model or session/set_config_option
-	callbacks       sessionCallbacks // may be nil
+	command                string
+	args                   []string
+	extraEnv               []string
+	workDir                string
+	resumeSessionID        string
+	authMethod             string
+	initialMode            string           // if non-empty, applied via session/set_mode after session/new
+	initialModel           string           // if non-empty, applied via session/set_model or session/set_config_option
+	initialReasoningEffort string           // if non-empty, applied via session/set_config_option(reasoning_effort)
+	callbacks              sessionCallbacks // may be nil
 }
 
 func newACPSession(ctx context.Context, cfg acpSessionConfig) (*acpSession, error) {
@@ -179,6 +180,15 @@ func newACPSession(ctx context.Context, cfg acpSessionConfig) (*acpSession, erro
 		if ok := s.applyModel(cfg.initialModel); !ok {
 			slog.Warn("acp: initial model could not be applied",
 				"model", cfg.initialModel,
+				"session_id", s.currentACPSessionID(),
+			)
+		}
+	}
+
+	if strings.TrimSpace(cfg.initialReasoningEffort) != "" {
+		if ok := s.applyReasoningEffort(cfg.initialReasoningEffort); !ok {
+			slog.Warn("acp: initial reasoning effort could not be applied",
+				"effort", cfg.initialReasoningEffort,
 				"session_id", s.currentACPSessionID(),
 			)
 		}
@@ -370,6 +380,31 @@ func (s *acpSession) applyModel(model string) bool {
 	}
 	s.recordAppliedModel(modelID)
 	slog.Info("acp: model applied via session/set_config_option", "model", baseModel, "thought_level", thoughtLevel, "session_id", sid)
+	return true
+}
+
+func (s *acpSession) applyReasoningEffort(effort string) bool {
+	if !s.alive.Load() {
+		return false
+	}
+	sid := s.currentACPSessionID()
+	effort = strings.TrimSpace(effort)
+	if sid == "" || effort == "" {
+		return false
+	}
+	if _, err := s.tr.call(s.ctx, "session/set_config_option", map[string]any{
+		"sessionId": sid,
+		"configId":  "reasoning_effort",
+		"value":     effort,
+	}); err != nil {
+		slog.Debug("acp: session/set_config_option(reasoning_effort) failed",
+			"effort", effort,
+			"session_id", sid,
+			"error", err,
+		)
+		return false
+	}
+	slog.Info("acp: reasoning effort applied via session/set_config_option", "effort", effort, "session_id", sid)
 	return true
 }
 

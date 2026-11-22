@@ -273,20 +273,22 @@ func (a *Agent) StartSession(ctx context.Context, sessionID string) (core.AgentS
 	authMethod := a.authMethod
 	pendingMode := a.mode
 	pendingModel := a.model
+	pendingEffort := a.reasoningEffort
 	extra := append([]string(nil), a.extraEnv...)
 	extra = append(extra, a.sessionEnv...)
 	a.mu.RUnlock()
 
 	return newACPSession(ctx, acpSessionConfig{
-		command:         command,
-		args:            allArgs,
-		extraEnv:        extra,
-		workDir:         workDir,
-		resumeSessionID: sessionID,
-		authMethod:      authMethod,
-		initialMode:     pendingMode,
-		initialModel:    pendingModel,
-		callbacks:       a,
+		command:                command,
+		args:                   allArgs,
+		extraEnv:               extra,
+		workDir:                workDir,
+		resumeSessionID:        sessionID,
+		authMethod:             authMethod,
+		initialMode:            pendingMode,
+		initialModel:           pendingModel,
+		initialReasoningEffort: pendingEffort,
+		callbacks:              a,
 	})
 }
 

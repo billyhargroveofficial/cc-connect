@@ -122,10 +122,12 @@ func TestSummarizeACPToolInput_SearchAndBackend(t *testing.T) {
 }
 
 type fakeACPServer struct {
-	mu          sync.Mutex
-	lastPrompt  map[string]any
-	promptResp  map[string]any
-	promptCount int
+	mu           sync.Mutex
+	lastPrompt   map[string]any
+	promptResp   map[string]any
+	promptCount  int
+	lastConfigID string
+	lastConfigV  string
 }
 
 func newMockACPSession(t *testing.T, workDir string, supportsImage bool, srv *fakeACPServer) (*acpSession, func()) {
@@ -208,6 +210,17 @@ func newMockACPSession(t *testing.T, workDir string, supportsImage bool, srv *fa
 				})
 			case "session/set_model":
 				writeResp(req.ID, map[string]any{"_meta": map[string]any{"model": map[string]any{"Ok": "grok-4.6"}}})
+			case "session/set_config_option":
+				var p struct {
+					ConfigID string `json:"configId"`
+					Value    string `json:"value"`
+				}
+				_ = json.Unmarshal(req.Params, &p)
+				srv.mu.Lock()
+				srv.lastConfigID = p.ConfigID
+				srv.lastConfigV = p.Value
+				srv.mu.Unlock()
+				writeResp(req.ID, map[string]any{"configOptions": []any{}})
 			case "session/prompt":
 				var p map[string]any
 				_ = json.Unmarshal(req.Params, &p)
@@ -229,6 +242,15 @@ func newMockACPSession(t *testing.T, workDir string, supportsImage bool, srv *fa
 	}
 	if !s.applyModel("grok-4.6") {
 		t.Fatal("applyModel(grok-4.6) failed")
+	}
+	if !s.applyReasoningEffort("xhigh") {
+		t.Fatal("applyReasoningEffort(xhigh) failed")
+	}
+	srv.mu.Lock()
+	gotCID, gotCV := srv.lastConfigID, srv.lastConfigV
+	srv.mu.Unlock()
+	if gotCID != "reasoning_effort" || gotCV != "xhigh" {
+		t.Fatalf("set_config_option got (%q, %q), want (reasoning_effort, xhigh)", gotCID, gotCV)
 	}
 
 	cleanup := func() {

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"strings"
 	"sync"
 	"sync/atomic"
 )
@@ -18,15 +19,43 @@ type rpcOutcome struct {
 }
 
 type rpcErrPayload struct {
-	Code    int    `json:"code"`
-	Message string `json:"message"`
+	Code    int             `json:"code"`
+	Message string          `json:"message"`
+	Data    json.RawMessage `json:"data,omitempty"`
 }
 
 func (e *rpcErrPayload) Error() string {
 	if e == nil {
 		return "json-rpc error"
 	}
-	return fmt.Sprintf("json-rpc %d: %s", e.Code, e.Message)
+	base := fmt.Sprintf("json-rpc %d: %s", e.Code, e.Message)
+	if detail := extractRPCErrorDetail(e.Data); detail != "" && !strings.Contains(e.Message, detail) {
+		return base + ": " + detail
+	}
+	return base
+}
+
+func extractRPCErrorDetail(data json.RawMessage) string {
+	if len(data) == 0 {
+		return ""
+	}
+	var s string
+	if json.Unmarshal(data, &s) == nil {
+		return strings.TrimSpace(s)
+	}
+	var obj struct {
+		Message string `json:"message"`
+		Error   string `json:"error"`
+		Details string `json:"details"`
+	}
+	if json.Unmarshal(data, &obj) == nil {
+		for _, v := range []string{obj.Message, obj.Error, obj.Details} {
+			if strings.TrimSpace(v) != "" {
+				return strings.TrimSpace(v)
+			}
+		}
+	}
+	return ""
 }
 
 type rpcNotifyHandler func(method string, params json.RawMessage)

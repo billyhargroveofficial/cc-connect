@@ -65,3 +65,29 @@ func TestJSONIDKey(t *testing.T) {
 		t.Fatalf("absent id")
 	}
 }
+
+func TestRPCErrPayload_IncludesDataMessage(t *testing.T) {
+	e := &rpcErrPayload{
+		Code:    -32603,
+		Message: "Internal error",
+		Data:    json.RawMessage(`{"message":"API error (status 403 Forbidden): permission-denied","http_status":403}`),
+	}
+	want := "json-rpc -32603: Internal error: API error (status 403 Forbidden): permission-denied"
+	if got := e.Error(); got != want {
+		t.Fatalf("Error() = %q, want %q", got, want)
+	}
+
+	eStr := &rpcErrPayload{
+		Code:    -32603,
+		Message: "Internal error",
+		Data:    json.RawMessage(`"upstream refused"`),
+	}
+	if got := eStr.Error(); got != "json-rpc -32603: Internal error: upstream refused" {
+		t.Fatalf("Error() = %q", got)
+	}
+
+	ePlain := &rpcErrPayload{Code: -32601, Message: "Method not found"}
+	if got := ePlain.Error(); got != "json-rpc -32601: Method not found" {
+		t.Fatalf("Error() = %q", got)
+	}
+}

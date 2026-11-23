@@ -1,6 +1,10 @@
 package telegram
 
-import "strings"
+import (
+	"strings"
+	"unicode"
+	"unicode/utf8"
+)
 
 // normalizeRichMath translates the TeX delimiters emitted by coding agents to
 // Telegram Rich Markdown. A math fence protects multiline formulas from the
@@ -24,16 +28,25 @@ func normalizeRichMath(md string) string {
 			i = end + len(marker)
 			continue
 		}
+		if strings.HasPrefix(md[i:], "$$") {
+			end := matchingRichMarker(md, i+2, "$$")
+			if end < 0 {
+				out.WriteString(md[i:])
+				break
+			}
+			out.WriteString(md[i : end+2])
+			i = end + 2
+			continue
+		}
 		if md[i] == '$' {
-			marker := "$"
-			if strings.HasPrefix(md[i:], "$$") {
-				marker = "$$"
+			if end := inlineRichMathEnd(md, i); end >= 0 {
+				out.WriteString(md[i : end+1])
+				i = end + 1
+			} else {
+				out.WriteString(`\$`)
+				i++
 			}
-			if end := matchingRichMarker(md, i+len(marker), marker); end >= 0 {
-				out.WriteString(md[i : end+len(marker)])
-				i = end + len(marker)
-				continue
-			}
+			continue
 		}
 		if md[i] == '\\' && i+1 < len(md) {
 			close := ""
@@ -65,6 +78,34 @@ func normalizeRichMath(md string) string {
 		i++
 	}
 	return out.String()
+}
+
+// A closing inline delimiter must touch the expression and cannot start
+// the next price. For example, neither dollar in "$15 instead of $30" closes
+// a formula. Escaping literal dollars keeps Telegram from pairing them itself.
+func inlineRichMathEnd(md string, open int) int {
+	first, _ := utf8.DecodeRuneInString(md[open+1:])
+	if unicode.IsSpace(first) {
+		return -1
+	}
+	for j := open + 1; j < len(md); j++ {
+		switch md[j] {
+		case '\n', '\r':
+			return -1
+		case '\\':
+			if j+1 < len(md) && (md[j+1] == '$' || md[j+1] == '\\') {
+				j++
+			}
+		case '$':
+			prev, _ := utf8.DecodeLastRuneInString(md[:j])
+			next, _ := utf8.DecodeRuneInString(md[j+1:])
+			if unicode.IsSpace(prev) || unicode.IsDigit(next) || next == '$' {
+				return -1
+			}
+			return j
+		}
+	}
+	return -1
 }
 
 // Find an exact delimiter run, so a single backtick inside a double-backtick

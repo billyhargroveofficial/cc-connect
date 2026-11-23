@@ -82,3 +82,17 @@ func TestRichPlatform_NormalizesMathInSendAndPreviewEdit(t *testing.T) {
 		t.Fatalf("Edit math = %q, want %q", b.edited, want)
 	}
 }
+
+func TestRichMathPrices(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{`$139.99 вместо $199.99. Premium $15 вместо $30 ($300).`, `\$139.99 вместо \$199.99. Premium \$15 вместо \$30 (\$300).`},
+		{`$5–$10, $2x+1$ и $x^2$: $3/мес`, `\$5–\$10, $2x+1$ и $x^2$: \$3/мес`},
+		{`$5 и $$x=2$$, затем \(2x\) и \$7`, `\$5 и $$x=2$$, затем $2x$ и \$7`},
+		{"`$30` и $15\n$30", "`$30` и \\$15\n\\$30"},
+	} {
+		got := normalizeRichMath(tc.in)
+		if got != tc.want || normalizeRichMath(got) != got {
+			t.Errorf("normalizeRichMath(%q) = %q, want %q (idempotent)", tc.in, got, tc.want)
+		}
+	}
+}

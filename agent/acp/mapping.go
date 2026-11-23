@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/chenhg5/cc-connect/core"
 )
@@ -117,6 +118,43 @@ func mapAgentMessageChunk(sessionID string, update json.RawMessage) []core.Event
 	return nil
 }
 
+func acpTitleLooksLikeArgument(title string) bool {
+	if strings.ContainsAny(title, "\n\r/\\;&|`$\"'=") {
+		return true
+	}
+	return utf8.RuneCountInString(title) > 32
+}
+
+func canonicalToolNameForKind(kind string, raw json.RawMessage) string {
+	switch strings.ToLower(strings.TrimSpace(kind)) {
+	case "execute", "bash", "shell", "terminal":
+		return "bash"
+	case "read":
+		return "read"
+	case "edit":
+		return "edit"
+	case "write":
+		return "write"
+	case "fetch":
+		return "web_fetch"
+	case "search":
+		var m map[string]any
+		if len(raw) > 0 && json.Unmarshal(raw, &m) == nil {
+			if firstStringField(m, "pattern", "Pattern") != "" {
+				return "grep"
+			}
+			if firstStringField(m, "query", "Query") != "" {
+				return "web_search"
+			}
+		}
+		return "search"
+	case "", "other":
+		return "tool"
+	default:
+		return strings.ToLower(strings.TrimSpace(kind))
+	}
+}
+
 func mapToolCall(sessionID string, update json.RawMessage) []core.Event {
 	var u struct {
 		ToolCallID string          `json:"toolCallId"`
@@ -128,14 +166,15 @@ func mapToolCall(sessionID string, update json.RawMessage) []core.Event {
 	if err := json.Unmarshal(update, &u); err != nil {
 		return nil
 	}
-	toolName := strings.TrimSuffix(strings.TrimSpace(u.Title), ":")
-	if toolName == "" {
-		toolName = u.Kind
-	}
-	if toolName == "" {
-		toolName = "tool"
-	}
+	rawTitle := strings.TrimSuffix(strings.TrimSpace(u.Title), ":")
 	toolInput := summarizeACPToolInput(u.Kind, u.RawInput)
+	toolName := rawTitle
+	if toolName == "" || acpTitleLooksLikeArgument(toolName) {
+		toolName = canonicalToolNameForKind(u.Kind, u.RawInput)
+		if toolInput == "" && rawTitle != "" {
+			toolInput = rawTitle
+		}
+	}
 	return []core.Event{{
 		Type:      core.EventToolUse,
 		ToolName:  toolName,

@@ -1272,6 +1272,15 @@ func (s *acpSession) Close() error {
 	return nil
 }
 
+func firstStringField(m map[string]any, keys ...string) string {
+	for _, k := range keys {
+		if v, ok := m[k].(string); ok && strings.TrimSpace(v) != "" {
+			return v
+		}
+	}
+	return ""
+}
+
 // summarizeACPToolInput extracts a human-readable summary from ACP tool rawInput.
 func summarizeACPToolInput(kind string, raw json.RawMessage) string {
 	if len(raw) == 0 {
@@ -1284,44 +1293,72 @@ func summarizeACPToolInput(kind string, raw json.RawMessage) string {
 	if len(m) == 0 {
 		return ""
 	}
-	switch strings.ToLower(kind) {
-	case "bash", "shell", "terminal", "execute":
-		if cmd, ok := m["command"].(string); ok {
-			if desc, ok := m["description"].(string); ok && desc != "" {
+	extractCmd := func() string {
+		if cmd := firstStringField(m, "command", "CommandLine"); cmd != "" {
+			if summary := firstStringField(m, "toolSummary"); summary != "" {
+				return summary + ": " + cmd
+			}
+			if desc := firstStringField(m, "description"); desc != "" {
 				return "# " + desc + "\n" + cmd
 			}
 			return cmd
 		}
-	case "read", "write", "edit":
-		if fp, ok := m["file_path"].(string); ok {
-			return fp
+		return ""
+	}
+	extractPath := func() string {
+		return firstStringField(m, "file_path", "path", "Path", "TargetFile", "AbsolutePath", "FilePath")
+	}
+	switch strings.ToLower(kind) {
+	case "bash", "shell", "terminal", "execute":
+		if cmd := extractCmd(); cmd != "" {
+			return cmd
 		}
-		if fp, ok := m["path"].(string); ok {
+	case "read", "write", "edit":
+		if fp := extractPath(); fp != "" {
 			return fp
 		}
 	case "search":
-		if q, ok := m["query"].(string); ok && q != "" {
+		if q := firstStringField(m, "query", "Query"); q != "" {
 			return q
+		}
+		if pat := firstStringField(m, "pattern", "Pattern"); pat != "" {
+			if p := firstStringField(m, "path", "Path", "SearchPath", "Directory"); p != "" {
+				return pat + " in " + p
+			}
+			return pat
 		}
 		if backend, ok := m["backend"].(bool); ok && backend {
 			return ""
 		}
-	}
-	// Fallback: try extracting command or query before formatting JSON.
-	if cmd, ok := m["command"].(string); ok {
-		if desc, ok := m["description"].(string); ok && desc != "" {
-			return "# " + desc + "\n" + cmd
+	case "fetch":
+		if u := firstStringField(m, "url", "Url", "URL"); u != "" {
+			return u
 		}
+	}
+	// Fallback: try extracting command, query, pattern, path, url, or task action before formatting JSON.
+	if cmd := extractCmd(); cmd != "" {
 		return cmd
 	}
-	if q, ok := m["query"].(string); ok && q != "" {
+	if q := firstStringField(m, "query", "Query"); q != "" {
 		return q
 	}
-	if pat, ok := m["pattern"].(string); ok && pat != "" {
-		if p, ok := m["path"].(string); ok && p != "" {
+	if pat := firstStringField(m, "pattern", "Pattern"); pat != "" {
+		if p := firstStringField(m, "path", "Path", "SearchPath", "Directory"); p != "" {
 			return pat + " in " + p
 		}
 		return pat
+	}
+	if fp := extractPath(); fp != "" {
+		return fp
+	}
+	if u := firstStringField(m, "url", "Url", "URL"); u != "" {
+		return u
+	}
+	if act := firstStringField(m, "Action", "action"); act != "" {
+		if tid := firstStringField(m, "TaskId", "task_id"); tid != "" {
+			return act + " " + tid
+		}
+		return act
 	}
 	if backend, ok := m["backend"].(bool); ok && backend {
 		return ""

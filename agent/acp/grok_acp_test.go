@@ -245,6 +245,50 @@ func TestSession_CoalescesThoughtChunksAndResolvesBackendSearchArgs(t *testing.T
 	}
 }
 
+func TestMapToolCall_AgyMultilineTitleAndPascalCaseRawInput(t *testing.T) {
+	// Antigravity ACP puts the entire multiline shell script in `title` and uses
+	// PascalCase keys (`CommandLine`, `Path`, `toolSummary`) in `rawInput`.
+	execParams := json.RawMessage(`{
+		"sessionId": "s1",
+		"update": {
+			"sessionUpdate": "tool_call",
+			"toolCallId": "c1",
+			"title": "cd /Users/billy/repos/babki && .venv/bin/python - <<'PY'\n# work backwards\n    print(1)\nPY",
+			"kind": "execute",
+			"rawInput": {
+				"CommandLine": "cd /Users/billy/repos/babki && .venv/bin/python - <<'PY'\n# work backwards\n    print(1)\nPY",
+				"WaitMsBeforeAsync": 10000,
+				"toolSummary": "Deploy updated babki site"
+			}
+		}
+	}`)
+	evs := mapSessionUpdate("s1", execParams)
+	if len(evs) != 1 || evs[0].Type != core.EventToolUse {
+		t.Fatalf("got %+v", evs)
+	}
+	if evs[0].ToolName != "bash" {
+		t.Fatalf("ToolName = %q, want bash", evs[0].ToolName)
+	}
+	if !strings.HasPrefix(evs[0].ToolInput, "Deploy updated babki site: cd /Users/billy/repos/babki") {
+		t.Fatalf("ToolInput = %q", evs[0].ToolInput)
+	}
+
+	readParams := json.RawMessage(`{
+		"sessionId": "s1",
+		"update": {
+			"sessionUpdate": "tool_call",
+			"toolCallId": "c2",
+			"title": "Read /Users/billy/repos/babki/scripts/report.py",
+			"kind": "read",
+			"rawInput": {"Path": "/Users/billy/repos/babki/scripts/report.py"}
+		}
+	}`)
+	revs := mapSessionUpdate("s1", readParams)
+	if len(revs) != 1 || revs[0].ToolName != "read" || revs[0].ToolInput != "/Users/billy/repos/babki/scripts/report.py" {
+		t.Fatalf("read got %+v", revs)
+	}
+}
+
 type fakeACPServer struct {
 	mu           sync.Mutex
 	lastPrompt   map[string]any

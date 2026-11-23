@@ -16853,7 +16853,8 @@ var compactToolEmojis = map[string]string{
 // Asterisks inside args are swapped for a lookalike so they cannot close the
 // italic span early.
 func compactToolLine(toolName, args string) string {
-	name := strings.ToLower(strings.TrimSpace(toolName))
+	name := strings.ToLower(compactInlinePreview(toolName, 40))
+	name = strings.ReplaceAll(name, "*", "∗")
 	// Subagent launches read as "subagent", not the CLI's internal tool name.
 	if name == "task" || name == "agent" || name == "delegate_task" {
 		name = "subagent"

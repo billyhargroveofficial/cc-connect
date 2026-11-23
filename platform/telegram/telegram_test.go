@@ -851,7 +851,7 @@ func TestIsDirectedAtBot(t *testing.T) {
 	}
 }
 
-func TestHandleMessageWithForumTopic(t *testing.T) {
+func TestHandlePendingMessageWithForumTopic(t *testing.T) {
 	handled := make(chan *core.Message, 1)
 	p := &Platform{
 		token:         "token",
@@ -869,7 +869,7 @@ func TestHandleMessageWithForumTopic(t *testing.T) {
 		ID:              10,
 		MessageThreadID: 55,
 		Text:            "hello from topic",
-		Date:            int(time.Now().Unix()),
+		Date:            int(core.StartTime.Add(-time.Hour).Unix()),
 		From:            &models.User{ID: 7, Username: "alice"},
 		Chat: models.Chat{
 			ID:      100,

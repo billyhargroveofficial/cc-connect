@@ -387,11 +387,7 @@ func (p *Platform) processUpdate(ctx context.Context, update *models.Update) {
 }
 
 func (p *Platform) handleMessage(ctx context.Context, msg *models.Message) {
-	msgTime := time.Unix(int64(msg.Date), 0)
-	if core.IsOldMessage(msgTime) {
-		slog.Debug("telegram: ignoring old message after restart", "date", msgTime)
-		return
-	}
+	// Telegram may deliver unconfirmed messages from before this process started.
 	if msg.From == nil {
 		return
 	}

@@ -2,6 +2,7 @@ package telegram
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"testing"
 
@@ -155,5 +156,19 @@ func TestMarkdownHardBreaks(t *testing.T) {
 	once := markdownHardBreaks(in)
 	if twice := markdownHardBreaks(once); twice != once {
 		t.Errorf("markdownHardBreaks not idempotent:\n once %q\ntwice %q", once, twice)
+	}
+}
+
+func TestUpdateBatchWithRichBlocks(t *testing.T) {
+	const batch = `[
+		{"update_id":1,"message":{"rich_message":{"blocks":[{"type":"buttons","buttons":[]},{"type":"future_block"}]}}},
+		{"update_id":2,"message":{"text":"next question"}}
+	]`
+	var updates []models.Update
+	if err := json.Unmarshal([]byte(batch), &updates); err != nil {
+		t.Fatal(err)
+	}
+	if len(updates) != 2 || updates[1].Message == nil || updates[1].Message.Text != "next question" {
+		t.Fatal("the message after the rich blocks was lost")
 	}
 }

@@ -521,6 +521,28 @@ reset_on_idle_mins = 30   # default when unset; set to 0 to disable
 
 The default is **30 minutes** when unset. Set `reset_on_idle_mins = 0` to opt out and always continue the previous session.
 
+### Moving active sessions to another provider
+
+Use a copy of the live config with the destination agent and account. Keep
+the project name, data directory and workspace the same so the command can
+find the current session store.
+
+```sh
+cc-connect handoff --target-config config.next.toml --project my-project --output sessions.next.json
+```
+
+The command seeds new destination sessions with timestamped user and assistant
+messages and verifies that each session can be reopened. It prefers the latest
+question and answer, the first question, and then recent messages within
+`--max-bytes` (160 KiB by default). The existing history and inactive sessions
+stay in the staged store. Attachments and native tool state stay with the
+source provider.
+
+The command prints the source store path and SHA-256. Before installing the
+destination config and staged store, stop cc-connect, verify that checksum,
+and back up the originals. If the source store changed, prepare a new handoff
+with the latest history.
+
 ### 🛡️ OS-User Isolation (`run_as_user`)
 
 On Linux/macOS, a project can spawn its agent under a different Unix

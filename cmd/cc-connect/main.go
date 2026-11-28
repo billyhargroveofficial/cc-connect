@@ -231,6 +231,7 @@ var topLevelCommandHandlers = map[string]func([]string){
 	"at":        runTimer,
 	"relay":     runRelay,
 	"sessions":  runSessions,
+	"handoff":   runHandoff,
 	"agent-sid": runAgentSID,
 	"daemon":    runDaemon,
 	"feishu":    runFeishu,
@@ -1707,6 +1708,9 @@ Commands:
     list             List scheduled tasks
     exec             Trigger a scheduled task immediately
     del              Delete a scheduled task by ID
+
+  handoff            Prepare and verify active sessions in a new provider
+                     (--target-config <path> --project <name> --output <path>)
 
   sessions           Browse session history
     list             List all sessions (pipe-friendly)
